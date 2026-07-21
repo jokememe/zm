@@ -4,8 +4,11 @@ import { fileURLToPath, URL } from 'node:url'
 
 export default defineConfig({
   plugins: [vue()],
-  // 相对路径：子路径部署 / 部分静态托管更稳
-  base: './',
+  // GitHub Pages 项目站：https://jokememe.github.io/zm/
+  // 本地 dev 不受影响；若改仓库名请同步改此路径
+  base: process.env.GITHUB_PAGES === 'true' || process.env.VITE_BASE
+    ? (process.env.VITE_BASE || '/zm/')
+    : './',
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
