@@ -283,14 +283,22 @@ export function useGameState() {
         : d,
     )
 
-    seedOpeningMemory({
-      sectName: name,
-      masterName: master,
-      difficulty: diff,
-      difficultyLabel: opt.label,
-    })
+    try {
+      seedOpeningMemory({
+        sectName: name,
+        masterName: master,
+        difficulty: diff,
+        difficultyLabel: opt.label,
+      })
+    } catch (e) {
+      console.warn('[开局] 记忆初始化失败', e)
+    }
 
-    saveIdentity({ sectName: name, masterName: master, difficulty: diff })
+    try {
+      saveIdentity({ sectName: name, masterName: master, difficulty: diff })
+    } catch {
+      /* ignore */
+    }
   }
 
   /**

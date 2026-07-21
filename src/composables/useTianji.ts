@@ -232,56 +232,71 @@ async function syncSystemLore(s: AppSettings) {
 async function boot() {
   if (bootPromise) return bootPromise
   bootPromise = (async () => {
-    await initializeDatabase()
-    const [s, p, l, chats] = await Promise.all([
-      getSettings(),
-      getPresets(),
-      getLorebooks(),
-      getChats(),
-    ])
-    const merged: AppSettings = s
-      ? {
-          ...DEFAULT_SETTINGS,
-          ...s,
-          api: {
-            ...DEFAULT_SETTINGS.api,
-            ...s.api,
-            secondary: {
-              ...DEFAULT_SETTINGS.api.secondary!,
-              ...s.api?.secondary,
+    try {
+      await initializeDatabase()
+      const [s, p, l, chats] = await Promise.all([
+        getSettings(),
+        getPresets(),
+        getLorebooks(),
+        getChats(),
+      ])
+      const merged: AppSettings = s
+        ? {
+            ...DEFAULT_SETTINGS,
+            ...s,
+            api: {
+              ...DEFAULT_SETTINGS.api,
+              ...s.api,
+              secondary: {
+                ...DEFAULT_SETTINGS.api.secondary!,
+                ...s.api?.secondary,
+              },
             },
-          },
-        }
-      : { ...DEFAULT_SETTINGS }
+          }
+        : { ...DEFAULT_SETTINGS }
 
-    if (!s || s.characterName === DEFAULT_SETTINGS.characterName) {
-      merged.characterName = '天机'
-      merged.userName = '掌门'
+      if (!s || s.characterName === DEFAULT_SETTINGS.characterName) {
+        merged.characterName = '天机'
+        merged.userName = '掌门'
+      }
+      merged.uiMode = 'game'
+
+      settings.value = merged
+      presets.value = p
+      lorebooks.value = l
+
+      try {
+        await syncSystemLore(merged)
+      } catch (e) {
+        console.warn('[天机] 系统世界书同步失败（可稍后重试）', e)
+      }
+
+      const session = await ensureSession(settings.value!, chats)
+      chatSession.value = session
+      hydrateMessagesFromSession(session)
+
+      if (!settings.value!.activePresetId && p[0]) {
+        const next = { ...settings.value!, activePresetId: p[0].id }
+        await saveSettings(next)
+        settings.value = next
+      }
+
+      ready.value = true
+    } catch (e) {
+      // 允许下次重试；开局不依赖 boot 成功
+      bootPromise = null
+      ready.value = false
+      console.error('[天机] 初始化失败', e)
+      throw e
     }
-    merged.uiMode = 'game'
-
-    settings.value = merged
-    presets.value = p
-    lorebooks.value = l
-
-    await syncSystemLore(merged)
-
-    const session = await ensureSession(settings.value!, chats)
-    chatSession.value = session
-    hydrateMessagesFromSession(session)
-
-    if (!settings.value!.activePresetId && p[0]) {
-      const next = { ...settings.value!, activePresetId: p[0].id }
-      await saveSettings(next)
-      settings.value = next
-    }
-
-    ready.value = true
   })()
   return bootPromise
 }
 
-void boot()
+// 后台预热，失败不阻断页面
+void boot().catch(() => {
+  /* ignore — 开局 / 首次推演时会再 boot */
+})
 
 async function persistSession(next: ChatSession) {
   chatSession.value = next
@@ -867,12 +882,9 @@ export function useTianji() {
   /**
    * 从头开局：清空天机会话，写入开场卷首，气数对齐当前游戏快照。
    * 宗门/掌门/难度须已由 applyOpeningConfig 写入 game state。
+   * 不抛错阻断开局：DB 失败时仍写入本地卷首消息。
    */
   async function startOpeningRun() {
-    await boot()
-    const s = settings.value
-    if (!s) return
-
     lastError.value = null
     lastSettlement.value = null
     lastParsed.value = null
@@ -890,30 +902,44 @@ export function useTianji() {
     messages.value = seed
     seq = 200
 
-    const stMessages: ChatMessage[] = seed.map((m) => ({
-      id: m.id,
-      role:
-        m.role === 'player' ? 'user' : m.role === 'oracle' ? 'assistant' : 'system',
-      content: m.content,
-      timestamp: Date.now(),
-      variables: snapshotGameVariables(),
-    }))
-
-    const masterLabel = String(gs.masterName.value || '掌门')
-    const session: ChatSession = {
-      id: SESSION_KEY,
-      name: TIANJI_CHAT_NAME,
-      messages: stMessages,
-      characterName: s.characterName || '天机',
-      userName: s.userName || masterLabel,
-      presetId: s.activePresetId,
-      lorebookIds: [...(s.activeLorebookIds || [])],
-      variables: snapshotGameVariables(),
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
+    try {
+      await boot()
+    } catch (e) {
+      console.warn('[天机] 开局 boot 失败，仅用本地卷首', e)
+      return
     }
-    await persistSession(session)
-    await syncSystemLore(s)
+
+    const s = settings.value
+    if (!s) return
+
+    try {
+      const stMessages: ChatMessage[] = seed.map((m) => ({
+        id: m.id,
+        role:
+          m.role === 'player' ? 'user' : m.role === 'oracle' ? 'assistant' : 'system',
+        content: m.content,
+        timestamp: Date.now(),
+        variables: snapshotGameVariables(),
+      }))
+
+      const masterLabel = String(gs.masterName.value || '掌门')
+      const session: ChatSession = {
+        id: SESSION_KEY,
+        name: TIANJI_CHAT_NAME,
+        messages: stMessages,
+        characterName: s.characterName || '天机',
+        userName: s.userName || masterLabel,
+        presetId: s.activePresetId,
+        lorebookIds: [...(s.activeLorebookIds || [])],
+        variables: snapshotGameVariables(),
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      }
+      await persistSession(session)
+      await syncSystemLore(s)
+    } catch (e) {
+      console.warn('[天机] 开局会话落库失败', e)
+    }
   }
 
   /** 气数簿：手改并结算到游戏 */
