@@ -48,33 +48,24 @@ git push -u origin main
 
 `vite.config.ts` 里已设 `base: './'`，子路径 Pages 可直接用。
 
-### 私有 HTTP 中转（已做成自动代理）
+### 模型 API（通用直连）
 
-**推荐 Vercel 部署。** 密匣直接填：
+浏览器**直连**密匣里的 Base URL，**不绑** Vercel / Pages 特殊代理。
+
+任意域名可用的条件（在中转服务器上配置）：
+
+1. API 用 **HTTPS**（不要用 `http://IP:端口` 给 HTTPS 网页用）  
+2. 开启 **CORS**（`Access-Control-Allow-Origin: *` 等）
+
+密匣只填：
 
 ```text
-http://38.244.63.197:15511/v1
+Base URL:  https://你的中转域名/v1
+API Key:   …
+模型:      …
 ```
 
-前端在 HTTPS 下会自动改走 `/api/llm/v1`，由 Vercel 服务端转发。详见 [docs/api-cors-selfhost.md](docs/api-cors-selfhost.md)。
-
-**不要用纯静态 GitHub Pages**（没有 `/api` 反代）。
-
-### Vercel 一键
-
-1. Vercel Import 本仓库 → Deploy  
-2. 打开站点 → 密匣填完整 `http://你的中转:端口/v1` → 保存测试
-
-### 手动再部署
-
-Actions → **Deploy to GitHub Pages** → **Run workflow**。
-
-### 备选：Netlify
-
-仓库根目录已有 `netlify.toml`（`npm run build` → `dist`）。
-
-- **最简单**：Netlify 控制台 Import 本 GitHub 仓库，会自动读 `netlify.toml`，无需手写 Action。
-- 若坚持用 Action 推 Netlify，需在仓库 Secrets 配置 `NETLIFY_AUTH_TOKEN`、`NETLIFY_SITE_ID`，可再加 workflow（当前未写）。
+详见 [docs/通用API配置.md](docs/通用API配置.md)。
 
 ## 功能模块
 

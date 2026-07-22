@@ -1,6 +1,7 @@
 /**
- * API helpers for OpenAI-compatible endpoints.
- * HTTPS 页 + HTTP 中转 → 固定走 /api/chat、/api/models（Vercel Serverless / Vite 代理）
+ * OpenAI 兼容接口：浏览器直连用户填写的 Base URL。
+ * 任意域名可用的前提：API 为 HTTPS（若页面是 HTTPS）+ 开启 CORS。
+ * 不在此做 Vercel/特殊域名代理。
  */
 
 export interface ApiCallTarget {
@@ -9,20 +10,17 @@ export interface ApiCallTarget {
   model?: string
 }
 
+const FALLBACK_MODELS = ['gpt-4o-mini', 'deepseek-chat', 'qwen-plus', 'gpt-3.5-turbo']
+
 const COMMON_MODELS_BY_HOST: { match: string; models: string[] }[] = [
   { match: 'deepseek', models: ['deepseek-chat', 'deepseek-reasoner'] },
   { match: 'moonshot', models: ['moonshot-v1-8k', 'moonshot-v1-32k', 'kimi-latest'] },
-  { match: 'kimi', models: ['moonshot-v1-8k', 'kimi-latest'] },
-  { match: 'dashscope', models: ['qwen-turbo', 'qwen-plus', 'qwen-max'] },
   { match: 'qwen', models: ['qwen-turbo', 'qwen-plus', 'qwen-max'] },
-  { match: 'siliconflow', models: ['deepseek-ai/DeepSeek-V3', 'Qwen/Qwen2.5-7B-Instruct'] },
-  { match: 'openrouter', models: ['openai/gpt-4o-mini'] },
   { match: 'openai', models: ['gpt-4o-mini', 'gpt-4o', 'gpt-3.5-turbo'] },
+  { match: 'siliconflow', models: ['deepseek-ai/DeepSeek-V3'] },
   { match: 'localhost', models: ['local-model'] },
   { match: '127.0.0.1', models: ['local-model'] },
 ]
-
-const FALLBACK_MODELS = ['gpt-4o-mini', 'deepseek-chat', 'qwen-plus']
 
 export function getFallbackModels(baseUrl: string): string[] {
   const url = baseUrl.toLowerCase()
@@ -32,6 +30,7 @@ export function getFallbackModels(baseUrl: string): string[] {
   return FALLBACK_MODELS
 }
 
+/** 规范化：去掉末尾 /、误贴的 chat/completions 或 models */
 export function normalizeApiBaseUrl(url: string): string {
   let u = (url || '').trim()
   u = u.replace(/\/chat\/completions\/?$/i, '')
@@ -40,65 +39,71 @@ export function normalizeApiBaseUrl(url: string): string {
   return u
 }
 
-/** 是否应走服务端代理（HTTPS 页请求 HTTP API，或用户已填相对代理路径） */
-export function shouldUseServerProxy(userBaseUrl: string): boolean {
-  const raw = (userBaseUrl || '').trim()
-  if (!raw) return false
-  if (raw.startsWith('/') && !raw.startsWith('//')) return true
-  let pageHttps = false
-  try {
-    pageHttps = typeof location !== 'undefined' && location.protocol === 'https:'
-  } catch {
-    pageHttps = false
-  }
-  return pageHttps && /^http:\/\//i.test(raw)
+/** @deprecated 兼容旧调用；直连模式下不做代理改写 */
+export function normalizeBaseUrl(url: string): string {
+  return normalizeApiBaseUrl(url)
 }
 
-/**
- * 浏览器安全基址（仅用于展示/兼容旧逻辑）。
- * 实际请求在 proxy 模式下走固定 /api/chat、/api/models。
- */
+export function shouldUseServerProxy(_userBaseUrl: string): boolean {
+  return false
+}
+
 export function toBrowserSafeApiBase(userBaseUrl: string): {
   fetchBase: string
   proxied: boolean
   original: string
 } {
   const original = normalizeApiBaseUrl(userBaseUrl)
-  if (!original) return { fetchBase: '', proxied: false, original: '' }
-  if (shouldUseServerProxy(original) || original.startsWith('/api/')) {
-    return { fetchBase: '/api', proxied: true, original }
-  }
   return { fetchBase: original, proxied: false, original }
 }
 
+/**
+ * 直连可行性提示（仅提示，不改写请求）
+ */
 export function diagnoseBrowserApiBlock(baseUrl: string): {
   blocked: boolean
-  reason: 'empty' | 'ok' | 'will-proxy'
+  reason: 'empty' | 'mixed-content' | 'ok'
   message: string
 } {
   const raw = (baseUrl || '').trim()
   if (!raw) {
     return { blocked: true, reason: 'empty', message: '请填写 Base URL' }
   }
-  if (shouldUseServerProxy(raw)) {
+
+  let pageHttps = false
+  try {
+    pageHttps = typeof location !== 'undefined' && location.protocol === 'https:'
+  } catch {
+    pageHttps = false
+  }
+
+  if (pageHttps && /^http:\/\//i.test(raw) && !raw.startsWith('/')) {
     return {
-      blocked: false,
-      reason: 'will-proxy',
+      blocked: true,
+      reason: 'mixed-content',
       message: [
-        '【已自动启用同源代理】',
-        `你填写：${normalizeApiBaseUrl(raw)}`,
-        '实际请求：POST /api/chat 、 GET /api/models',
-        '由 Vercel 服务端转发到你的 HTTP 中转（默认 38.244.63.197:15511）。',
-        '请直接保存并测试。',
+        '当前网站是 HTTPS，不能请求 HTTP 接口（浏览器规则，与域名无关）。',
+        '',
+        '通用做法：给你的中转套一层 HTTPS，并开启 CORS，例如：',
+        '  https://api.你的域名.com/v1',
+        '',
+        '中转（New API）需允许跨域，例如响应头：',
+        '  Access-Control-Allow-Origin: *',
+        '  Access-Control-Allow-Headers: *',
+        '  Access-Control-Allow-Methods: *',
+        '',
+        '配好后，任意网页域名填这个 HTTPS Base URL 即可直连。',
       ].join('\n'),
     }
   }
+
   return { blocked: false, reason: 'ok', message: '' }
 }
 
 function candidateBases(baseUrl: string): string[] {
   const base = normalizeApiBaseUrl(baseUrl)
-  if (!base || base.startsWith('/')) return base ? [base] : []
+  if (!base) return []
+  if (base.startsWith('/')) return [base]
   const list = [base]
   if (!/\/v\d+$/i.test(base)) list.push(`${base}/v1`)
   if (/\/v\d+$/i.test(base)) list.push(base.replace(/\/v\d+$/i, ''))
@@ -148,13 +153,12 @@ async function tryFetchModelsOnce(
   })
   const text = await res.text().catch(() => '')
   if (!res.ok) {
-    return { models: [], status: res.status, bodySnippet: text.slice(0, 240) }
+    return { models: [], status: res.status, bodySnippet: text.slice(0, 280) }
   }
   try {
-    const data = text ? JSON.parse(text) : null
-    return { models: extractModelIds(data), status: res.status }
+    return { models: extractModelIds(text ? JSON.parse(text) : null), status: res.status }
   } catch {
-    return { models: [], status: res.status, bodySnippet: text.slice(0, 240) }
+    return { models: [], status: res.status, bodySnippet: text.slice(0, 280) }
   }
 }
 
@@ -166,41 +170,24 @@ export async function fetchModels(
   error?: string
   tried?: string[]
 }> {
-  const key = target.apiKey?.trim() || ''
-  const styles: AuthStyle[] = key ? ['bearer', 'api-key', 'x-api-key'] : ['none']
-  const tried: string[] = []
-  const errors: string[] = []
-
-  // ★ 代理模式：固定 GET /api/models
-  if (shouldUseServerProxy(target.baseUrl)) {
-    for (const style of styles) {
-      const url = '/api/models'
-      tried.push(`${url} [${style}]`)
-      try {
-        const { models, status, bodySnippet } = await tryFetchModelsOnce(
-          url,
-          authHeaders(style, key),
-        )
-        if (models.length > 0) return { models, source: 'remote', tried }
-        errors.push(
-          `${url} → HTTP ${status}${bodySnippet ? `: ${bodySnippet}` : ''}`,
-        )
-      } catch (e) {
-        errors.push(`${url} → ${(e as Error).message || e}`)
-      }
-    }
+  const diag = diagnoseBrowserApiBlock(target.baseUrl)
+  if (diag.blocked && diag.reason === 'mixed-content') {
     return {
       models: getFallbackModels(target.baseUrl),
       source: 'fallback',
-      error: errors.slice(0, 3).join('\n') || '拉取失败',
-      tried,
+      error: diag.message,
     }
   }
 
+  const key = target.apiKey?.trim() || ''
   const bases = candidateBases(target.baseUrl)
   if (!bases.length) {
     return { models: [], source: 'fallback', error: '请填写 API 基础 URL' }
   }
+
+  const styles: AuthStyle[] = key ? ['bearer', 'api-key', 'x-api-key'] : ['none']
+  const tried: string[] = []
+  const errors: string[] = []
 
   for (const base of bases) {
     const modelsUrl = `${base}/models`
@@ -212,13 +199,18 @@ export async function fetchModels(
           authHeaders(style, key),
         )
         if (models.length > 0) return { models, source: 'remote', tried }
-        if (status)
-          errors.push(
-            `${modelsUrl} → HTTP ${status}${bodySnippet ? `: ${bodySnippet}` : ''}`,
-          )
+        errors.push(
+          `${modelsUrl} → HTTP ${status}${bodySnippet ? `: ${bodySnippet}` : ''}`,
+        )
       } catch (e) {
         const msg = (e as Error)?.message || String(e)
-        errors.push(`${modelsUrl} → ${msg}`)
+        if (/Failed to fetch|NetworkError|Load failed|CORS/i.test(msg)) {
+          errors.push(
+            `${modelsUrl} → 网络/CORS 失败。请确认 API 是 HTTPS，且响应头含 Access-Control-Allow-Origin。`,
+          )
+        } else {
+          errors.push(`${modelsUrl} → ${msg}`)
+        }
       }
     }
   }
@@ -236,8 +228,16 @@ export async function postChatCompletion(options: {
   apiKey: string
   body: Record<string, unknown>
 }): Promise<{ ok: true; data: unknown; usedUrl: string } | { ok: false; error: string; status?: number }> {
+  const diag = diagnoseBrowserApiBlock(options.baseUrl)
+  if (diag.blocked && diag.reason === 'mixed-content') {
+    return { ok: false, error: diag.message }
+  }
+
   const key = options.apiKey.trim()
   if (!key) return { ok: false, error: '请填写 API Key' }
+
+  const bases = candidateBases(options.baseUrl)
+  if (!bases.length) return { ok: false, error: '请填写 Base URL' }
 
   const headerVariants: Record<string, string>[] = [
     {
@@ -257,37 +257,6 @@ export async function postChatCompletion(options: {
     },
   ]
 
-  // ★ 代理模式：固定 POST /api/chat
-  if (shouldUseServerProxy(options.baseUrl)) {
-    const url = '/api/chat'
-    const errors: string[] = []
-    for (const headers of headerVariants) {
-      try {
-        const res = await fetch(url, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(options.body),
-        })
-        const text = await res.text()
-        if (res.ok) {
-          try {
-            return { ok: true, data: JSON.parse(text), usedUrl: url }
-          } catch {
-            return { ok: false, error: `${url} 返回非 JSON`, status: res.status }
-          }
-        }
-        errors.push(`${url} HTTP ${res.status}: ${text.slice(0, 200)}`)
-        if (res.status !== 401 && res.status !== 403) break
-      } catch (e) {
-        errors.push(`${url}: ${(e as Error).message || e}`)
-      }
-    }
-    return { ok: false, error: errors[0] || '代理请求失败' }
-  }
-
-  const bases = candidateBases(options.baseUrl)
-  if (!bases.length) return { ok: false, error: '请填写 Base URL' }
-
   const errors: string[] = []
   for (const base of bases) {
     const url = `${base}/chat/completions`
@@ -303,15 +272,22 @@ export async function postChatCompletion(options: {
           return { ok: true, data, usedUrl: url }
         }
         const text = await res.text().catch(() => '')
-        errors.push(`${url} HTTP ${res.status}: ${text.slice(0, 120)}`)
+        errors.push(`${url} HTTP ${res.status}: ${text.slice(0, 160)}`)
         if (res.status !== 401 && res.status !== 403) break
       } catch (e) {
         const msg = (e as Error)?.message ?? String(e)
-        errors.push(`${url}: ${msg}`)
+        if (/Failed to fetch|NetworkError|Load failed/i.test(msg)) {
+          errors.push(
+            `${url} 失败（多为 CORS 或混合内容）。API 需 HTTPS + Access-Control-Allow-Origin。`,
+          )
+        } else {
+          errors.push(`${url}: ${msg}`)
+        }
         break
       }
     }
   }
+
   return { ok: false, error: errors[0] || '请求失败' }
 }
 
@@ -326,9 +302,8 @@ export async function testConnection(
 }> {
   const model = target.model?.trim()
   if (!model) {
-    return { ok: false, error: '请填写模型名（可先「拉取模型」后点选）' }
+    return { ok: false, error: '请填写模型名' }
   }
-
   const result = await postChatCompletion({
     baseUrl: target.baseUrl,
     apiKey: target.apiKey,
@@ -339,9 +314,6 @@ export async function testConnection(
       stream: false,
     },
   })
-
-  if (result.ok) {
-    return { ok: true, usedUrl: result.usedUrl }
-  }
+  if (result.ok) return { ok: true, usedUrl: result.usedUrl }
   return { ok: false, error: result.error, errorBody: result.error }
 }

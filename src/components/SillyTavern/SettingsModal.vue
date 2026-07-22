@@ -212,10 +212,10 @@ const primaryReady = computed(
     !!draftPrimary.model.trim(),
 )
 
-/** HTTPS + HTTP 中转：自动代理提示（不再阻断） */
+/** HTTPS 页 + HTTP API：直连不可用，提示改 HTTPS 中转 */
 const primaryAccessWarn = computed(() => {
   const d = diagnoseBrowserApiBlock(draftPrimary.baseUrl)
-  if (d.reason === 'will-proxy') return d.message
+  if (d.blocked && d.reason === 'mixed-content') return d.message
   return ''
 })
 
@@ -231,12 +231,6 @@ function pickModel(which: 'primary' | 'secondary', id: string) {
     void flushSecondary()
   }
   showToast(`已选用模型：${id}`)
-}
-
-function useDevProxy() {
-  draftPrimary.baseUrl = 'http://38.244.63.197:15511/v1'
-  void flushPrimary()
-  showToast('已填入中转地址（HTTPS 下自动走 /api/llm 代理）')
 }
 
 async function handleFetchModels(which: 'primary' | 'secondary') {
@@ -468,24 +462,21 @@ function onTagsInput(value: string) {
       <div class="api-panel">
         <h3 class="api-panel__title">主 API（剧情推演）</h3>
         <p class="tj-hint">
-          填到 <code>/v1</code> 为止，不要带 <code>/chat/completions</code>。
-          例：<code>https://api.deepseek.com/v1</code>
+          浏览器<strong>直连</strong>你填的地址（任意网站域名通用）。
+          填到 <code>/v1</code> 为止。须使用 <strong>HTTPS</strong> 中转，并开启 CORS。
+          例：<code>https://api.deepseek.com/v1</code> 或
+          <code>https://llm.你的域名.com/v1</code>
         </p>
-        <div v-if="primaryAccessWarn" class="api-proxy-banner">
-          <strong>可行方案已启用：自动同源代理</strong>
+        <div v-if="primaryAccessWarn" class="api-block-banner">
+          <strong>当前地址无法在 HTTPS 网页上直连</strong>
           <pre>{{ primaryAccessWarn }}</pre>
-          <p class="api-proxy-banner__tip">
-            实际请求：<code>POST /api/chat</code>、<code>GET /api/models</code>（Vercel
-            服务端转发）。请用 <strong>Vercel</strong> 部署。
-            <button type="button" class="linkish" @click="useDevProxy">填入默认中转地址</button>
-          </p>
         </div>
         <div class="tj-field">
           <label>Base URL</label>
           <input
             v-model="draftPrimary.baseUrl"
             class="tj-input"
-            placeholder="https://…/v1  或本机 /__llm/v1"
+            placeholder="https://你的中转域名/v1"
             autocomplete="off"
             spellcheck="false"
             @blur="flushPrimary"
@@ -1121,50 +1112,31 @@ function onTagsInput(value: string) {
   overflow-y: auto;
 }
 
-.api-proxy-banner {
+.api-block-banner {
   margin: 0 0 0.85rem;
   padding: 0.75rem 0.85rem;
   border-radius: var(--radius-md);
-  border: 1px solid rgba(90, 154, 150, 0.35);
-  background: var(--jade-soft);
-  color: var(--jade);
+  border: 1px solid rgba(196, 90, 90, 0.35);
+  background: var(--rose-soft);
+  color: var(--rose);
   font-size: 0.82rem;
   line-height: 1.5;
 }
 
-.api-proxy-banner strong {
+.api-block-banner strong {
   display: block;
   margin-bottom: 0.35rem;
   font-size: 0.9rem;
-  color: var(--ink-primary);
 }
 
-.api-proxy-banner pre {
-  margin: 0.4rem 0;
+.api-block-banner pre {
+  margin: 0.4rem 0 0;
   white-space: pre-wrap;
   font-family: inherit;
   font-size: 0.78rem;
   line-height: 1.45;
-  max-height: 10rem;
+  max-height: 12rem;
   overflow-y: auto;
-  color: var(--ink-secondary);
-}
-
-.api-proxy-banner__tip {
-  margin: 0.5rem 0 0;
-  color: var(--ink-secondary);
-  font-size: 0.8rem;
-}
-
-.linkish {
-  appearance: none;
-  border: none;
-  background: none;
-  color: var(--moon-deep);
-  text-decoration: underline;
-  cursor: pointer;
-  font: inherit;
-  padding: 0;
 }
 
 @media (max-width: 560px) {
