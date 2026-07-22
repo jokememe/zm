@@ -765,21 +765,43 @@ export function useTianji() {
   }
 
   async function updateSettings(partial: Partial<AppSettings>) {
-    await boot()
-    if (!settings.value) return
-    const next = { ...settings.value, ...partial }
-    if (partial.api) {
-      next.api = {
-        ...settings.value.api,
-        ...partial.api,
-        secondary: {
-          ...settings.value.api.secondary!,
-          ...partial.api.secondary,
+    // 先落内存，保证密匣输入即时生效；不因 boot/IndexedDB 失败而丢改
+    if (!settings.value) {
+      settings.value = {
+        ...DEFAULT_SETTINGS,
+        api: {
+          ...DEFAULT_SETTINGS.api,
+          secondary: { ...DEFAULT_SETTINGS.api.secondary! },
         },
       }
     }
-    await saveSettings(next)
+    const base = settings.value
+    const next: AppSettings = {
+      ...base,
+      ...partial,
+      key: 'settings',
+    }
+    if (partial.api) {
+      next.api = {
+        ...base.api,
+        ...partial.api,
+        secondary: {
+          ...(base.api.secondary ?? DEFAULT_SETTINGS.api.secondary!),
+          ...(partial.api.secondary ?? {}),
+        },
+      }
+    }
     settings.value = next
+
+    try {
+      if (!ready.value) {
+        await boot().catch((e) => console.warn('[密匣] boot 失败，设置仅存内存', e))
+      }
+      await saveSettings(next)
+    } catch (e) {
+      console.warn('[密匣] 设置持久化失败（内存中仍可用）', e)
+      lastError.value = '密匣已暂存，但未能写入本地库：' + ((e as Error).message || String(e))
+    }
   }
 
   async function reloadStMeta() {

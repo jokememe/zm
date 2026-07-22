@@ -184,21 +184,21 @@ export const DEFAULT_OPAQUE_TAGS = ['thinking', 'think'] as const;
 
 export const DEFAULT_SETTINGS: AppSettings = {
   api: {
-    baseUrl: 'https://api.openai.com/v1',
+    // 默认留空，由用户在密匣填写（兼容 OpenAI / 中转 / 本地）
+    baseUrl: '',
     apiKey: '',
-    model: 'gpt-3.5-turbo',
+    model: '',
     timeout: 60000,
     secondary: {
-      // Install options: secondary API enabled; baseUrl/model filled in Settings later.
-      enabled: true,
+      enabled: false,
       baseUrl: '',
-      apiKey: 'sk-...',
+      apiKey: '',
       model: '',
       temperature: 0.7,
       maxTokens: 8000,
     },
   },
-  apiMode: 'dual',
+  apiMode: 'single',
   activePresetId: null,
   activeLorebookIds: [],
   userName: '用户',
