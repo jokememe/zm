@@ -27,6 +27,7 @@ const {
   chooseQuick,
   regenerateLast,
   deleteMessagesFrom,
+  editAndResend,
   canRegenerate,
   clearContext,
   showSettings,
@@ -40,6 +41,27 @@ const {
 const input = ref('')
 const showLog = ref(false)
 const showQiEmbed = ref(false)
+const editingId = ref<string | null>(null)
+const editDraft = ref('')
+
+function startEdit(msg: { id: string; content: string }) {
+  editingId.value = msg.id
+  editDraft.value = msg.content
+}
+
+async function confirmEdit() {
+  if (!editingId.value || !editDraft.value.trim() || typing.value) return
+  const id = editingId.value
+  const text = editDraft.value
+  editingId.value = null
+  editDraft.value = ''
+  await editAndResend(id, text)
+}
+
+function cancelEdit() {
+  editingId.value = null
+  editDraft.value = ''
+}
 
 const lastPlayerId = computed(() => {
   for (let i = messages.value.length - 1; i >= 0; i--) {
@@ -215,6 +237,15 @@ async function onSettingsClose() {
             <span class="stage__msg-tools">
               <time>{{ m.time }}</time>
               <button
+                v-if="m.role === 'player'"
+                type="button"
+                class="stage__msg-btn"
+                :disabled="typing"
+                @click="startEdit(m)"
+              >
+                编辑
+              </button>
+              <button
                 v-if="m.id === lastPlayerId || m.id === lastOracleId"
                 type="button"
                 class="stage__msg-btn"
@@ -233,7 +264,16 @@ async function onSettingsClose() {
               </button>
             </span>
           </header>
-          <p>{{ m.content }}</p>
+          <div v-if="editingId === m.id" class="stage__edit-box">
+            <textarea v-model="editDraft" rows="3" class="stage__edit-input" />
+            <div class="stage__edit-actions">
+              <button type="button" class="btn btn-primary btn-sm" :disabled="typing || !editDraft.trim()" @click="confirmEdit">
+                重新推演
+              </button>
+              <button type="button" class="btn btn-ghost btn-sm" @click="cancelEdit">取消</button>
+            </div>
+          </div>
+          <p v-else>{{ m.content }}</p>
           <div v-if="m.choices?.length" class="stage__opts">
             <button
               v-for="c in m.choices"
@@ -504,6 +544,33 @@ async function onSettingsClose() {
   font-size: 0.9rem;
   line-height: 1.55;
   white-space: pre-wrap;
+}
+
+.stage__edit-box {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.stage__edit-input {
+  width: 100%;
+  border: 1px solid var(--border-moon);
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft);
+  padding: 0.5rem 0.65rem;
+  font-family: inherit;
+  font-size: 0.88rem;
+  resize: vertical;
+}
+
+.stage__edit-input:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--moon-glow);
+}
+
+.stage__edit-actions {
+  display: flex;
+  gap: 0.4rem;
 }
 
 .stage__msg.role-player {

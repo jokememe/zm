@@ -768,6 +768,20 @@ export function useTianji() {
   }
 
   /**
+   * 编辑已发送的玩家消息：截断到该条（含），用新内容重新推演。
+   */
+  async function editAndResend(messageId: string, newContent: string) {
+    const text = newContent.trim()
+    if (!text || typing.value) return
+    const ok = await truncateSessionAt(messageId, { inclusive: true })
+    if (!ok) {
+      lastError.value = '未找到该条消息'
+      return
+    }
+    await sendPlayer(text)
+  }
+
+  /**
    * 仅删除此条之后（保留本条）：用于「回到此楼」后不重发。
    */
   async function truncateAfter(messageId: string) {
@@ -1073,6 +1087,7 @@ export function useTianji() {
     chooseQuick,
     regenerateLast,
     deleteMessagesFrom,
+    editAndResend,
     truncateAfter,
     canRegenerate,
     pushEvent,
