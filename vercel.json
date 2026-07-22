@@ -5,11 +5,7 @@
   "outputDirectory": "dist",
   "rewrites": [
     {
-      "source": "/__llm/:path*",
-      "destination": "http://38.244.63.197:15511/:path*"
-    },
-    {
-      "source": "/((?!__llm/).*)",
+      "source": "/((?!api/).*)",
       "destination": "/index.html"
     }
   ],

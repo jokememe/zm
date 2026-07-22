@@ -31,13 +31,16 @@ export default defineConfig({
     port: 5173,
     host: true,
     /**
-     * 本地开发绕过「HTTPS 页调 HTTP API」与 CORS：
-     * 密匣 Base URL 填：/__llm/v1
-     * 代理到真实中转（可用环境变量改目标）：
-     *   set VITE_LLM_PROXY_TARGET=http://38.244.63.197:15511
-     *   npm run dev
+     * 本地与生产一致：/api/llm/* → 真实中转
+     * 密匣可填 http://IP:端口/v1，前端会自动改写为 /api/llm/v1
      */
     proxy: {
+      '/api/llm': {
+        target: process.env.VITE_LLM_PROXY_TARGET || 'http://38.244.63.197:15511',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path.replace(/^\/api\/llm/, ''),
+      },
       '/__llm': {
         target: process.env.VITE_LLM_PROXY_TARGET || 'http://38.244.63.197:15511',
         changeOrigin: true,
@@ -50,11 +53,11 @@ export default defineConfig({
     port: 4173,
     host: true,
     proxy: {
-      '/__llm': {
+      '/api/llm': {
         target: process.env.VITE_LLM_PROXY_TARGET || 'http://38.244.63.197:15511',
         changeOrigin: true,
         secure: false,
-        rewrite: (path) => path.replace(/^\/__llm/, ''),
+        rewrite: (path) => path.replace(/^\/api\/llm/, ''),
       },
     },
   },

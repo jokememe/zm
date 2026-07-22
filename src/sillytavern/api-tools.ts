@@ -47,25 +47,23 @@ export function normalizeApiBaseUrl(url: string): string {
 }
 
 /**
- * 浏览器能否直接请求该 API（混合内容 / 绝对地址探测）
- * GitHub Pages 为 https 时，http://IP:端口 会被浏览器直接拦截。
+ * 把用户填的 Base URL 变成浏览器可请求的地址。
+ * HTTPS 页面上的 http://IP:端口 会自动改写为同源 /api/llm/v1（Vercel/本地代理）。
  */
-export function diagnoseBrowserApiBlock(baseUrl: string): {
-  blocked: boolean
-  reason: 'mixed-content' | 'empty' | 'ok'
-  message: string
+export function toBrowserSafeApiBase(userBaseUrl: string): {
+  fetchBase: string
+  proxied: boolean
+  original: string
 } {
-  const raw = (baseUrl || '').trim()
-  if (!raw) {
-    return { blocked: true, reason: 'empty', message: '请填写 Base URL' }
+  const original = normalizeApiBaseUrl(userBaseUrl)
+  if (!original) {
+    return { fetchBase: '', proxied: false, original: '' }
   }
-  // 相对路径：走当前站点同源（本地 vite 代理 / 自建反代）
-  if (raw.startsWith('/') && !raw.startsWith('//')) {
-    return {
-      blocked: false,
-      reason: 'ok',
-      message: '使用同源相对路径（适合本地代理或自建 nginx）',
-    }
+  // 已是同源代理
+  if (original.startsWith('/') && !original.startsWith('//')) {
+    // 统一旧路径 /__llm → /api/llm
+    const unified = original.replace(/^\/__llm(?=\/|$)/, '/api/llm')
+    return { fetchBase: unified, proxied: true, original }
   }
 
   let pageHttps = false
@@ -75,36 +73,78 @@ export function diagnoseBrowserApiBlock(baseUrl: string): {
     pageHttps = false
   }
 
-  const isHttpApi = /^http:\/\//i.test(raw)
-  if (pageHttps && isHttpApi) {
-    return {
-      blocked: true,
-      reason: 'mixed-content',
-      message: [
-        '【浏览器拦截 · 混合内容】当前页面是 HTTPS（如 GitHub Pages），不能请求 HTTP 接口。',
-        `你的地址：${raw}`,
-        '',
-        '可选解决办法：',
-        '1）API 换成 HTTPS（证书 / Cloudflare / nginx）',
-        '2）把本游戏 dist 部署到你服务器上，用 HTTP 打开（与 API 同协议）',
-        '3）本机开发：npm run dev，Base URL 填 /__llm/v1（走 Vite 代理，见 vite.config）',
-        '4）在 API 前加支持 CORS 的 HTTPS 反代',
-      ].join('\n'),
+  if (pageHttps && /^http:\/\//i.test(original)) {
+    try {
+      const u = new URL(original.includes('://') ? original : `http://${original}`)
+      const path = (u.pathname || '').replace(/\/$/, '') || '/v1'
+      // http://38.x.x.x:15511/v1 → /api/llm/v1
+      return {
+        fetchBase: `/api/llm${path.startsWith('/') ? path : `/${path}`}`,
+        proxied: true,
+        original,
+      }
+    } catch {
+      return { fetchBase: '/api/llm/v1', proxied: true, original }
     }
   }
 
+  return { fetchBase: original, proxied: false, original }
+}
+
+/**
+ * 探测：空地址 / 将自动代理 / 可直连
+ * 注意：mixed-content 不再「阻断」，会自动走 /api/llm 代理。
+ */
+export function diagnoseBrowserApiBlock(baseUrl: string): {
+  blocked: boolean
+  reason: 'mixed-content' | 'empty' | 'ok' | 'will-proxy'
+  message: string
+} {
+  const raw = (baseUrl || '').trim()
+  if (!raw) {
+    return { blocked: true, reason: 'empty', message: '请填写 Base URL' }
+  }
+
+  const { fetchBase, proxied, original } = toBrowserSafeApiBase(raw)
+  if (proxied && /^http:\/\//i.test(original)) {
+    return {
+      blocked: false,
+      reason: 'will-proxy',
+      message: [
+        '【已自动启用同源代理】HTTPS 页面不能直连 HTTP 接口。',
+        `你填写：${original}`,
+        `实际请求：${fetchBase}/…`,
+        '部署在 Vercel 时由服务端转发到中转；本机 npm run dev 同样走 /api/llm 代理。',
+        '请直接保存并测试，无需改成其它地址。',
+      ].join('\n'),
+    }
+  }
+  if (proxied) {
+    return {
+      blocked: false,
+      reason: 'ok',
+      message: `使用同源代理：${fetchBase}`,
+    }
+  }
   return { blocked: false, reason: 'ok', message: '' }
 }
 
 /** 候选根路径：用户填了 /v1 或没填都尽量试到 */
 function candidateBases(baseUrl: string): string[] {
-  const base = normalizeApiBaseUrl(baseUrl)
+  // 先做浏览器安全改写
+  const { fetchBase } = toBrowserSafeApiBase(baseUrl)
+  const base = normalizeApiBaseUrl(fetchBase)
   if (!base) return []
+  // 相对路径只保留自身，避免 /api/llm 再拼一层乱路径
+  if (base.startsWith('/')) {
+    const list = [base]
+    if (!/\/v\d+$/i.test(base)) list.push(`${base}/v1`)
+    return [...new Set(list)]
+  }
   const list = [base]
   if (!/\/v\d+$/i.test(base)) {
     list.push(`${base}/v1`)
   }
-  // 去掉 /v1 再试（少数中转根路径即 API）
   if (/\/v\d+$/i.test(base)) {
     list.push(base.replace(/\/v\d+$/i, ''))
   }
@@ -193,15 +233,6 @@ export async function fetchModels(
   error?: string
   tried?: string[]
 }> {
-  const block = diagnoseBrowserApiBlock(target.baseUrl)
-  if (block.blocked && block.reason === 'mixed-content') {
-    return {
-      models: getFallbackModels(target.baseUrl),
-      source: 'fallback',
-      error: block.message,
-    }
-  }
-
   const key = target.apiKey?.trim() || ''
   const bases = candidateBases(target.baseUrl)
   if (!bases.length) {
@@ -263,11 +294,6 @@ export async function postChatCompletion(options: {
   apiKey: string
   body: Record<string, unknown>
 }): Promise<{ ok: true; data: unknown; usedUrl: string } | { ok: false; error: string; status?: number }> {
-  const block = diagnoseBrowserApiBlock(options.baseUrl)
-  if (block.blocked && block.reason === 'mixed-content') {
-    return { ok: false, error: block.message }
-  }
-
   const key = options.apiKey.trim()
   const bases = candidateBases(options.baseUrl)
   if (!bases.length || !key) {

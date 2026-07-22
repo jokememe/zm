@@ -48,21 +48,22 @@ git push -u origin main
 
 `vite.config.ts` 里已设 `base: './'`，子路径 Pages 可直接用。
 
-### 接私有 HTTP 中转（CORS / 混合内容）
+### 私有 HTTP 中转（已做成自动代理）
 
-**GitHub Pages / Vercel 页面都是 HTTPS**，浏览器**不能**直接请求 `http://IP:端口`。  
-见 [docs/api-cors-selfhost.md](docs/api-cors-selfhost.md)。
+**推荐 Vercel 部署。** 密匣直接填：
 
-| 部署 | 密匣 Base URL |
-|------|----------------|
-| **Vercel**（推荐） | `/__llm/v1`（`vercel.json` 已反代到中转） |
-| 本机 `npm run dev` | `/__llm/v1`（Vite 代理，`VITE_LLM_PROXY_TARGET`） |
-| 直连 HTTPS 公网 API | `https://api.xxx.com/v1` |
+```text
+http://38.244.63.197:15511/v1
+```
+
+前端在 HTTPS 下会自动改走 `/api/llm/v1`，由 Vercel 服务端转发。详见 [docs/api-cors-selfhost.md](docs/api-cors-selfhost.md)。
+
+**不要用纯静态 GitHub Pages**（没有 `/api` 反代）。
 
 ### Vercel 一键
 
 1. Vercel Import 本仓库 → Deploy  
-2. 打开站点 → 密匣 Base URL 填 **`/__llm/v1`**（不要填 http://IP）
+2. 打开站点 → 密匣填完整 `http://你的中转:端口/v1` → 保存测试
 
 ### 手动再部署
 

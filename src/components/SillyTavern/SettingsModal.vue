@@ -212,10 +212,11 @@ const primaryReady = computed(
     !!draftPrimary.model.trim(),
 )
 
-/** HTTPS 页 + HTTP API = 浏览器硬拦，不是「配置写错」 */
+/** HTTPS + HTTP 中转：自动代理提示（不再阻断） */
 const primaryAccessWarn = computed(() => {
   const d = diagnoseBrowserApiBlock(draftPrimary.baseUrl)
-  return d.blocked && d.reason === 'mixed-content' ? d.message : ''
+  if (d.reason === 'will-proxy') return d.message
+  return ''
 })
 
 const lastFetchError = ref('')
@@ -233,9 +234,9 @@ function pickModel(which: 'primary' | 'secondary', id: string) {
 }
 
 function useDevProxy() {
-  draftPrimary.baseUrl = '/__llm/v1'
+  draftPrimary.baseUrl = 'http://38.244.63.197:15511/v1'
   void flushPrimary()
-  showToast('已切换为本地代理 /__llm/v1')
+  showToast('已填入中转地址（HTTPS 下自动走 /api/llm 代理）')
 }
 
 async function handleFetchModels(which: 'primary' | 'secondary') {
@@ -470,16 +471,13 @@ function onTagsInput(value: string) {
           填到 <code>/v1</code> 为止，不要带 <code>/chat/completions</code>。
           例：<code>https://api.deepseek.com/v1</code>
         </p>
-        <div v-if="primaryAccessWarn" class="api-block-banner">
-          <strong>当前无法直连该 HTTP 接口</strong>
+        <div v-if="primaryAccessWarn" class="api-proxy-banner">
+          <strong>可行方案已启用：自动同源代理</strong>
           <pre>{{ primaryAccessWarn }}</pre>
-          <p class="api-block-banner__tip">
-            请改用同源代理地址：
-            <button type="button" class="linkish" @click="useDevProxy">
-              /__llm/v1
-            </button>
-            （Vercel / 本机 dev 均已配置反代到中转；不要在 HTTPS 站上填
-            <code>http://IP:端口</code>）
+          <p class="api-proxy-banner__tip">
+            点保存/测试会自动走 <code>/api/llm/v1</code>。请用
+            <strong>Vercel</strong> 部署（不要用纯静态 GitHub Pages）。
+            <button type="button" class="linkish" @click="useDevProxy">填入默认中转地址</button>
           </p>
         </div>
         <div class="tj-field">
@@ -1123,34 +1121,36 @@ function onTagsInput(value: string) {
   overflow-y: auto;
 }
 
-.api-block-banner {
+.api-proxy-banner {
   margin: 0 0 0.85rem;
   padding: 0.75rem 0.85rem;
   border-radius: var(--radius-md);
-  border: 1px solid rgba(196, 90, 90, 0.35);
-  background: var(--rose-soft);
-  color: var(--rose);
+  border: 1px solid rgba(90, 154, 150, 0.35);
+  background: var(--jade-soft);
+  color: var(--jade);
   font-size: 0.82rem;
   line-height: 1.5;
 }
 
-.api-block-banner strong {
+.api-proxy-banner strong {
   display: block;
   margin-bottom: 0.35rem;
   font-size: 0.9rem;
+  color: var(--ink-primary);
 }
 
-.api-block-banner pre {
+.api-proxy-banner pre {
   margin: 0.4rem 0;
   white-space: pre-wrap;
   font-family: inherit;
   font-size: 0.78rem;
   line-height: 1.45;
-  max-height: 12rem;
+  max-height: 10rem;
   overflow-y: auto;
+  color: var(--ink-secondary);
 }
 
-.api-block-banner__tip {
+.api-proxy-banner__tip {
   margin: 0.5rem 0 0;
   color: var(--ink-secondary);
   font-size: 0.8rem;
