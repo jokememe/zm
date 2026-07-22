@@ -36,28 +36,35 @@ export default async function handler(req: any, res: any) {
     return res.status(400).json({ error: 'target 不是合法 URL' })
   }
 
-  // 透传请求头（过滤 host 等 hop-by-hop）
+  // 只转发业务相关头，不泄露 cookie/origin/referer 等浏览器信息
   const forwardHeaders: Record<string, string> = {}
-  const skip = new Set(['host', 'connection', 'transfer-encoding', 'keep-alive'])
-  for (const [k, v] of Object.entries(req.headers)) {
-    if (!skip.has(k.toLowerCase()) && typeof v === 'string') {
-      forwardHeaders[k] = v
-    }
+  const allow = ['authorization', 'api-key', 'x-api-key', 'content-type', 'accept']
+  for (const key of allow) {
+    const v = req.headers[key]
+    if (typeof v === 'string' && v) forwardHeaders[key] = v
   }
 
   try {
-    const fetchOpts: RequestInit = {
-      method: req.method,
-      headers: forwardHeaders,
-    }
     if (req.method === 'POST' && req.body) {
-      fetchOpts.body = typeof req.body === 'string' ? req.body : JSON.stringify(req.body)
       if (!forwardHeaders['content-type']) {
         forwardHeaders['content-type'] = 'application/json'
       }
     }
 
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 30000)
+
+    const fetchOpts: RequestInit = {
+      method: req.method,
+      headers: forwardHeaders,
+      signal: controller.signal,
+    }
+    if (req.method === 'POST' && req.body) {
+      fetchOpts.body = typeof req.body === 'string' ? req.body : JSON.stringify(req.body)
+    }
+
     const upstream = await fetch(targetUrl.toString(), fetchOpts)
+    clearTimeout(timer)
     const text = await upstream.text()
 
     res.status(upstream.status)
@@ -65,6 +72,9 @@ export default async function handler(req: any, res: any) {
     if (ct) res.setHeader('Content-Type', ct)
     res.send(text)
   } catch (e: any) {
+    if (e?.name === 'AbortError') {
+      return res.status(504).json({ error: '代理超时（30s）' })
+    }
     res.status(502).json({ error: `代理请求失败: ${e?.message || e}` })
   }
 }

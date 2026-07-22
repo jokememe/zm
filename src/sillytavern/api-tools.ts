@@ -48,22 +48,9 @@ export function normalizeApiBaseUrl(url: string): string {
   return u
 }
 
-/** @deprecated 兼容旧调用；直连模式下不做代理改写 */
+/** @deprecated 兼容旧调用 */
 export function normalizeBaseUrl(url: string): string {
   return normalizeApiBaseUrl(url)
-}
-
-export function shouldUseServerProxy(_userBaseUrl: string): boolean {
-  return false
-}
-
-export function toBrowserSafeApiBase(userBaseUrl: string): {
-  fetchBase: string
-  proxied: boolean
-  original: string
-} {
-  const original = normalizeApiBaseUrl(userBaseUrl)
-  return { fetchBase: original, proxied: false, original }
 }
 
 /**
