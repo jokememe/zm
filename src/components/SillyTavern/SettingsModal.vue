@@ -5,6 +5,7 @@ import {
   DEFAULT_FORMAT_PROMPT,
   fetchModels,
   testConnection,
+  diagnoseBrowserApiBlock,
   exportAllData,
   importAllData,
   clearAllData,
@@ -211,6 +212,17 @@ const primaryReady = computed(
     !!draftPrimary.model.trim(),
 )
 
+/** HTTPS 页 + HTTP API = 浏览器硬拦，不是「配置写错」 */
+const primaryAccessWarn = computed(() => {
+  const d = diagnoseBrowserApiBlock(draftPrimary.baseUrl)
+  return d.blocked && d.reason === 'mixed-content' ? d.message : ''
+})
+const isLocalDev = computed(
+  () =>
+    typeof location !== 'undefined' &&
+    (location.hostname === 'localhost' || location.hostname === '127.0.0.1'),
+)
+
 const lastFetchError = ref('')
 const lastFetchSource = ref<'remote' | 'fallback' | ''>('')
 
@@ -223,6 +235,12 @@ function pickModel(which: 'primary' | 'secondary', id: string) {
     void flushSecondary()
   }
   showToast(`已选用模型：${id}`)
+}
+
+function useDevProxy() {
+  draftPrimary.baseUrl = '/__llm/v1'
+  void flushPrimary()
+  showToast('已切换为本地代理 /__llm/v1')
 }
 
 async function handleFetchModels(which: 'primary' | 'secondary') {
@@ -454,18 +472,30 @@ function onTagsInput(value: string) {
       <div class="api-panel">
         <h3 class="api-panel__title">主 API（剧情推演）</h3>
         <p class="tj-hint">
-          任意 OpenAI 兼容地址均可。示例：
-          <code>https://api.openai.com/v1</code>、
-          <code>https://api.deepseek.com/v1</code>、
-          <code>http://127.0.0.1:1234/v1</code>
-          — 不要带 <code>/chat/completions</code>
+          填到 <code>/v1</code> 为止，不要带 <code>/chat/completions</code>。
+          例：<code>https://api.deepseek.com/v1</code>
         </p>
+        <div v-if="primaryAccessWarn" class="api-block-banner">
+          <strong>当前无法直连该 HTTP 接口</strong>
+          <pre>{{ primaryAccessWarn }}</pre>
+          <p v-if="isLocalDev" class="api-block-banner__tip">
+            本机开发可填：
+            <button type="button" class="linkish" @click="useDevProxy">
+              /__llm/v1
+            </button>
+            （走 Vite 代理到你的中转，默认
+            <code>http://38.244.63.197:15511</code>）
+          </p>
+          <p v-else class="api-block-banner__tip">
+            GitHub Pages 是 HTTPS，不能调 HTTP。请把游戏部署到你服务器 HTTP 同源，或给 API 上 HTTPS。
+          </p>
+        </div>
         <div class="tj-field">
           <label>Base URL</label>
           <input
             v-model="draftPrimary.baseUrl"
             class="tj-input"
-            placeholder="https://api.openai.com/v1 或你的中转地址"
+            placeholder="https://…/v1  或本机 /__llm/v1"
             autocomplete="off"
             spellcheck="false"
             @blur="flushPrimary"
@@ -1099,6 +1129,50 @@ function onTagsInput(value: string) {
   white-space: pre-wrap;
   max-height: 6rem;
   overflow-y: auto;
+}
+
+.api-block-banner {
+  margin: 0 0 0.85rem;
+  padding: 0.75rem 0.85rem;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(196, 90, 90, 0.35);
+  background: var(--rose-soft);
+  color: var(--rose);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.api-block-banner strong {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-size: 0.9rem;
+}
+
+.api-block-banner pre {
+  margin: 0.4rem 0;
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  max-height: 12rem;
+  overflow-y: auto;
+}
+
+.api-block-banner__tip {
+  margin: 0.5rem 0 0;
+  color: var(--ink-secondary);
+  font-size: 0.8rem;
+}
+
+.linkish {
+  appearance: none;
+  border: none;
+  background: none;
+  color: var(--moon-deep);
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
 }
 
 @media (max-width: 560px) {

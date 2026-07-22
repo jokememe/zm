@@ -46,6 +46,56 @@ export function normalizeApiBaseUrl(url: string): string {
   return u
 }
 
+/**
+ * 浏览器能否直接请求该 API（混合内容 / 绝对地址探测）
+ * GitHub Pages 为 https 时，http://IP:端口 会被浏览器直接拦截。
+ */
+export function diagnoseBrowserApiBlock(baseUrl: string): {
+  blocked: boolean
+  reason: 'mixed-content' | 'empty' | 'ok'
+  message: string
+} {
+  const raw = (baseUrl || '').trim()
+  if (!raw) {
+    return { blocked: true, reason: 'empty', message: '请填写 Base URL' }
+  }
+  // 相对路径：走当前站点同源（本地 vite 代理 / 自建反代）
+  if (raw.startsWith('/') && !raw.startsWith('//')) {
+    return {
+      blocked: false,
+      reason: 'ok',
+      message: '使用同源相对路径（适合本地代理或自建 nginx）',
+    }
+  }
+
+  let pageHttps = false
+  try {
+    pageHttps = typeof location !== 'undefined' && location.protocol === 'https:'
+  } catch {
+    pageHttps = false
+  }
+
+  const isHttpApi = /^http:\/\//i.test(raw)
+  if (pageHttps && isHttpApi) {
+    return {
+      blocked: true,
+      reason: 'mixed-content',
+      message: [
+        '【浏览器拦截 · 混合内容】当前页面是 HTTPS（如 GitHub Pages），不能请求 HTTP 接口。',
+        `你的地址：${raw}`,
+        '',
+        '可选解决办法：',
+        '1）API 换成 HTTPS（证书 / Cloudflare / nginx）',
+        '2）把本游戏 dist 部署到你服务器上，用 HTTP 打开（与 API 同协议）',
+        '3）本机开发：npm run dev，Base URL 填 /__llm/v1（走 Vite 代理，见 vite.config）',
+        '4）在 API 前加支持 CORS 的 HTTPS 反代',
+      ].join('\n'),
+    }
+  }
+
+  return { blocked: false, reason: 'ok', message: '' }
+}
+
 /** 候选根路径：用户填了 /v1 或没填都尽量试到 */
 function candidateBases(baseUrl: string): string[] {
   const base = normalizeApiBaseUrl(baseUrl)
@@ -143,6 +193,15 @@ export async function fetchModels(
   error?: string
   tried?: string[]
 }> {
+  const block = diagnoseBrowserApiBlock(target.baseUrl)
+  if (block.blocked && block.reason === 'mixed-content') {
+    return {
+      models: getFallbackModels(target.baseUrl),
+      source: 'fallback',
+      error: block.message,
+    }
+  }
+
   const key = target.apiKey?.trim() || ''
   const bases = candidateBases(target.baseUrl)
   if (!bases.length) {
@@ -204,6 +263,11 @@ export async function postChatCompletion(options: {
   apiKey: string
   body: Record<string, unknown>
 }): Promise<{ ok: true; data: unknown; usedUrl: string } | { ok: false; error: string; status?: number }> {
+  const block = diagnoseBrowserApiBlock(options.baseUrl)
+  if (block.blocked && block.reason === 'mixed-content') {
+    return { ok: false, error: block.message }
+  }
+
   const key = options.apiKey.trim()
   const bases = candidateBases(options.baseUrl)
   if (!bases.length || !key) {
@@ -249,7 +313,18 @@ export async function postChatCompletion(options: {
       } catch (e) {
         const msg = (e as Error)?.message ?? String(e)
         if (/Failed to fetch|NetworkError|Load failed/i.test(msg)) {
-          errors.push(`${url} 跨域/网络失败: ${msg}`)
+          const httpsPage =
+            typeof location !== 'undefined' && location.protocol === 'https:'
+          const httpApi = /^http:\/\//i.test(url)
+          if (httpsPage && httpApi) {
+            return {
+              ok: false,
+              error: diagnoseBrowserApiBlock(options.baseUrl).message,
+            }
+          }
+          errors.push(
+            `${url} 失败: ${msg}\n若已是 HTTPS，请在 API 服务端加 CORS 头：Access-Control-Allow-Origin（允许 ${typeof location !== 'undefined' ? location.origin : '你的页面源'}）`,
+          )
           break
         }
         errors.push(`${url}: ${msg}`)

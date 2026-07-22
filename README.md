@@ -48,6 +48,13 @@ git push -u origin main
 
 `vite.config.ts` 里已设 `base: './'`，子路径 Pages 可直接用。
 
+### 接私有 HTTP 中转（CORS / 混合内容）
+
+GitHub Pages 是 **HTTPS**，**不能**直接请求 `http://IP:端口`（浏览器拦截）。  
+见 [docs/api-cors-selfhost.md](docs/api-cors-selfhost.md)。
+
+本机开发可走 Vite 代理：Base URL 填 `/__llm/v1`，目标由 `VITE_LLM_PROXY_TARGET` 指定。
+
 ### 手动再部署
 
 Actions → **Deploy to GitHub Pages** → **Run workflow**。
