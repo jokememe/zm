@@ -1,14 +1,39 @@
-# 为什么 GitHub Pages 调不了 `http://IP:端口`？
+# 为什么 GitHub Pages / Vercel 调不了 `http://IP:端口`？
 
 ## 结论
 
 | 页面 | API | 浏览器 |
 |------|-----|--------|
 | `https://jokememe.github.io/...` | `http://38.x.x.x:15511/...` | **直接拦截**（混合内容 Mixed Content） |
+| `https://xxx.vercel.app` 直连 | `http://38.x.x.x:15511/...` | **一样拦截**（Vercel 页也是 HTTPS） |
+| `https://xxx.vercel.app` + 同源 `/__llm` 反代 | 服务端再去请求 HTTP | **可用**（浏览器只打 HTTPS 同源） |
 | `https://...` | `https://...` | 还需 API 返回 CORS 头 |
 | `http://你的服务器/...`（同源或已 CORS） | `http://同一台/...` | 通常可用 |
 
 这不是模型名写错，是**浏览器安全策略**。前端代码无法「关掉」跨域/混合内容。
+
+---
+
+## 方案 0：Vercel 部署（推荐你这种 HTTP 中转）
+
+仓库已含 `vercel.json`：把 `/__llm/*` 反代到 `http://38.244.63.197:15511/*`。
+
+1. [vercel.com](https://vercel.com) 导入 GitHub 仓库 `jokememe/zm`
+2. Framework 选 Vite，Output 为 `dist`（一般自动）
+3. Deploy 完成后打开你的 `https://xxx.vercel.app`
+4. 密匣 **Base URL 填**：
+
+```text
+/__llm/v1
+```
+
+（不要填 `http://38.244.63.197:15511/v1`）
+
+5. 填 Key / 模型 → 保存 → 测试
+
+换中转地址时，改 `vercel.json` 里 `destination` 的主机后重新部署。
+
+若反代 502：检查该 IP:端口是否对公网开放、是否只允许内网。
 
 ---
 

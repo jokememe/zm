@@ -217,11 +217,6 @@ const primaryAccessWarn = computed(() => {
   const d = diagnoseBrowserApiBlock(draftPrimary.baseUrl)
   return d.blocked && d.reason === 'mixed-content' ? d.message : ''
 })
-const isLocalDev = computed(
-  () =>
-    typeof location !== 'undefined' &&
-    (location.hostname === 'localhost' || location.hostname === '127.0.0.1'),
-)
 
 const lastFetchError = ref('')
 const lastFetchSource = ref<'remote' | 'fallback' | ''>('')
@@ -478,16 +473,13 @@ function onTagsInput(value: string) {
         <div v-if="primaryAccessWarn" class="api-block-banner">
           <strong>当前无法直连该 HTTP 接口</strong>
           <pre>{{ primaryAccessWarn }}</pre>
-          <p v-if="isLocalDev" class="api-block-banner__tip">
-            本机开发可填：
+          <p class="api-block-banner__tip">
+            请改用同源代理地址：
             <button type="button" class="linkish" @click="useDevProxy">
               /__llm/v1
             </button>
-            （走 Vite 代理到你的中转，默认
-            <code>http://38.244.63.197:15511</code>）
-          </p>
-          <p v-else class="api-block-banner__tip">
-            GitHub Pages 是 HTTPS，不能调 HTTP。请把游戏部署到你服务器 HTTP 同源，或给 API 上 HTTPS。
+            （Vercel / 本机 dev 均已配置反代到中转；不要在 HTTPS 站上填
+            <code>http://IP:端口</code>）
           </p>
         </div>
         <div class="tj-field">

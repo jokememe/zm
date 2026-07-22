@@ -50,10 +50,19 @@ git push -u origin main
 
 ### 接私有 HTTP 中转（CORS / 混合内容）
 
-GitHub Pages 是 **HTTPS**，**不能**直接请求 `http://IP:端口`（浏览器拦截）。  
+**GitHub Pages / Vercel 页面都是 HTTPS**，浏览器**不能**直接请求 `http://IP:端口`。  
 见 [docs/api-cors-selfhost.md](docs/api-cors-selfhost.md)。
 
-本机开发可走 Vite 代理：Base URL 填 `/__llm/v1`，目标由 `VITE_LLM_PROXY_TARGET` 指定。
+| 部署 | 密匣 Base URL |
+|------|----------------|
+| **Vercel**（推荐） | `/__llm/v1`（`vercel.json` 已反代到中转） |
+| 本机 `npm run dev` | `/__llm/v1`（Vite 代理，`VITE_LLM_PROXY_TARGET`） |
+| 直连 HTTPS 公网 API | `https://api.xxx.com/v1` |
+
+### Vercel 一键
+
+1. Vercel Import 本仓库 → Deploy  
+2. 打开站点 → 密匣 Base URL 填 **`/__llm/v1`**（不要填 http://IP）
 
 ### 手动再部署
 
