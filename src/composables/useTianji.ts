@@ -806,22 +806,26 @@ export function useTianji() {
       }
     }
     const base = settings.value
+    // 用 JSON 剥掉 Vue Proxy，避免后续 IDB put DataCloneError
+    const plainBase = JSON.parse(JSON.stringify(base)) as AppSettings
     const next: AppSettings = {
-      ...base,
-      ...partial,
+      ...plainBase,
+      ...JSON.parse(JSON.stringify(partial)),
       key: 'settings',
     }
     if (partial.api) {
       next.api = {
-        ...base.api,
-        ...partial.api,
+        ...plainBase.api,
+        ...JSON.parse(JSON.stringify(partial.api)),
         secondary: {
-          ...(base.api.secondary ?? DEFAULT_SETTINGS.api.secondary!),
-          ...(partial.api.secondary ?? {}),
+          ...(plainBase.api.secondary ?? DEFAULT_SETTINGS.api.secondary!),
+          ...(partial.api.secondary
+            ? JSON.parse(JSON.stringify(partial.api.secondary))
+            : {}),
         },
       }
     }
-    // 规范化 URL
+    // 规范化 URL；数组字段保证是纯数组
     next.api = {
       ...next.api,
       baseUrl: normalizeBaseUrl(next.api.baseUrl || ''),
@@ -832,6 +836,10 @@ export function useTianji() {
           }
         : next.api.secondary,
     }
+    next.activeLorebookIds = Array.isArray(next.activeLorebookIds)
+      ? [...next.activeLorebookIds]
+      : []
+    next.customTags = Array.isArray(next.customTags) ? [...next.customTags] : [...DEFAULT_SETTINGS.customTags]
     settings.value = next
     saveApiCache(next.api)
 

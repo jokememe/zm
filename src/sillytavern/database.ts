@@ -210,13 +210,27 @@ export async function importAllData(
   });
 }
 
+/**
+ * IndexedDB 只能存 structured-clone 友好数据。
+ * Vue reactive / Proxy / 嵌套 Ref 会触发 DataCloneError（如 Array could not be cloned）。
+ */
+function toPlain<T>(value: T): T {
+  try {
+    return JSON.parse(JSON.stringify(value)) as T
+  } catch (e) {
+    console.error('[IndexedDB] toPlain failed', e)
+    throw e
+  }
+}
+
 export async function getLorebooks(): Promise<Lorebook[]> {
   return getDatabase().lorebooks.toArray();
 }
 
 export async function saveLorebook(lorebook: Lorebook): Promise<string> {
-  await getDatabase().lorebooks.put(lorebook);
-  return lorebook.id;
+  const plain = toPlain(lorebook)
+  await getDatabase().lorebooks.put(plain);
+  return plain.id;
 }
 
 export async function deleteLorebook(id: string): Promise<void> {
@@ -228,8 +242,9 @@ export async function getPresets(): Promise<ChatPreset[]> {
 }
 
 export async function savePreset(preset: ChatPreset): Promise<string> {
-  await getDatabase().presets.put(preset);
-  return preset.id;
+  const plain = toPlain(preset)
+  await getDatabase().presets.put(plain);
+  return plain.id;
 }
 
 export async function deletePreset(id: string): Promise<void> {
@@ -242,7 +257,8 @@ export async function getSettings(): Promise<AppSettings | undefined> {
 }
 
 export async function saveSettings(settings: AppSettings): Promise<void> {
-  await getDatabase().settings.put({ ...settings, key: 'settings' });
+  const plain = toPlain({ ...settings, key: 'settings' as const })
+  await getDatabase().settings.put(plain);
 }
 
 export async function getChats(): Promise<ChatSession[]> {
@@ -250,8 +266,9 @@ export async function getChats(): Promise<ChatSession[]> {
 }
 
 export async function saveChat(chat: ChatSession): Promise<string> {
-  await getDatabase().chats.put(chat);
-  return chat.id;
+  const plain = toPlain(chat)
+  await getDatabase().chats.put(plain);
+  return plain.id;
 }
 
 export async function deleteChat(id: string): Promise<void> {
@@ -262,7 +279,7 @@ export async function setVariables(chatId: string, variables: Record<string, any
   const db = getDatabase();
   const chat = await db.chats.get(chatId);
   if (!chat) return;
-  chat.variables = variables;
+  chat.variables = toPlain(variables);
   chat.updatedAt = Date.now();
-  await db.chats.put(chat);
+  await db.chats.put(toPlain(chat));
 }
