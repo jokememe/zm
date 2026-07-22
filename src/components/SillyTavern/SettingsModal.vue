@@ -211,11 +211,27 @@ const primaryReady = computed(
     !!draftPrimary.model.trim(),
 )
 
+const lastFetchError = ref('')
+const lastFetchSource = ref<'remote' | 'fallback' | ''>('')
+
+function pickModel(which: 'primary' | 'secondary', id: string) {
+  if (which === 'primary') {
+    draftPrimary.model = id
+    void flushPrimary()
+  } else {
+    draftSecondary.model = id
+    void flushSecondary()
+  }
+  showToast(`已选用模型：${id}`)
+}
+
 async function handleFetchModels(which: 'primary' | 'secondary') {
   // 先落盘草稿，保证用最新值拉模型
   if (which === 'primary') await flushPrimary()
   else await flushSecondary()
   busy.value = `fetch-${which}`
+  lastFetchError.value = ''
+  lastFetchSource.value = ''
   try {
     const target =
       which === 'primary'
@@ -224,8 +240,25 @@ async function handleFetchModels(which: 'primary' | 'secondary') {
     const { models, source, error } = await fetchModels(target)
     if (which === 'primary') primaryModels.value = models
     else secondaryModels.value = models
-    if (source === 'remote') showToast(`已获取 ${models.length} 个模型`)
-    else if (error) showToast(`获取失败，已显示常用模型`)
+    lastFetchSource.value = source
+    if (source === 'remote') {
+      showToast(`已从接口获取 ${models.length} 个模型`)
+      // 若当前模型为空，自动填第一个
+      if (which === 'primary' && !draftPrimary.model.trim() && models[0]) {
+        draftPrimary.model = models[0]
+        await flushPrimary()
+      }
+      if (which === 'secondary' && !draftSecondary.model.trim() && models[0]) {
+        draftSecondary.model = models[0]
+        await flushSecondary()
+      }
+    } else {
+      lastFetchError.value = error || '拉取失败，以下为猜测的常用模型，可手动改名'
+      showToast(`拉取失败，已给参考模型（请手动确认）`)
+    }
+  } catch (e) {
+    lastFetchError.value = (e as Error).message || String(e)
+    showToast('拉取异常')
   } finally {
     busy.value = null
   }
@@ -249,9 +282,15 @@ async function handleTest(which: 'primary' | 'secondary') {
             model: draftSecondary.model,
           }
     const result = await testConnection(target)
-    if (result.ok) showToast(`${which === 'primary' ? '主' : '辅'}线连通`)
-    else if (result.status) alert(`测试失败: HTTP ${result.status}\n${result.errorBody ?? ''}`)
-    else alert(`测试失败: ${result.error ?? '未知错误'}`)
+    if (result.ok) {
+      showToast(
+        `${which === 'primary' ? '主' : '辅'}线连通` +
+          (result.usedUrl ? ` · ${result.usedUrl}` : ''),
+      )
+    } else {
+      const detail = [result.error, result.errorBody].filter(Boolean).join('\n')
+      alert(`测试失败\n${detail || '未知错误'}`)
+    }
   } finally {
     busy.value = null
   }
@@ -444,7 +483,7 @@ function onTagsInput(value: string) {
           />
         </div>
         <div class="tj-field">
-          <label>模型</label>
+          <label>模型（推演时以密匣此处为准，不被心法预设覆盖）</label>
           <input
             v-model="draftPrimary.model"
             class="tj-input"
@@ -457,6 +496,27 @@ function onTagsInput(value: string) {
             <option v-for="m in primaryModels" :key="m" :value="m" />
           </datalist>
         </div>
+        <div v-if="primaryModels.length" class="model-pick">
+          <p class="model-pick__label">
+            {{ lastFetchSource === 'remote' ? '接口返回（点击选用）' : '参考列表（点击选用，请核对是否真实可用）' }}
+            · {{ primaryModels.length }} 个
+          </p>
+          <div class="model-pick__list">
+            <button
+              v-for="m in primaryModels.slice(0, 80)"
+              :key="m"
+              type="button"
+              class="model-chip"
+              :class="{ 'is-on': draftPrimary.model === m }"
+              :title="m"
+              @click="pickModel('primary', m)"
+            >
+              {{ m }}
+            </button>
+          </div>
+          <p v-if="primaryModels.length > 80" class="tj-hint">仅显示前 80 个，其余可输入框搜索</p>
+        </div>
+        <p v-if="lastFetchError" class="model-fetch-err">{{ lastFetchError }}</p>
         <div class="tj-field">
           <label>超时（毫秒）</label>
           <input
@@ -478,7 +538,7 @@ function onTagsInput(value: string) {
             :disabled="busy === 'fetch-primary'"
             @click="handleFetchModels('primary')"
           >
-            拉取模型列表
+            {{ busy === 'fetch-primary' ? '拉取中…' : '拉取模型列表' }}
           </button>
           <button
             type="button"
@@ -601,6 +661,23 @@ function onTagsInput(value: string) {
           <datalist id="tj-secondary-models">
             <option v-for="m in secondaryModels" :key="m" :value="m" />
           </datalist>
+        </div>
+        <div v-if="secondaryModels.length && draftSecondary.enabled" class="model-pick">
+          <p class="model-pick__label">
+            {{ lastFetchSource === 'remote' ? '接口返回' : '参考列表' }} · 点击选用
+          </p>
+          <div class="model-pick__list">
+            <button
+              v-for="m in secondaryModels.slice(0, 80)"
+              :key="m"
+              type="button"
+              class="model-chip"
+              :class="{ 'is-on': draftSecondary.model === m }"
+              @click="pickModel('secondary', m)"
+            >
+              {{ m }}
+            </button>
+          </div>
         </div>
 
         <div class="secondary-grid">
@@ -958,6 +1035,70 @@ function onTagsInput(value: string) {
   font-size: 0.8rem;
   color: var(--ink-secondary);
   font-weight: 600;
+}
+
+.model-pick {
+  margin: 0.35rem 0 0.75rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-soft, rgba(240, 245, 252, 0.6));
+}
+
+.model-pick__label {
+  margin: 0 0 0.45rem;
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+  font-weight: 600;
+}
+
+.model-pick__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  max-height: 9.5rem;
+  overflow-y: auto;
+}
+
+.model-chip {
+  appearance: none;
+  border: 1px solid var(--border-medium);
+  background: #fff;
+  color: var(--ink-secondary);
+  font-size: 0.72rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  font-family: inherit;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-chip:hover {
+  border-color: var(--moon);
+  color: var(--moon-deep);
+}
+
+.model-chip.is-on {
+  border-color: var(--jade);
+  background: var(--jade-soft);
+  color: var(--jade);
+  font-weight: 600;
+}
+
+.model-fetch-err {
+  margin: 0 0 0.65rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: var(--radius-sm);
+  background: var(--rose-soft);
+  color: var(--rose);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  max-height: 6rem;
+  overflow-y: auto;
 }
 
 @media (max-width: 560px) {

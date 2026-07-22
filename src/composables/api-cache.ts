@@ -3,6 +3,7 @@
  * IndexedDB 失败或旧默认值时，仍能读写密匣配置。
  */
 import type { ApiSettings, AppSettings } from '@/sillytavern/types'
+import { normalizeApiBaseUrl } from '@/sillytavern/api-tools'
 
 export const API_CACHE_KEY = 'zongmen-api-cache-v1'
 
@@ -12,12 +13,9 @@ const LEGACY_DEFAULT_URLS = [
   'https://api.openai.com/v1/',
 ]
 
+/** 统一走 api-tools 规范化，避免两处规则不一致 */
 export function normalizeBaseUrl(url: string): string {
-  let u = (url || '').trim()
-  // 用户若误贴完整 chat 路径，自动剥掉
-  u = u.replace(/\/chat\/completions\/?$/i, '')
-  u = u.replace(/\/+$/, '')
-  return u
+  return normalizeApiBaseUrl(url)
 }
 
 export function isApiConfigured(api?: Partial<ApiSettings> | null): boolean {

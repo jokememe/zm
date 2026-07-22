@@ -278,7 +278,8 @@ export function createDefaultPreset(): Omit<ChatPreset, 'id' | 'createdAt' | 'up
       stream_openai: false,
       max_context_unlocked: false,
       chat_completion_source: 'openai',
-      openai_model: 'gpt-3.5-turbo',
+      // 空：推演时用密匣 model，避免默认 gpt-3.5-turbo 覆盖用户配置
+      openai_model: '',
       main: 'Write {{char}}\'s next reply in a fictional chat between {{char}} and {{user}}.',
       nsfw: '',
       jailbreak: '',

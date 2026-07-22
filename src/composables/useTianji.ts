@@ -33,6 +33,7 @@ import {
   normalizePresetSettings,
   getSamplingForApi,
   prepareAssistantDisplay,
+  postChatCompletion,
   type AppSettings,
   type ChatPreset,
   type ChatSession,
@@ -518,7 +519,8 @@ async function callLlm(userText: string): Promise<{
   })
 
   const sampling = getSamplingForApi(normalizedSettings)
-  const model = (sampling.model || s.api.model || '').trim()
+  // ★ 密匣模型优先，不用被预设默认 gpt-3.5-turbo 盖掉
+  const model = (s.api.model || sampling.model || '').trim()
   const base = normalizeBaseUrl(s.api.baseUrl || '')
   if (!base || !s.api.apiKey?.trim() || !model) {
     const miss = apiConfigMissing(s.api)
@@ -541,23 +543,23 @@ async function callLlm(userText: string): Promise<{
     body.repetition_penalty = sampling.repetition_penalty
   }
 
-  const res = await fetch(`${base}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${s.api.apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
+  // 与密匣测试同一套：多 base 路径 + 多鉴权头
+  const completion = await postChatCompletion({
+    baseUrl: base,
+    apiKey: String(s.api.apiKey || ''),
+    body,
   })
-  if (!res.ok) {
-    const errText = await res.text().catch(() => '')
-    throw new Error(
-      `天机感应受阻（HTTP ${res.status}）${errText ? `：${errText.slice(0, 120)}` : ''}`,
-    )
+  if (!completion.ok) {
+    throw new Error(`天机感应受阻：${completion.error}`)
   }
 
-  const data = await res.json()
+  const data = completion.data as {
+    choices?: Array<{ message?: { content?: string } }>
+  }
   const rawOriginal: string = data.choices?.[0]?.message?.content || ''
+  if (!rawOriginal.trim()) {
+    throw new Error('天机返回为空（无 choices[0].message.content），请检查模型名是否与中转一致')
+  }
 
   // 展示兼容（display regex + 折叠）；标签解析仍用原文，避免正则误伤 <vars>
   const displayPrep = prepareAssistantDisplay(rawOriginal, normalizedSettings, {
