@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import ModalFrame from '@/components/ui/ModalFrame.vue'
 import {
   DEFAULT_FORMAT_PROMPT,
@@ -98,16 +98,8 @@ onMounted(async () => {
   legacySharedDbs.value = await findLegacySharedDatabases()
 })
 
-// 外部 reload 后同步一次（不在输入过程中用 props 覆盖草稿）
-watch(
-  () => props.settings.key + '|' + (props.settings.api?.model ?? ''),
-  () => {
-    // 仅当草稿与 props 完全一致或草稿为空时同步，避免打字被冲掉
-    const empty =
-      !draftPrimary.baseUrl && !draftPrimary.apiKey && !draftPrimary.model
-    if (empty) pullDraftFromProps()
-  },
-)
+// 注意：不要在输入过程中用 props 覆盖草稿（会表现为「填不了 / 写死」）
+// 密匣用 v-if 打开，每次 onMounted 已 pullDraftFromProps
 
 const secondary = computed(
   () =>

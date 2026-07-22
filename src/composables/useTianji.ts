@@ -49,6 +49,13 @@ import {
 } from '@/composables/game-bridge'
 import { ensureAndRefreshSystemLorebook } from '@/composables/system-lorebook'
 import { recordTurnSum, loadMemoryBank } from '@/composables/memory-lore'
+import {
+  isApiConfigured,
+  apiConfigMissing,
+  mergeApiSettings,
+  saveApiCache,
+  normalizeBaseUrl,
+} from '@/composables/api-cache'
 
 const TIANJI_CHAT_NAME = '天机卷轴'
 const SESSION_KEY = 'tianji-session'
@@ -129,7 +136,7 @@ function pickReply(text: string, context?: string | null): string {
 }
 
 function hasApiKey(s: AppSettings | null): boolean {
-  return !!s?.api?.apiKey?.trim()
+  return isApiConfigured(s?.api)
 }
 
 function stRoleToTianji(role: ChatMessage['role']): TianjiMessage['role'] {
@@ -244,16 +251,12 @@ async function boot() {
         ? {
             ...DEFAULT_SETTINGS,
             ...s,
-            api: {
-              ...DEFAULT_SETTINGS.api,
-              ...s.api,
-              secondary: {
-                ...DEFAULT_SETTINGS.api.secondary!,
-                ...s.api?.secondary,
-              },
-            },
+            api: mergeApiSettings(s.api, DEFAULT_SETTINGS.api),
           }
-        : { ...DEFAULT_SETTINGS }
+        : {
+            ...DEFAULT_SETTINGS,
+            api: mergeApiSettings(undefined, DEFAULT_SETTINGS.api),
+          }
 
       if (!s || s.characterName === DEFAULT_SETTINGS.characterName) {
         merged.characterName = '天机'
@@ -262,6 +265,12 @@ async function boot() {
       merged.uiMode = 'game'
 
       settings.value = merged
+      // 同步一份到 localStorage，防 IDB 丢配置
+      try {
+        saveApiCache(merged.api)
+      } catch {
+        /* ignore */
+      }
       presets.value = p
       lorebooks.value = l
 
@@ -286,7 +295,17 @@ async function boot() {
       // 允许下次重试；开局不依赖 boot 成功
       bootPromise = null
       ready.value = false
-      console.error('[天机] 初始化失败', e)
+      // 降级：至少从 localStorage 恢复 API，保证密匣可配、可推演
+      if (!settings.value) {
+        settings.value = {
+          ...DEFAULT_SETTINGS,
+          api: mergeApiSettings(undefined, DEFAULT_SETTINGS.api),
+          characterName: '天机',
+          userName: '掌门',
+          uiMode: 'game',
+        }
+      }
+      console.error('[天机] 初始化失败（已降级到内存/localStorage）', e)
       throw e
     }
   })()
@@ -499,7 +518,13 @@ async function callLlm(userText: string): Promise<{
   })
 
   const sampling = getSamplingForApi(normalizedSettings)
-  const model = sampling.model || s.api.model
+  const model = (sampling.model || s.api.model || '').trim()
+  const base = normalizeBaseUrl(s.api.baseUrl || '')
+  if (!base || !s.api.apiKey?.trim() || !model) {
+    const miss = apiConfigMissing(s.api)
+    throw new Error(`密匣未配齐：缺少 ${miss.join('、')}。请打开右上角密匣填写后保存。`)
+  }
+
   const body: Record<string, unknown> = {
     model,
     messages: promptMessages,
@@ -516,7 +541,6 @@ async function callLlm(userText: string): Promise<{
     body.repetition_penalty = sampling.repetition_penalty
   }
 
-  const base = s.api.baseUrl.replace(/\/$/, '')
   const res = await fetch(`${base}/chat/completions`, {
     method: 'POST',
     headers: {
@@ -586,9 +610,15 @@ async function callLlm(userText: string): Promise<{
 
 export function useTianji() {
   const llmReady = computed(() => hasApiKey(settings.value))
+  const apiMissing = computed(() => apiConfigMissing(settings.value?.api))
   const statusLabel = computed(() => {
-    if (!ready.value) return '卷轴展开中…'
-    if (llmReady.value) return '天机已通'
+    if (!ready.value && !settings.value) return '卷轴展开中…'
+    if (llmReady.value) {
+      const m = settings.value?.api?.model || ''
+      return m ? `天机已通 · ${m}` : '天机已通'
+    }
+    const miss = apiMissing.value
+    if (miss.length) return `未通灵：请配 ${miss.join('/')}`
     return '未通灵（本地推演）'
   })
 
@@ -791,16 +821,29 @@ export function useTianji() {
         },
       }
     }
+    // 规范化 URL
+    next.api = {
+      ...next.api,
+      baseUrl: normalizeBaseUrl(next.api.baseUrl || ''),
+      secondary: next.api.secondary
+        ? {
+            ...next.api.secondary,
+            baseUrl: normalizeBaseUrl(next.api.secondary.baseUrl || ''),
+          }
+        : next.api.secondary,
+    }
     settings.value = next
+    saveApiCache(next.api)
 
     try {
       if (!ready.value) {
-        await boot().catch((e) => console.warn('[密匣] boot 失败，设置仅存内存', e))
+        await boot().catch((e) => console.warn('[密匣] boot 失败，设置仅存内存/localStorage', e))
       }
       await saveSettings(next)
     } catch (e) {
-      console.warn('[密匣] 设置持久化失败（内存中仍可用）', e)
-      lastError.value = '密匣已暂存，但未能写入本地库：' + ((e as Error).message || String(e))
+      console.warn('[密匣] IndexedDB 失败，已写入 localStorage 备份', e)
+      lastError.value =
+        '密匣已用本地备份保存；IndexedDB 写入失败：' + ((e as Error).message || String(e))
     }
   }
 
@@ -812,12 +855,9 @@ export function useTianji() {
       settings.value = {
         ...DEFAULT_SETTINGS,
         ...s,
-        api: {
-          ...DEFAULT_SETTINGS.api,
-          ...s.api,
-          secondary: { ...DEFAULT_SETTINGS.api.secondary!, ...s.api?.secondary },
-        },
+        api: mergeApiSettings(s.api, DEFAULT_SETTINGS.api),
       }
+      saveApiCache(settings.value.api)
       await syncSystemLore(settings.value)
     }
     if (chatSession.value) {
@@ -1002,6 +1042,7 @@ export function useTianji() {
     lastSettlement,
     lastParsed,
     llmReady,
+    apiMissing,
     statusLabel,
     settings: computed(() => settings.value),
     presets: computed(() => presets.value),
