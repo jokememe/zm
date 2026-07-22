@@ -19,6 +19,7 @@ const {
   chooseQuick,
   regenerateLast,
   deleteMessagesFrom,
+  editAndResend,
   canRegenerate,
   clearContext,
   llmReady,
@@ -37,6 +38,28 @@ const toast = useToast()
 
 const input = ref('')
 const listRef = ref<HTMLElement | null>(null)
+const editingId = ref<string | null>(null)
+const editDraft = ref('')
+
+function startEdit(msg: { id: string; content: string }) {
+  editingId.value = msg.id
+  editDraft.value = msg.content
+}
+
+async function confirmEdit() {
+  if (!editingId.value || !editDraft.value.trim() || typing.value) return
+  const id = editingId.value
+  const text = editDraft.value
+  editingId.value = null
+  editDraft.value = ''
+  await editAndResend(id, text)
+  toast.info('已编辑', '截断并重推演')
+}
+
+function cancelEdit() {
+  editingId.value = null
+  editDraft.value = ''
+}
 
 const lastPlayerId = computed(() => {
   for (let i = messages.value.length - 1; i >= 0; i--) {
@@ -241,7 +264,16 @@ async function onPresetClose() {
               </button>
             </div>
           </header>
-          <p class="msg__content">{{ m.content }}</p>
+          <div v-if="editingId === m.id" class="msg__edit-box">
+            <textarea v-model="editDraft" rows="3" class="msg__edit-input" />
+            <div class="msg__edit-actions">
+              <button type="button" class="btn btn-primary btn-sm" :disabled="typing || !editDraft.trim()" @click="confirmEdit">
+                重新推演
+              </button>
+              <button type="button" class="btn btn-ghost btn-sm" @click="cancelEdit">取消</button>
+            </div>
+          </div>
+          <p v-else class="msg__content">{{ m.content }}</p>
           <div v-if="m.choices?.length" class="msg__choices">
             <button
               v-for="c in m.choices"
@@ -259,6 +291,15 @@ async function onPresetClose() {
             v-if="m.role === 'oracle' || m.role === 'player'"
             class="msg__ops"
           >
+            <button
+              v-if="m.role === 'player'"
+              type="button"
+              class="hint"
+              :disabled="typing"
+              @click="startEdit(m)"
+            >
+              ✎ 编辑
+            </button>
             <button
               v-if="m.id === lastPlayerId || m.id === lastOracleId"
               type="button"
@@ -648,6 +689,34 @@ async function onPresetClose() {
   line-height: 1.6;
   color: var(--ink-primary);
   white-space: pre-wrap;
+}
+
+.msg__edit-box {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.msg__edit-input {
+  width: 100%;
+  border: 1px solid var(--border-moon);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.9);
+  padding: 0.5rem 0.65rem;
+  font-family: inherit;
+  font-size: 0.85rem;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.msg__edit-input:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--moon-glow);
+}
+
+.msg__edit-actions {
+  display: flex;
+  gap: 0.35rem;
 }
 
 .msg__choices {
