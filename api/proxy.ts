@@ -65,10 +65,36 @@ export default async function handler(req: any, res: any) {
 
     const upstream = await fetch(targetUrl.toString(), fetchOpts)
     clearTimeout(timer)
-    const text = await upstream.text()
 
+    const ct = upstream.headers.get('content-type') || ''
+
+    // 流式 SSE：逐块透传，不缓冲
+    if (ct.includes('text/event-stream') && upstream.body) {
+      res.status(upstream.status)
+      res.setHeader('Content-Type', 'text/event-stream')
+      res.setHeader('Cache-Control', 'no-cache')
+      res.setHeader('Connection', 'keep-alive')
+      res.flushHeaders()
+
+      const reader = (upstream.body as ReadableStream<Uint8Array>).getReader()
+      const decoder = new TextDecoder()
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          res.write(decoder.decode(value, { stream: true }))
+        }
+      } catch {
+        // 客户端断开或上游中断
+      } finally {
+        res.end()
+      }
+      return
+    }
+
+    // 非流式：缓冲后一次性返回
+    const text = await upstream.text()
     res.status(upstream.status)
-    const ct = upstream.headers.get('content-type')
     if (ct) res.setHeader('Content-Type', ct)
     res.send(text)
   } catch (e: any) {

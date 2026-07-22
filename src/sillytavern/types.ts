@@ -139,6 +139,8 @@ export interface ApiSettings {
   apiKey: string;
   model: string;
   timeout: number;
+  /** 启用流式输出（SSE），天机逐字显示 */
+  stream?: boolean;
   secondary?: {
     enabled: boolean;
     baseUrl: string;

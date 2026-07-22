@@ -69,6 +69,7 @@ const draftPrimary = reactive({
   apiKey: '',
   model: '',
   timeout: 60000,
+  stream: false,
 })
 const draftSecondary = reactive({
   enabled: false,
@@ -85,6 +86,7 @@ function pullDraftFromProps() {
   draftPrimary.apiKey = api.apiKey ?? ''
   draftPrimary.model = api.model ?? ''
   draftPrimary.timeout = api.timeout ?? 60000
+  draftPrimary.stream = !!api.stream
   const sec = api.secondary
   draftSecondary.enabled = !!sec?.enabled
   draftSecondary.baseUrl = sec?.baseUrl ?? ''
@@ -129,6 +131,7 @@ async function flushPrimary() {
         apiKey: draftPrimary.apiKey.trim(),
         model: draftPrimary.model.trim(),
         timeout: Number(draftPrimary.timeout) || 60000,
+        stream: draftPrimary.stream,
         secondary: {
           ...secondary.value,
           enabled: draftSecondary.enabled,
@@ -539,6 +542,10 @@ function onTagsInput(value: string) {
             @blur="flushPrimary"
           />
         </div>
+        <label class="tj-check">
+          <input type="checkbox" v-model="draftPrimary.stream" @change="flushPrimary" />
+          <span>流式输出（逐字显示，需 API 支持 SSE）</span>
+        </label>
         <div class="tj-row">
           <button type="button" class="btn btn-primary btn-sm" @click="flushPrimary">
             保存主 API

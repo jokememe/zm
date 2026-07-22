@@ -34,6 +34,7 @@ import {
   getSamplingForApi,
   prepareAssistantDisplay,
   postChatCompletion,
+  postChatCompletionStream,
   type AppSettings,
   type ChatPreset,
   type ChatSession,
@@ -459,7 +460,7 @@ async function truncateSessionAt(
   return true
 }
 
-async function callLlm(userText: string): Promise<{
+async function callLlm(userText: string, onStream?: (text: string) => void): Promise<{
   content: string
   parsed: ParsedTags | null
   raw: string
@@ -543,22 +544,34 @@ async function callLlm(userText: string): Promise<{
     body.repetition_penalty = sampling.repetition_penalty
   }
 
-  // 与密匣测试同一套：多 base 路径 + 多鉴权头
-  const completion = await postChatCompletion({
-    baseUrl: base,
-    apiKey: String(s.api.apiKey || ''),
-    body,
-  })
-  if (!completion.ok) {
-    throw new Error(`天机感应受阻：${completion.error}`)
+  let rawOriginal = ''
+
+  if (s.api.stream && onStream) {
+    // 流式：逐块回调显示
+    const result = await postChatCompletionStream({
+      baseUrl: base,
+      apiKey: String(s.api.apiKey || ''),
+      body,
+      onChunk: (_delta, accumulated) => onStream(accumulated),
+    })
+    if (!result.ok) throw new Error(`天机感应受阻：${result.error}`)
+    rawOriginal = result.text
+  } else {
+    // 非流式
+    const completion = await postChatCompletion({
+      baseUrl: base,
+      apiKey: String(s.api.apiKey || ''),
+      body,
+    })
+    if (!completion.ok) throw new Error(`天机感应受阻：${completion.error}`)
+    const data = completion.data as {
+      choices?: Array<{ message?: { content?: string } }>
+    }
+    rawOriginal = data.choices?.[0]?.message?.content || ''
   }
 
-  const data = completion.data as {
-    choices?: Array<{ message?: { content?: string } }>
-  }
-  const rawOriginal: string = data.choices?.[0]?.message?.content || ''
   if (!rawOriginal.trim()) {
-    throw new Error('天机返回为空（无 choices[0].message.content），请检查模型名是否与中转一致')
+    throw new Error('天机返回为空，请检查模型名是否与中转一致')
   }
 
   // 展示兼容（display regex + 折叠）；标签解析仍用原文，避免正则误伤 <vars>
@@ -678,13 +691,32 @@ export function useTianji() {
         return
       }
 
-      const result = await callLlm(text)
+      const useStream = !!settings.value?.api?.stream
+      let streamMsg: ReturnType<typeof appendLocal> | null = null
+      if (useStream) {
+        streamMsg = appendLocal('oracle', '…', { contextTag: ctx ?? undefined })
+      }
+
+      const result = await callLlm(text, useStream ? (partial) => {
+        if (streamMsg) {
+          messages.value = messages.value.map((m) =>
+            m.id === streamMsg!.id ? { ...m, content: partial } : m,
+          )
+        }
+      } : undefined)
       lastParsed.value = result.parsed
       const choices = choicesFromParsed(result.parsed)
-      const local = appendLocal('oracle', result.content, {
+
+      const local = streamMsg ?? appendLocal('oracle', result.content, {
         contextTag: ctx ?? undefined,
         choices,
       })
+      // 流式结束后用最终解析内容替换
+      if (streamMsg) {
+        messages.value = messages.value.map((m) =>
+          m.id === local.id ? { ...m, content: result.content, choices } : m,
+        )
+      }
 
       if (chatSession.value) {
         const stMsg: ChatMessage = {

@@ -261,6 +261,88 @@ export async function postChatCompletion(options: {
   return { ok: false, error: errors[0] || '请求失败' }
 }
 
+/**
+ * 流式 chat completion（SSE）。
+ * onChunk 每收到一段 delta 文本就回调一次，用于逐字显示。
+ * 返回完整拼接文本。
+ */
+export async function postChatCompletionStream(options: {
+  baseUrl: string
+  apiKey: string
+  body: Record<string, unknown>
+  onChunk: (delta: string, accumulated: string) => void
+}): Promise<{ ok: true; text: string; usedUrl: string } | { ok: false; error: string }> {
+  const key = options.apiKey.trim()
+  if (!key) return { ok: false, error: '请填写 API Key' }
+
+  const bases = candidateBases(options.baseUrl)
+  if (!bases.length) return { ok: false, error: '请填写 Base URL' }
+
+  const base = bases[0]
+  const url = `${base}/chat/completions`
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Accept: 'text/event-stream',
+    Authorization: `Bearer ${key}`,
+  }
+
+  try {
+    const res = await fetch(proxify(url), {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ ...options.body, stream: true }),
+    })
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 200)}` }
+    }
+
+    const reader = res.body?.getReader()
+    if (!reader) {
+      // 无 body（不应该发生），降级读全文
+      const text = await res.text().catch(() => '')
+      return { ok: false, error: `无流式 body: ${text.slice(0, 120)}` }
+    }
+
+    const decoder = new TextDecoder()
+    let accumulated = ''
+    let buffer = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+
+      // SSE 按行分割
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed || !trimmed.startsWith('data:')) continue
+        const payload = trimmed.slice(5).trim()
+        if (payload === '[DONE]') continue
+        try {
+          const json = JSON.parse(payload)
+          const delta: string = json.choices?.[0]?.delta?.content ?? ''
+          if (delta) {
+            accumulated += delta
+            options.onChunk(delta, accumulated)
+          }
+        } catch {
+          // 非 JSON 行，跳过
+        }
+      }
+    }
+
+    return { ok: true, text: accumulated, usedUrl: url }
+  } catch (e) {
+    const msg = (e as Error)?.message ?? String(e)
+    return { ok: false, error: `流式请求失败: ${msg}` }
+  }
+}
+
 export async function testConnection(
   target: ApiCallTarget,
 ): Promise<{
