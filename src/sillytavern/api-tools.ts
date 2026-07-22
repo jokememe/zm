@@ -1,13 +1,22 @@
 /**
- * OpenAI 兼容接口：浏览器直连用户填写的 Base URL。
- * 任意域名可用的前提：API 为 HTTPS（若页面是 HTTPS）+ 开启 CORS。
- * 不在此做 Vercel/特殊域名代理。
+ * OpenAI 兼容接口：部署环境通过 /api/proxy 服务端代理转发，任意域名可用。
+ * 本地开发（localhost / HTTP）直连。
  */
 
 export interface ApiCallTarget {
   baseUrl: string
   apiKey: string
   model?: string
+}
+
+/** 部署环境（HTTPS）走 Vercel Serverless 代理，本地直连 */
+function proxify(url: string): string {
+  try {
+    if (typeof location !== 'undefined' && location.protocol === 'https:') {
+      return `/api/proxy?target=${encodeURIComponent(url)}`
+    }
+  } catch { /* ignore */ }
+  return url
 }
 
 const FALLBACK_MODELS = ['gpt-4o-mini', 'deepseek-chat', 'qwen-plus', 'gpt-3.5-turbo']
@@ -70,33 +79,7 @@ export function diagnoseBrowserApiBlock(baseUrl: string): {
     return { blocked: true, reason: 'empty', message: '请填写 Base URL' }
   }
 
-  let pageHttps = false
-  try {
-    pageHttps = typeof location !== 'undefined' && location.protocol === 'https:'
-  } catch {
-    pageHttps = false
-  }
-
-  if (pageHttps && /^http:\/\//i.test(raw) && !raw.startsWith('/')) {
-    return {
-      blocked: true,
-      reason: 'mixed-content',
-      message: [
-        '当前网站是 HTTPS，不能请求 HTTP 接口（浏览器规则，与域名无关）。',
-        '',
-        '通用做法：给你的中转套一层 HTTPS，并开启 CORS，例如：',
-        '  https://api.你的域名.com/v1',
-        '',
-        '中转（New API）需允许跨域，例如响应头：',
-        '  Access-Control-Allow-Origin: *',
-        '  Access-Control-Allow-Headers: *',
-        '  Access-Control-Allow-Methods: *',
-        '',
-        '配好后，任意网页域名填这个 HTTPS Base URL 即可直连。',
-      ].join('\n'),
-    }
-  }
-
+  // 走代理后 HTTP 目标也可用（服务端发请求无混合内容限制）
   return { blocked: false, reason: 'ok', message: '' }
 }
 
@@ -147,7 +130,7 @@ async function tryFetchModelsOnce(
   modelsUrl: string,
   headers: Record<string, string>,
 ): Promise<{ models: string[]; status: number; bodySnippet?: string }> {
-  const res = await fetch(modelsUrl, {
+  const res = await fetch(proxify(modelsUrl), {
     method: 'GET',
     headers: { Accept: 'application/json', ...headers },
   })
@@ -262,7 +245,7 @@ export async function postChatCompletion(options: {
     const url = `${base}/chat/completions`
     for (const headers of headerVariants) {
       try {
-        const res = await fetch(url, {
+        const res = await fetch(proxify(url), {
           method: 'POST',
           headers,
           body: JSON.stringify(options.body),
