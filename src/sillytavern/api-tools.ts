@@ -1,6 +1,6 @@
 /**
  * API helpers for OpenAI-compatible endpoints.
- * Used by SettingsModal for connectivity testing and model discovery.
+ * HTTPS 页 + HTTP 中转 → 固定走 /api/chat、/api/models（Vercel Serverless / Vite 代理）
  */
 
 export interface ApiCallTarget {
@@ -11,23 +11,18 @@ export interface ApiCallTarget {
 
 const COMMON_MODELS_BY_HOST: { match: string; models: string[] }[] = [
   { match: 'deepseek', models: ['deepseek-chat', 'deepseek-reasoner'] },
-  { match: 'moonshot', models: ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k', 'kimi-latest'] },
-  { match: 'kimi', models: ['moonshot-v1-8k', 'moonshot-v1-32k', 'kimi-latest'] },
+  { match: 'moonshot', models: ['moonshot-v1-8k', 'moonshot-v1-32k', 'kimi-latest'] },
+  { match: 'kimi', models: ['moonshot-v1-8k', 'kimi-latest'] },
   { match: 'dashscope', models: ['qwen-turbo', 'qwen-plus', 'qwen-max'] },
-  { match: 'aliyun', models: ['qwen-turbo', 'qwen-plus', 'qwen-max'] },
   { match: 'qwen', models: ['qwen-turbo', 'qwen-plus', 'qwen-max'] },
-  { match: 'tongyi', models: ['qwen-turbo', 'qwen-plus', 'qwen-max'] },
   { match: 'siliconflow', models: ['deepseek-ai/DeepSeek-V3', 'Qwen/Qwen2.5-7B-Instruct'] },
-  { match: 'openrouter', models: ['openai/gpt-4o-mini', 'anthropic/claude-3.5-sonnet'] },
-  { match: 'groq', models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'] },
-  { match: 'openai', models: ['gpt-4o-mini', 'gpt-4o', 'gpt-4-turbo', 'gpt-3.5-turbo'] },
-  { match: 'anthropic', models: ['claude-3-5-sonnet-latest', 'claude-3-5-haiku-latest'] },
-  { match: 'gemini', models: ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash'] },
+  { match: 'openrouter', models: ['openai/gpt-4o-mini'] },
+  { match: 'openai', models: ['gpt-4o-mini', 'gpt-4o', 'gpt-3.5-turbo'] },
   { match: 'localhost', models: ['local-model'] },
   { match: '127.0.0.1', models: ['local-model'] },
 ]
 
-const FALLBACK_MODELS = ['gpt-4o-mini', 'deepseek-chat', 'qwen-plus', 'claude-3-5-sonnet-latest']
+const FALLBACK_MODELS = ['gpt-4o-mini', 'deepseek-chat', 'qwen-plus']
 
 export function getFallbackModels(baseUrl: string): string[] {
   const url = baseUrl.toLowerCase()
@@ -37,7 +32,6 @@ export function getFallbackModels(baseUrl: string): string[] {
   return FALLBACK_MODELS
 }
 
-/** 与 api-cache 一致：去掉尾斜杠、chat/completions 路径 */
 export function normalizeApiBaseUrl(url: string): string {
   let u = (url || '').trim()
   u = u.replace(/\/chat\/completions\/?$/i, '')
@@ -46,9 +40,23 @@ export function normalizeApiBaseUrl(url: string): string {
   return u
 }
 
+/** 是否应走服务端代理（HTTPS 页请求 HTTP API，或用户已填相对代理路径） */
+export function shouldUseServerProxy(userBaseUrl: string): boolean {
+  const raw = (userBaseUrl || '').trim()
+  if (!raw) return false
+  if (raw.startsWith('/') && !raw.startsWith('//')) return true
+  let pageHttps = false
+  try {
+    pageHttps = typeof location !== 'undefined' && location.protocol === 'https:'
+  } catch {
+    pageHttps = false
+  }
+  return pageHttps && /^http:\/\//i.test(raw)
+}
+
 /**
- * 把用户填的 Base URL 变成浏览器可请求的地址。
- * HTTPS 页面上的 http://IP:端口 会自动改写为同源 /api/llm/v1（Vercel/本地代理）。
+ * 浏览器安全基址（仅用于展示/兼容旧逻辑）。
+ * 实际请求在 proxy 模式下走固定 /api/chat、/api/models。
  */
 export function toBrowserSafeApiBase(userBaseUrl: string): {
   fetchBase: string
@@ -56,105 +64,50 @@ export function toBrowserSafeApiBase(userBaseUrl: string): {
   original: string
 } {
   const original = normalizeApiBaseUrl(userBaseUrl)
-  if (!original) {
-    return { fetchBase: '', proxied: false, original: '' }
+  if (!original) return { fetchBase: '', proxied: false, original: '' }
+  if (shouldUseServerProxy(original) || original.startsWith('/api/')) {
+    return { fetchBase: '/api', proxied: true, original }
   }
-  // 已是同源代理
-  if (original.startsWith('/') && !original.startsWith('//')) {
-    // 统一旧路径 /__llm → /api/llm
-    const unified = original.replace(/^\/__llm(?=\/|$)/, '/api/llm')
-    return { fetchBase: unified, proxied: true, original }
-  }
-
-  let pageHttps = false
-  try {
-    pageHttps = typeof location !== 'undefined' && location.protocol === 'https:'
-  } catch {
-    pageHttps = false
-  }
-
-  if (pageHttps && /^http:\/\//i.test(original)) {
-    try {
-      const u = new URL(original.includes('://') ? original : `http://${original}`)
-      const path = (u.pathname || '').replace(/\/$/, '') || '/v1'
-      // http://38.x.x.x:15511/v1 → /api/llm/v1
-      return {
-        fetchBase: `/api/llm${path.startsWith('/') ? path : `/${path}`}`,
-        proxied: true,
-        original,
-      }
-    } catch {
-      return { fetchBase: '/api/llm/v1', proxied: true, original }
-    }
-  }
-
   return { fetchBase: original, proxied: false, original }
 }
 
-/**
- * 探测：空地址 / 将自动代理 / 可直连
- * 注意：mixed-content 不再「阻断」，会自动走 /api/llm 代理。
- */
 export function diagnoseBrowserApiBlock(baseUrl: string): {
   blocked: boolean
-  reason: 'mixed-content' | 'empty' | 'ok' | 'will-proxy'
+  reason: 'empty' | 'ok' | 'will-proxy'
   message: string
 } {
   const raw = (baseUrl || '').trim()
   if (!raw) {
     return { blocked: true, reason: 'empty', message: '请填写 Base URL' }
   }
-
-  const { fetchBase, proxied, original } = toBrowserSafeApiBase(raw)
-  if (proxied && /^http:\/\//i.test(original)) {
+  if (shouldUseServerProxy(raw)) {
     return {
       blocked: false,
       reason: 'will-proxy',
       message: [
-        '【已自动启用同源代理】HTTPS 页面不能直连 HTTP 接口。',
-        `你填写：${original}`,
-        `实际请求：${fetchBase}/…`,
-        '部署在 Vercel 时由服务端转发到中转；本机 npm run dev 同样走 /api/llm 代理。',
-        '请直接保存并测试，无需改成其它地址。',
+        '【已自动启用同源代理】',
+        `你填写：${normalizeApiBaseUrl(raw)}`,
+        '实际请求：POST /api/chat 、 GET /api/models',
+        '由 Vercel 服务端转发到你的 HTTP 中转（默认 38.244.63.197:15511）。',
+        '请直接保存并测试。',
       ].join('\n'),
-    }
-  }
-  if (proxied) {
-    return {
-      blocked: false,
-      reason: 'ok',
-      message: `使用同源代理：${fetchBase}`,
     }
   }
   return { blocked: false, reason: 'ok', message: '' }
 }
 
-/** 候选根路径：用户填了 /v1 或没填都尽量试到 */
 function candidateBases(baseUrl: string): string[] {
-  // 先做浏览器安全改写
-  const { fetchBase } = toBrowserSafeApiBase(baseUrl)
-  const base = normalizeApiBaseUrl(fetchBase)
-  if (!base) return []
-  // 相对路径只保留自身，避免 /api/llm 再拼一层乱路径
-  if (base.startsWith('/')) {
-    const list = [base]
-    if (!/\/v\d+$/i.test(base)) list.push(`${base}/v1`)
-    return [...new Set(list)]
-  }
+  const base = normalizeApiBaseUrl(baseUrl)
+  if (!base || base.startsWith('/')) return base ? [base] : []
   const list = [base]
-  if (!/\/v\d+$/i.test(base)) {
-    list.push(`${base}/v1`)
-  }
-  if (/\/v\d+$/i.test(base)) {
-    list.push(base.replace(/\/v\d+$/i, ''))
-  }
+  if (!/\/v\d+$/i.test(base)) list.push(`${base}/v1`)
+  if (/\/v\d+$/i.test(base)) list.push(base.replace(/\/v\d+$/i, ''))
   return [...new Set(list.filter(Boolean))]
 }
 
 function extractModelIds(data: unknown): string[] {
   if (!data) return []
   const out: string[] = []
-
   const push = (x: unknown) => {
     if (typeof x === 'string' && x.trim()) out.push(x.trim())
     else if (x && typeof x === 'object') {
@@ -163,27 +116,15 @@ function extractModelIds(data: unknown): string[] {
       if (typeof id === 'string' && id.trim()) out.push(id.trim())
     }
   }
-
   if (Array.isArray(data)) {
     data.forEach(push)
     return [...new Set(out)].sort()
   }
-
   if (typeof data === 'object') {
     const o = data as Record<string, unknown>
-    // OpenAI: { data: [{ id }] }
     if (Array.isArray(o.data)) o.data.forEach(push)
-    // 部分中转: { models: [...] }
     if (Array.isArray(o.models)) o.models.forEach(push)
-    // 嵌套: { data: { data: [...] } }
-    if (o.data && typeof o.data === 'object' && !Array.isArray(o.data)) {
-      const inner = o.data as Record<string, unknown>
-      if (Array.isArray(inner.data)) inner.data.forEach(push)
-      if (Array.isArray(inner.models)) inner.models.forEach(push)
-    }
-    // { object: "list", data: ... } 已覆盖
   }
-
   return [...new Set(out)].sort((a, b) => a.localeCompare(b))
 }
 
@@ -203,28 +144,20 @@ async function tryFetchModelsOnce(
 ): Promise<{ models: string[]; status: number; bodySnippet?: string }> {
   const res = await fetch(modelsUrl, {
     method: 'GET',
-    headers: {
-      Accept: 'application/json',
-      ...headers,
-    },
+    headers: { Accept: 'application/json', ...headers },
   })
   const text = await res.text().catch(() => '')
   if (!res.ok) {
     return { models: [], status: res.status, bodySnippet: text.slice(0, 240) }
   }
-  let data: unknown
   try {
-    data = text ? JSON.parse(text) : null
+    const data = text ? JSON.parse(text) : null
+    return { models: extractModelIds(data), status: res.status }
   } catch {
     return { models: [], status: res.status, bodySnippet: text.slice(0, 240) }
   }
-  return { models: extractModelIds(data), status: res.status }
 }
 
-/**
- * Fetch model list from an OpenAI-compatible /models endpoint.
- * Tries multiple base paths and auth headers.
- */
 export async function fetchModels(
   target: ApiCallTarget,
 ): Promise<{
@@ -234,16 +167,40 @@ export async function fetchModels(
   tried?: string[]
 }> {
   const key = target.apiKey?.trim() || ''
+  const styles: AuthStyle[] = key ? ['bearer', 'api-key', 'x-api-key'] : ['none']
+  const tried: string[] = []
+  const errors: string[] = []
+
+  // ★ 代理模式：固定 GET /api/models
+  if (shouldUseServerProxy(target.baseUrl)) {
+    for (const style of styles) {
+      const url = '/api/models'
+      tried.push(`${url} [${style}]`)
+      try {
+        const { models, status, bodySnippet } = await tryFetchModelsOnce(
+          url,
+          authHeaders(style, key),
+        )
+        if (models.length > 0) return { models, source: 'remote', tried }
+        errors.push(
+          `${url} → HTTP ${status}${bodySnippet ? `: ${bodySnippet}` : ''}`,
+        )
+      } catch (e) {
+        errors.push(`${url} → ${(e as Error).message || e}`)
+      }
+    }
+    return {
+      models: getFallbackModels(target.baseUrl),
+      source: 'fallback',
+      error: errors.slice(0, 3).join('\n') || '拉取失败',
+      tried,
+    }
+  }
+
   const bases = candidateBases(target.baseUrl)
   if (!bases.length) {
     return { models: [], source: 'fallback', error: '请填写 API 基础 URL' }
   }
-
-  const tried: string[] = []
-  const errors: string[] = []
-  const styles: AuthStyle[] = key
-    ? ['bearer', 'api-key', 'x-api-key']
-    : ['none']
 
   for (const base of bases) {
     const modelsUrl = `${base}/models`
@@ -254,53 +211,34 @@ export async function fetchModels(
           modelsUrl,
           authHeaders(style, key),
         )
-        if (models.length > 0) {
-          return { models, source: 'remote', tried }
-        }
-        if (status && status !== 200) {
-          errors.push(`${modelsUrl} → HTTP ${status}${bodySnippet ? `: ${bodySnippet}` : ''}`)
-        } else if (status === 200) {
-          errors.push(`${modelsUrl} → 200 但未能解析模型列表`)
-        }
+        if (models.length > 0) return { models, source: 'remote', tried }
+        if (status)
+          errors.push(
+            `${modelsUrl} → HTTP ${status}${bodySnippet ? `: ${bodySnippet}` : ''}`,
+          )
       } catch (e) {
         const msg = (e as Error)?.message || String(e)
-        // CORS / 网络
-        if (/Failed to fetch|NetworkError|Load failed|CORS/i.test(msg)) {
-          errors.push(
-            `${modelsUrl} → 浏览器跨域或网络失败（${msg}）。可手动填写模型名，或使用允许 CORS 的中转。`,
-          )
-        } else {
-          errors.push(`${modelsUrl} → ${msg}`)
-        }
+        errors.push(`${modelsUrl} → ${msg}`)
       }
     }
   }
 
-  const fallback = getFallbackModels(bases[0])
   return {
-    models: fallback,
+    models: getFallbackModels(bases[0] || ''),
     source: 'fallback',
     error: errors.slice(0, 4).join('\n') || '拉取失败',
     tried,
   }
 }
 
-/**
- * 发起 chat/completions：自动尝试 /v1 与多种鉴权头。
- * 供天机推演与连通测试共用。
- */
 export async function postChatCompletion(options: {
   baseUrl: string
   apiKey: string
   body: Record<string, unknown>
 }): Promise<{ ok: true; data: unknown; usedUrl: string } | { ok: false; error: string; status?: number }> {
   const key = options.apiKey.trim()
-  const bases = candidateBases(options.baseUrl)
-  if (!bases.length || !key) {
-    return { ok: false, error: '请填写 URL 和 Key' }
-  }
+  if (!key) return { ok: false, error: '请填写 API Key' }
 
-  const errors: string[] = []
   const headerVariants: Record<string, string>[] = [
     {
       'Content-Type': 'application/json',
@@ -319,6 +257,38 @@ export async function postChatCompletion(options: {
     },
   ]
 
+  // ★ 代理模式：固定 POST /api/chat
+  if (shouldUseServerProxy(options.baseUrl)) {
+    const url = '/api/chat'
+    const errors: string[] = []
+    for (const headers of headerVariants) {
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(options.body),
+        })
+        const text = await res.text()
+        if (res.ok) {
+          try {
+            return { ok: true, data: JSON.parse(text), usedUrl: url }
+          } catch {
+            return { ok: false, error: `${url} 返回非 JSON`, status: res.status }
+          }
+        }
+        errors.push(`${url} HTTP ${res.status}: ${text.slice(0, 200)}`)
+        if (res.status !== 401 && res.status !== 403) break
+      } catch (e) {
+        errors.push(`${url}: ${(e as Error).message || e}`)
+      }
+    }
+    return { ok: false, error: errors[0] || '代理请求失败' }
+  }
+
+  const bases = candidateBases(options.baseUrl)
+  if (!bases.length) return { ok: false, error: '请填写 Base URL' }
+
+  const errors: string[] = []
   for (const base of bases) {
     const url = `${base}/chat/completions`
     for (const headers of headerVariants) {
@@ -334,39 +304,17 @@ export async function postChatCompletion(options: {
         }
         const text = await res.text().catch(() => '')
         errors.push(`${url} HTTP ${res.status}: ${text.slice(0, 120)}`)
-        // 401/403 换鉴权头；其它错误可换 base
         if (res.status !== 401 && res.status !== 403) break
       } catch (e) {
         const msg = (e as Error)?.message ?? String(e)
-        if (/Failed to fetch|NetworkError|Load failed/i.test(msg)) {
-          const httpsPage =
-            typeof location !== 'undefined' && location.protocol === 'https:'
-          const httpApi = /^http:\/\//i.test(url)
-          if (httpsPage && httpApi) {
-            return {
-              ok: false,
-              error: diagnoseBrowserApiBlock(options.baseUrl).message,
-            }
-          }
-          errors.push(
-            `${url} 失败: ${msg}\n若已是 HTTPS，请在 API 服务端加 CORS 头：Access-Control-Allow-Origin（允许 ${typeof location !== 'undefined' ? location.origin : '你的页面源'}）`,
-          )
-          break
-        }
         errors.push(`${url}: ${msg}`)
+        break
       }
     }
   }
-
-  return {
-    ok: false,
-    error: errors[0] || '请求失败',
-  }
+  return { ok: false, error: errors[0] || '请求失败' }
 }
 
-/**
- * POST a tiny chat-completion request to verify connectivity.
- */
 export async function testConnection(
   target: ApiCallTarget,
 ): Promise<{
@@ -395,9 +343,5 @@ export async function testConnection(
   if (result.ok) {
     return { ok: true, usedUrl: result.usedUrl }
   }
-  return {
-    ok: false,
-    error: result.error,
-    errorBody: result.error,
-  }
+  return { ok: false, error: result.error, errorBody: result.error }
 }

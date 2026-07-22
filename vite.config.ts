@@ -2,13 +2,15 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { fileURLToPath, URL } from 'node:url'
 
+const LLM_TARGET = process.env.VITE_LLM_PROXY_TARGET || 'http://38.244.63.197:15511'
+
 export default defineConfig({
   plugins: [vue()],
-  // GitHub Pages 项目站：https://jokememe.github.io/zm/
-  // 本地 dev 不受影响；若改仓库名请同步改此路径
-  base: process.env.GITHUB_PAGES === 'true' || process.env.VITE_BASE
-    ? (process.env.VITE_BASE || '/zm/')
-    : './',
+  // GitHub Pages 项目站才设 /zm/；Vercel 根路径用 ./
+  base:
+    process.env.GITHUB_PAGES === 'true' || process.env.VITE_BASE
+      ? process.env.VITE_BASE || '/zm/'
+      : './',
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
@@ -16,11 +18,9 @@ export default defineConfig({
   },
   build: {
     target: 'es2022',
-    // 单 CSS：避免异步 chunk 样式晚到
     cssCodeSplit: false,
     rollupOptions: {
       output: {
-        // 单 JS 包：消灭跨 chunk 循环依赖导致的生产初始化 bug
         inlineDynamicImports: true,
         entryFileNames: 'assets/[name]-[hash].js',
         assetFileNames: 'assets/[name]-[hash][extname]',
@@ -30,22 +30,19 @@ export default defineConfig({
   server: {
     port: 5173,
     host: true,
-    /**
-     * 本地与生产一致：/api/llm/* → 真实中转
-     * 密匣可填 http://IP:端口/v1，前端会自动改写为 /api/llm/v1
-     */
     proxy: {
-      '/api/llm': {
-        target: process.env.VITE_LLM_PROXY_TARGET || 'http://38.244.63.197:15511',
+      // 与 Vercel /api/chat、/api/models 对齐
+      '/api/chat': {
+        target: LLM_TARGET,
         changeOrigin: true,
         secure: false,
-        rewrite: (path) => path.replace(/^\/api\/llm/, ''),
+        rewrite: () => '/v1/chat/completions',
       },
-      '/__llm': {
-        target: process.env.VITE_LLM_PROXY_TARGET || 'http://38.244.63.197:15511',
+      '/api/models': {
+        target: LLM_TARGET,
         changeOrigin: true,
         secure: false,
-        rewrite: (path) => path.replace(/^\/__llm/, ''),
+        rewrite: () => '/v1/models',
       },
     },
   },
@@ -53,11 +50,17 @@ export default defineConfig({
     port: 4173,
     host: true,
     proxy: {
-      '/api/llm': {
-        target: process.env.VITE_LLM_PROXY_TARGET || 'http://38.244.63.197:15511',
+      '/api/chat': {
+        target: LLM_TARGET,
         changeOrigin: true,
         secure: false,
-        rewrite: (path) => path.replace(/^\/api\/llm/, ''),
+        rewrite: () => '/v1/chat/completions',
+      },
+      '/api/models': {
+        target: LLM_TARGET,
+        changeOrigin: true,
+        secure: false,
+        rewrite: () => '/v1/models',
       },
     },
   },

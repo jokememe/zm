@@ -475,8 +475,8 @@ function onTagsInput(value: string) {
           <strong>可行方案已启用：自动同源代理</strong>
           <pre>{{ primaryAccessWarn }}</pre>
           <p class="api-proxy-banner__tip">
-            点保存/测试会自动走 <code>/api/llm/v1</code>。请用
-            <strong>Vercel</strong> 部署（不要用纯静态 GitHub Pages）。
+            实际请求：<code>POST /api/chat</code>、<code>GET /api/models</code>（Vercel
+            服务端转发）。请用 <strong>Vercel</strong> 部署。
             <button type="button" class="linkish" @click="useDevProxy">填入默认中转地址</button>
           </p>
         </div>
