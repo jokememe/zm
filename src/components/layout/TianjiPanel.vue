@@ -27,6 +27,7 @@ const {
   statusLabel,
   lastError,
   lastSettlement,
+  lastSettlementKind,
   settings,
   showSettings,
   showLorebooks,
@@ -234,7 +235,18 @@ async function onPresetClose() {
       </div>
 
       <p v-if="lastError" class="tianji-error">{{ lastError }}</p>
-      <p v-if="lastSettlement" class="tianji-settle">气数：{{ lastSettlement }}</p>
+      <p
+        v-if="settling || lastSettlement"
+        class="tianji-settle"
+        :class="{
+          'tianji-settle--ok': lastSettlementKind === 'ok',
+          'tianji-settle--fail': lastSettlementKind === 'fail',
+          'tianji-settle--info': lastSettlementKind === 'info' || settling,
+        }"
+      >
+        <template v-if="settling">局面分析进行中…</template>
+        <template v-else>局面：{{ lastSettlement }}</template>
+      </p>
 
       <div ref="listRef" id="tianji-message-list" class="tianji__list scroll-y">
         <article
@@ -328,6 +340,12 @@ async function onPresetClose() {
         <div v-if="typing" id="tianji-typing" class="msg msg--oracle typing">
           <span class="dot" /><span class="dot" /><span class="dot" />
         </div>
+        <div v-else-if="settling" class="msg msg--system typing">
+          <header class="msg__meta">
+            <span class="msg__role">系统</span>
+          </header>
+          <p class="msg__content">【自动局面分析】进行中…</p>
+        </div>
       </div>
 
       <form id="tianji-compose" class="tianji__compose" @submit.prevent="submit">
@@ -417,6 +435,19 @@ async function onPresetClose() {
   background: var(--jade-soft);
   color: var(--jade);
   font-size: 0.75rem;
+  line-height: 1.4;
+}
+.tianji-settle--ok {
+  background: var(--jade-soft);
+  color: var(--jade);
+}
+.tianji-settle--fail {
+  background: rgba(180, 60, 60, 0.12);
+  color: #a33;
+}
+.tianji-settle--info {
+  background: rgba(80, 120, 180, 0.12);
+  color: #356;
 }
 
 .tianji {

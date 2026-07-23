@@ -10,12 +10,14 @@ import './st-shared.css'
 const {
   ready,
   typing,
+  settling,
   llmReady,
   statusLabel,
   contextInjected,
   contextDetail,
   lastError,
   lastSettlement,
+  lastSettlementKind,
   displayMain,
   displayOptions,
   displaySum,
@@ -44,13 +46,16 @@ const showQiEmbed = ref(false)
 const editingId = ref<string | null>(null)
 const editDraft = ref('')
 
+/** 推演中或局面分析中，禁止连发 */
+const busy = computed(() => typing.value || settling.value)
+
 function startEdit(msg: { id: string; content: string }) {
   editingId.value = msg.id
   editDraft.value = msg.content
 }
 
 async function confirmEdit() {
-  if (!editingId.value || !editDraft.value.trim() || typing.value) return
+  if (!editingId.value || !editDraft.value.trim() || busy.value) return
   const id = editingId.value
   const text = editDraft.value
   editingId.value = null
@@ -78,18 +83,18 @@ const lastOracleId = computed(() => {
 
 async function submit() {
   const t = input.value.trim()
-  if (!t || typing.value) return
+  if (!t || busy.value) return
   input.value = ''
   await sendPlayer(t)
 }
 
 async function onReroll() {
-  if (typing.value || !canRegenerate.value) return
+  if (busy.value || !canRegenerate.value) return
   await regenerateLast()
 }
 
 async function onDeleteFrom(id: string) {
-  if (typing.value) return
+  if (busy.value) return
   if (!confirm('删除此条及之后全部推演？气数将回滚到此条之前。')) return
   await deleteMessagesFrom(id)
 }
@@ -106,13 +111,24 @@ async function onSettingsClose() {
       <div class="stage__status">
         <span class="stage__dot" :class="{ on: llmReady }" />
         <span>{{ statusLabel }}</span>
-        <span v-if="lastSettlement" class="stage__settle">结算：{{ lastSettlement }}</span>
+        <span
+          v-if="settling || lastSettlement"
+          class="stage__settle"
+          :class="{
+            'stage__settle--ok': lastSettlementKind === 'ok',
+            'stage__settle--fail': lastSettlementKind === 'fail',
+            'stage__settle--info': lastSettlementKind === 'info' || settling,
+          }"
+        >
+          <template v-if="settling">局面分析中…</template>
+          <template v-else>局面：{{ lastSettlement }}</template>
+        </span>
       </div>
       <div class="stage__actions">
         <button
           type="button"
           class="btn btn-soft btn-sm"
-          :disabled="typing || !canRegenerate"
+          :disabled="busy || !canRegenerate"
           title="回滚上一轮并重新推演"
           @click="onReroll"
         >
@@ -143,6 +159,12 @@ async function onSettingsClose() {
         <button type="button" class="btn btn-ghost btn-sm" @click="clearContext">清除</button>
       </div>
       <p v-if="lastError" class="stage__error">{{ lastError }}</p>
+      <p
+        v-if="settling"
+        class="stage__hint stage__hint--settle"
+      >
+        【自动局面分析】进行中…
+      </p>
 
       <VariablePanel v-if="showQiEmbed" embedded />
 
@@ -288,20 +310,23 @@ async function onSettingsClose() {
           </div>
         </article>
         <div v-if="typing" class="stage__hint">推演中…</div>
+        <div v-else-if="settling" class="stage__hint stage__hint--settle">
+          【自动局面分析】进行中…
+        </div>
       </div>
 
       <form class="stage__compose" @submit.prevent="submit">
         <textarea
           v-model="input"
           rows="2"
-          :disabled="typing"
+          :disabled="busy"
           :placeholder="
             llmReady ? '向天机批示或自定义行动…' : '未通灵：本地示意。请在密匣填写密钥'
           "
           @keydown.enter.exact.prevent="submit"
         />
-        <button type="submit" class="btn btn-primary" :disabled="typing || !input.trim()">
-          {{ typing ? '…' : '推演' }}
+        <button type="submit" class="btn btn-primary" :disabled="busy || !input.trim()">
+          {{ busy ? '…' : '推演' }}
         </button>
       </form>
     </template>
@@ -362,6 +387,23 @@ async function onSettingsClose() {
 .stage__settle {
   color: var(--jade);
   font-size: 0.75rem;
+  max-width: 42vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stage__settle--ok {
+  color: var(--jade);
+}
+.stage__settle--fail {
+  color: #c44;
+}
+.stage__settle--info {
+  color: #478;
+}
+.stage__hint--settle {
+  margin: 0 0 0.5rem;
+  color: #478;
 }
 
 .stage__actions {

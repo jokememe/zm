@@ -7,6 +7,7 @@ import type { TianjiMessage } from '@/types/game'
 import { tianjiSeed } from '@/data/mock'
 import { buildOpeningTianjiMessages, openingTianjiMessages } from '@/data/opening'
 import { useGameState } from '@/composables/useGameState'
+import { useToast } from '@/composables/useToast'
 import {
   initializeDatabase,
   getSettings,
@@ -83,7 +84,12 @@ const contextInjected = ref<string | null>(null)
 const contextDetail = ref<string | null>(null)
 const ready = ref(false)
 const lastError = ref<string | null>(null)
+/** 局面分析最近一次结果文案（成功/失败/无变更都写，供顶栏展示） */
 const lastSettlement = ref<string | null>(null)
+/** 顶栏样式：ok | fail | info | null */
+const lastSettlementKind = ref<'ok' | 'fail' | 'info' | null>(null)
+
+const toast = useToast()
 
 const settings = ref<AppSettings | null>(null)
 const presets = ref<ChatPreset[]>([])
@@ -335,7 +341,7 @@ function appendLocal(
   extra?: Partial<TianjiMessage>,
 ): TianjiMessage {
   const msg: TianjiMessage = {
-    id: `tm-${++seq}`,
+    id: extra?.id ?? `tm-${++seq}`,
     role,
     content,
     time: nowLabel(),
@@ -343,6 +349,26 @@ function appendLocal(
   }
   messages.value = [...messages.value, msg]
   return msg
+}
+
+/** 局面分析反馈：本地气泡 + 可选写入 ST 会话 + 顶栏 + toast */
+async function reportSettlementFeedback(opts: {
+  kind: 'ok' | 'fail' | 'info'
+  /** 聊天气泡全文 */
+  bubble: string
+  /** 顶栏短文案 */
+  banner: string
+  toastTitle: string
+  toastMessage?: string
+}) {
+  lastSettlementKind.value = opts.kind
+  lastSettlement.value = opts.banner
+  appendLocal('system', opts.bubble)
+  // 写入会话，刷新/重开后仍可见（必须 await，避免随后 persistSession 覆盖掉）
+  await appendToSt('system', opts.bubble)
+  if (opts.kind === 'ok') toast.success(opts.toastTitle, opts.toastMessage)
+  else if (opts.kind === 'fail') toast.error(opts.toastTitle, opts.toastMessage)
+  else toast.info(opts.toastTitle, opts.toastMessage)
 }
 
 async function appendToSt(
@@ -661,6 +687,7 @@ export function useTianji() {
     await boot()
     lastError.value = null
     lastSettlement.value = null
+    lastSettlementKind.value = null
 
     const ctx = contextInjected.value
     const playerLocal = appendLocal('player', text, { contextTag: ctx ?? undefined })
@@ -740,7 +767,12 @@ export function useTianji() {
 
       if (settings.value) {
         settling.value = true
-        const analyzingId = appendLocal('system', '【自动局面分析】进行中…').id
+        lastSettlementKind.value = 'info'
+        lastSettlement.value = '局面分析进行中…'
+        const analyzingId = appendLocal(
+          'system',
+          '【自动局面分析】进行中…',
+        ).id
         try {
           const settle = await runSettle({
             userText: text,
@@ -795,42 +827,73 @@ export function useTianji() {
           messages.value = messages.value.filter((m) => m.id !== analyzingId)
 
           if (settle.status === 'skipped') {
-            if (settle.reason === 'secondary_only_unavailable') {
-              appendLocal(
-                'system',
-                '【自动局面分析】已跳过：密匣为「仅次通灵」但未配齐次 API',
-              )
-            }
             stateAfter = snapshotWorldState()
+            if (settle.reason === 'off') {
+              await reportSettlementFeedback({
+                kind: 'info',
+                bubble: '【自动局面分析】已关闭（密匣中设为关闭，本回不改局面）',
+                banner: '局面分析已关闭',
+                toastTitle: '局面分析已关闭',
+                toastMessage: '密匣中可重新开启',
+              })
+            } else {
+              await reportSettlementFeedback({
+                kind: 'fail',
+                bubble:
+                  '【自动局面分析失败】已跳过：密匣为「仅次通灵」但未配齐次 API（本回局面未变更）',
+                banner: '失败：未配次 API',
+                toastTitle: '局面分析失败',
+                toastMessage: '请在密匣启用并配齐次 API，或改为「次优先否则主」',
+              })
+            }
           } else if (settle.status === 'failed') {
-            lastSettlement.value = null
+            stateAfter = settle.stateAfter
             const raw = settle.error || '未知错误'
             let friendly = raw
             if (/超时|abort|AbortError|timeout/i.test(raw)) {
               friendly =
                 '请求超时。可换更快的次通灵模型，或在密匣将局面结算设为关闭'
-            } else if (/JSON 解析失败|Expected property name|is not valid JSON/i.test(raw)) {
+            } else if (
+              /JSON 解析失败|Expected property name|is not valid JSON/i.test(raw)
+            ) {
               friendly =
-                '模型返回了非标准 JSON（已尝试自动修复仍失败）。可换更稳的次通灵，或本回忽略；剧情不受影响'
+                '模型返回了非标准 JSON（已尝试自动修复仍失败）。可换更稳的次通灵'
             }
-            appendLocal(
-              'system',
-              `【自动局面分析失败】${friendly}（本回局面未变更；剧情已保留）`,
-            )
-            stateAfter = settle.stateAfter
+            await reportSettlementFeedback({
+              kind: 'fail',
+              bubble: `【自动局面分析失败】${friendly}（本回局面未变更；剧情已保留）`,
+              banner: `失败：${friendly.slice(0, 48)}${friendly.length > 48 ? '…' : ''}`,
+              toastTitle: '局面分析失败',
+              toastMessage: friendly.slice(0, 120),
+            })
           } else if (settle.status === 'applied') {
-            lastSettlement.value = settle.lines.join('；')
-            appendLocal(
-              'system',
-              `【自动局面分析】${settle.lines.join('；')}`,
-            )
             stateAfter = settle.stateAfter
+            const lines = settle.lines.join('；')
+            const sum = settle.summary?.trim()
+            await reportSettlementFeedback({
+              kind: 'ok',
+              bubble: sum
+                ? `【自动局面分析成功】${lines}\n〔摘要〕${sum}`
+                : `【自动局面分析成功】${lines}`,
+              banner: lines,
+              toastTitle: '局面已更新',
+              toastMessage: lines.slice(0, 120),
+            })
             if (settings.value) {
               await syncSystemLore(settings.value)
               lorebooks.value = await getLorebooks()
             }
           } else {
+            // empty：调用成功但无资源/ops 变更
             stateAfter = settle.stateAfter
+            const sum = settle.summary?.trim() || '本回无资源/名册/外交/城池变更'
+            await reportSettlementFeedback({
+              kind: 'info',
+              bubble: `【自动局面分析完成】无变更 — ${sum}`,
+              banner: `无变更：${sum.slice(0, 40)}${sum.length > 40 ? '…' : ''}`,
+              toastTitle: '局面无变更',
+              toastMessage: sum.slice(0, 120),
+            })
           }
 
           // 把 stateAfter 回写到本条 assistant，供删楼回滚
@@ -854,10 +917,14 @@ export function useTianji() {
           }
         } catch (settleErr) {
           messages.value = messages.value.filter((m) => m.id !== analyzingId)
-          appendLocal(
-            'system',
-            `【自动局面分析失败】${(settleErr as Error).message || settleErr}（剧情已保留）`,
-          )
+          const msg = String((settleErr as Error).message || settleErr)
+          await reportSettlementFeedback({
+            kind: 'fail',
+            bubble: `【自动局面分析失败】${msg}（剧情已保留）`,
+            banner: `失败：${msg.slice(0, 48)}`,
+            toastTitle: '局面分析失败',
+            toastMessage: msg.slice(0, 120),
+          })
         } finally {
           settling.value = false
         }
@@ -1204,8 +1271,10 @@ export function useTianji() {
       }
     }
     if (lines.length) {
+      lastSettlementKind.value = 'ok'
       lastSettlement.value = lines.join('；')
       appendLocal('system', `【气数手改】${lines.join('；')}`)
+      toast.success('气数已手改', lines.join('；').slice(0, 120))
     }
     await persistSession({
       ...chatSession.value,
@@ -1224,6 +1293,7 @@ export function useTianji() {
     ready,
     lastError,
     lastSettlement,
+    lastSettlementKind,
     lastParsed,
     llmReady,
     apiMissing,
