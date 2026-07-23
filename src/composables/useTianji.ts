@@ -351,26 +351,6 @@ function appendLocal(
   return msg
 }
 
-/** 局面分析反馈：本地气泡 + 可选写入 ST 会话 + 顶栏 + toast */
-async function reportSettlementFeedback(opts: {
-  kind: 'ok' | 'fail' | 'info'
-  /** 聊天气泡全文 */
-  bubble: string
-  /** 顶栏短文案 */
-  banner: string
-  toastTitle: string
-  toastMessage?: string
-}) {
-  lastSettlementKind.value = opts.kind
-  lastSettlement.value = opts.banner
-  appendLocal('system', opts.bubble)
-  // 写入会话，刷新/重开后仍可见（必须 await，避免随后 persistSession 覆盖掉）
-  await appendToSt('system', opts.bubble)
-  if (opts.kind === 'ok') toast.success(opts.toastTitle, opts.toastMessage)
-  else if (opts.kind === 'fail') toast.error(opts.toastTitle, opts.toastMessage)
-  else toast.info(opts.toastTitle, opts.toastMessage)
-}
-
 async function appendToSt(
   role: ChatMessage['role'],
   content: string,
@@ -768,11 +748,7 @@ export function useTianji() {
       if (settings.value) {
         settling.value = true
         lastSettlementKind.value = 'info'
-        lastSettlement.value = '局面分析进行中…'
-        const analyzingId = appendLocal(
-          'system',
-          '【自动局面分析】进行中…',
-        ).id
+        lastSettlement.value = '局面分析中…'
         try {
           const settle = await runSettle({
             userText: text,
@@ -794,106 +770,47 @@ export function useTianji() {
                       model: String(api.model || '').trim() || String(body.model || ''),
                     }
               const model = ep.model || String(body.model || '')
-              // 局面分析：默认流式 SSE（多数中转/模型非流不稳或直接拒）
-              // 单次 Bearer + 客户端 60s 超时；思考增量在 stream 层拼进正文兜底
-              const completion = await postChatCompletionStream({
+              const completion = await postChatCompletion({
                 baseUrl: ep.baseUrl,
                 apiKey: ep.apiKey,
-                body: { ...body, model, stream: true },
-                timeoutMs: 60000,
+                body: { ...body, model, stream: false },
               })
               if (!completion.ok) {
-                return {
-                  ok: false as const,
-                  error: completion.error || 'settle 流式失败',
-                }
+                return { ok: false as const, error: completion.error || 'settle 请求失败' }
               }
-              const t = completion.text
-              if (!t.trim()) {
-                const bits = ['settle 返回为空']
-                if (completion.finishReason) {
-                  bits.push(`finish_reason=${completion.finishReason}`)
-                }
-                if (completion.hadReasoning) {
-                  bits.push('模型仅输出了思考未给出可解析正文')
-                }
-                return { ok: false as const, error: bits.join('；') }
+              const data = completion.data as {
+                choices?: Array<{ message?: { content?: string } }>
               }
+              const t = data.choices?.[0]?.message?.content || ''
+              if (!t.trim()) return { ok: false as const, error: 'settle 返回为空' }
               return { ok: true as const, text: t }
             },
           })
 
-          // 去掉「进行中」提示
-          messages.value = messages.value.filter((m) => m.id !== analyzingId)
-
           if (settle.status === 'skipped') {
             stateAfter = snapshotWorldState()
-            if (settle.reason === 'off') {
-              await reportSettlementFeedback({
-                kind: 'info',
-                bubble: '【自动局面分析】已关闭（密匣中设为关闭，本回不改局面）',
-                banner: '局面分析已关闭',
-                toastTitle: '局面分析已关闭',
-                toastMessage: '密匣中可重新开启',
-              })
-            } else {
-              await reportSettlementFeedback({
-                kind: 'fail',
-                bubble:
-                  '【自动局面分析失败】已跳过：密匣为「仅次通灵」但未配齐次 API（本回局面未变更）',
-                banner: '失败：未配次 API',
-                toastTitle: '局面分析失败',
-                toastMessage: '请在密匣启用并配齐次 API，或改为「次优先否则主」',
-              })
-            }
+            lastSettlementKind.value = 'info'
+            lastSettlement.value = settle.reason === 'off' ? '局面分析已关闭' : '未配次 API，已跳过'
           } else if (settle.status === 'failed') {
             stateAfter = settle.stateAfter
+            lastSettlementKind.value = 'fail'
             const raw = settle.error || '未知错误'
-            let friendly = raw
-            if (/超时|abort|AbortError|timeout/i.test(raw)) {
-              friendly =
-                '请求超时。可换更快的次通灵模型，或在密匣将局面结算设为关闭'
-            } else if (
-              /JSON 解析失败|Expected property name|is not valid JSON/i.test(raw)
-            ) {
-              friendly =
-                '模型返回了非标准 JSON（已尝试自动修复仍失败）。可换更稳的次通灵'
-            }
-            await reportSettlementFeedback({
-              kind: 'fail',
-              bubble: `【自动局面分析失败】${friendly}（本回局面未变更；剧情已保留）`,
-              banner: `失败：${friendly.slice(0, 48)}${friendly.length > 48 ? '…' : ''}`,
-              toastTitle: '局面分析失败',
-              toastMessage: friendly.slice(0, 120),
-            })
+            lastSettlement.value = raw.length > 60 ? raw.slice(0, 60) + '…' : raw
           } else if (settle.status === 'applied') {
             stateAfter = settle.stateAfter
             const lines = settle.lines.join('；')
-            const sum = settle.summary?.trim()
-            await reportSettlementFeedback({
-              kind: 'ok',
-              bubble: sum
-                ? `【自动局面分析成功】${lines}\n〔摘要〕${sum}`
-                : `【自动局面分析成功】${lines}`,
-              banner: lines,
-              toastTitle: '局面已更新',
-              toastMessage: lines.slice(0, 120),
-            })
+            lastSettlementKind.value = 'ok'
+            lastSettlement.value = lines
+            appendLocal('system', `【局面更新】${lines}`)
+            void appendToSt('system', `【局面更新】${lines}`)
             if (settings.value) {
               await syncSystemLore(settings.value)
               lorebooks.value = await getLorebooks()
             }
           } else {
-            // empty：调用成功但无资源/ops 变更
             stateAfter = settle.stateAfter
-            const sum = settle.summary?.trim() || '本回无资源/名册/外交/城池变更'
-            await reportSettlementFeedback({
-              kind: 'info',
-              bubble: `【自动局面分析完成】无变更 — ${sum}`,
-              banner: `无变更：${sum.slice(0, 40)}${sum.length > 40 ? '…' : ''}`,
-              toastTitle: '局面无变更',
-              toastMessage: sum.slice(0, 120),
-            })
+            lastSettlementKind.value = 'info'
+            lastSettlement.value = '本回无变更'
           }
 
           // 把 stateAfter 回写到本条 assistant，供删楼回滚
@@ -916,15 +833,9 @@ export function useTianji() {
             })
           }
         } catch (settleErr) {
-          messages.value = messages.value.filter((m) => m.id !== analyzingId)
           const msg = String((settleErr as Error).message || settleErr)
-          await reportSettlementFeedback({
-            kind: 'fail',
-            bubble: `【自动局面分析失败】${msg}（剧情已保留）`,
-            banner: `失败：${msg.slice(0, 48)}`,
-            toastTitle: '局面分析失败',
-            toastMessage: msg.slice(0, 120),
-          })
+          lastSettlementKind.value = 'fail'
+          lastSettlement.value = msg.length > 60 ? msg.slice(0, 60) + '…' : msg
         } finally {
           settling.value = false
         }

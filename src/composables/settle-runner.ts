@@ -162,11 +162,11 @@ export async function runSettle(input: {
     sum: input.sum,
     snap: snap0,
   })
-  // 默认 stream:true（由 postChat 侧发起 SSE）；max_tokens 留足给思考+JSON
+  // 非流式：settle 只需短 JSON，很多中转不支持 stream
   const body: Record<string, unknown> = {
     model: ep.model,
     messages,
-    stream: true,
+    stream: false,
     temperature: 0.1,
     max_tokens: 900,
   }
