@@ -13,6 +13,30 @@ import {
   applyValidatedDelta,
 } from '@/composables/world-state'
 import { normalizeBaseUrl } from '@/composables/api-cache'
+import { extractChatCompletionText } from '@/sillytavern/api-tools'
+
+/**
+ * Pure settle text extraction from a non-stream chat/completions body.
+ * Uses extractChatCompletionText so secondary “thinking” models that leave
+ * message.content empty still yield usable JSON from reasoning_* / multipart.
+ */
+export function textFromSettleCompletion(
+  data: unknown,
+): { ok: true; text: string } | { ok: false; error: string } {
+  const extracted = extractChatCompletionText(data)
+  const t = (extracted.text || '').trim()
+  if (!t) {
+    const bits = ['settle 返回为空']
+    if (extracted.finishReason) bits.push(`finish_reason=${extracted.finishReason}`)
+    if (extracted.hadReasoning) {
+      bits.push('模型仅输出了思考未给出正文，可换非思考模型或增大 max_tokens')
+    } else if (extracted.finishReason === 'length') {
+      bits.push('输出被截断，请增大 max_tokens 或换更快模型')
+    }
+    return { ok: false, error: bits.join('；') }
+  }
+  return { ok: true, text: extracted.text }
+}
 
 export type SettleOutcome =
   | { status: 'skipped'; reason: 'off' | 'secondary_only_unavailable' }

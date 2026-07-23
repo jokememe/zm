@@ -50,7 +50,7 @@ import {
 } from '@/composables/game-bridge'
 import { ensureAndRefreshSystemLorebook } from '@/composables/system-lorebook'
 import { recordTurnSum, loadMemoryBank } from '@/composables/memory-lore'
-import { runSettle } from '@/composables/settle-runner'
+import { runSettle, textFromSettleCompletion } from '@/composables/settle-runner'
 import { snapshotWorldState, restoreWorldState } from '@/composables/world-state'
 import {
   isApiConfigured,
@@ -778,12 +778,8 @@ export function useTianji() {
               if (!completion.ok) {
                 return { ok: false as const, error: completion.error || 'settle 请求失败' }
               }
-              const data = completion.data as {
-                choices?: Array<{ message?: { content?: string } }>
-              }
-              const t = data.choices?.[0]?.message?.content || ''
-              if (!t.trim()) return { ok: false as const, error: 'settle 返回为空' }
-              return { ok: true as const, text: t }
+              // 次 API 思考模型常把 JSON 放在 reasoning_content，勿只读 message.content
+              return textFromSettleCompletion(completion.data)
             },
           })
 
