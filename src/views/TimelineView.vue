@@ -59,10 +59,9 @@ const { calendar } = useGameState()
     <section class="panel-card note" id="timeline-note">
       <Icon name="info" :size="18" />
       <div>
-        <strong>关于时间推进（原型说明）</strong>
+        <strong>关于时间推进</strong>
         <p>
-          完整游戏中，季节结算将汇总灵田产出、纳贡入账、弟子修炼与外交变化，并可能由 LLM
-          生成当季重大事件。当前前端以模拟结算演示资源波动与事件写入天机卷轴。
+          确认流转后：先结算本季资源与历法，再由<strong>主 API</strong>根据局面与记忆生成本季「紧急与待决」写入大殿。剧情回合的局面分析仍由次/主 API 的 settle 负责，不在每回合刷待决。
         </p>
       </div>
     </section>

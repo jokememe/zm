@@ -1,11 +1,15 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import ModalFrame from '@/components/ui/ModalFrame.vue'
 import Icon from '@/components/ui/Icon.vue'
 import { useModal } from '@/composables/useModal'
 import { useToast } from '@/composables/useToast'
 import { useGameState } from '@/composables/useGameState'
 import { useTianji } from '@/composables/useTianji'
+import { getSettings } from '@/sillytavern'
+import { snapshotWorldState } from '@/composables/world-state'
+import { loadMemoryBank } from '@/composables/memory-lore'
+import { runSeasonUrgents } from '@/composables/season-urgent'
 import {
   alchemyRecipes,
   forgeQueue,
@@ -28,9 +32,14 @@ const {
   cities,
   factions,
   urgentEvents,
+  openUrgentEvents,
   resolveUrgentEvent,
+  appendUrgentEvents,
+  calendar,
 } = useGameState()
 const { injectContext, pushEvent, sendPlayer } = useTianji()
+
+const seasonBusy = ref(false)
 
 const top = computed(() => stack.value[stack.value.length - 1] ?? null)
 
@@ -113,12 +122,75 @@ function confirmHeir() {
   close()
 }
 
-function doAdvanceSeason() {
-  advanceSeason()
-  toast.success('岁月流转', '新一季已至，资源与事务已刷新（原型）')
-  pushEvent('【岁月】季节更迭，灵田结实，外敌亦在暗中窥伺。')
+function onSeasonModalClose() {
+  if (seasonBusy.value) return
   close()
-  setView('hall')
+}
+
+async function doAdvanceSeason() {
+  if (seasonBusy.value) return
+  seasonBusy.value = true
+  try {
+    advanceSeason()
+    const year = calendar.year
+    const season = calendar.season
+    pushEvent(
+      `【岁月】进入 ${year} 年 · ${season}。灵田结实，外敌亦在暗中窥伺。`,
+    )
+
+    // 主 API 生成本季待决（强模型）；未配置则只推进季节
+    let settings
+    try {
+      settings = await getSettings()
+    } catch {
+      settings = null
+    }
+
+    if (settings?.api) {
+      toast.info('岁月流转', '主通灵推演本季待决…')
+      const mem = loadMemoryBank()
+      const memoryBrief = [
+        mem.mid,
+        ...mem.short.slice(-3),
+        ...mem.long.slice(-2),
+      ]
+        .filter(Boolean)
+        .join('；')
+      const outcome = await runSeasonUrgents({
+        settings,
+        snap: snapshotWorldState(),
+        year,
+        season,
+        memoryBrief,
+        openTitles: openUrgentEvents.value.map((e) => e.title),
+      })
+      if (outcome.status === 'applied') {
+        const n = appendUrgentEvents(outcome.events)
+        toast.success(
+          '岁月流转',
+          n > 0
+            ? `新季已至，大殿新增 ${n} 件待决：${outcome.summary}`
+            : `新季已至（待决列表已满或标题重复）`,
+        )
+        if (n > 0) {
+          pushEvent(`【季报】${outcome.summary}（+${n} 待决）`, '岁月')
+        }
+      } else if (outcome.status === 'empty') {
+        toast.success('岁月流转', `新季已至。${outcome.summary}`)
+      } else if (outcome.status === 'skipped') {
+        toast.success('岁月流转', '新季已至（未配主 API，未生成新待决）')
+      } else {
+        toast.success('岁月流转', `新季已至；待决生成失败：${outcome.error}`)
+      }
+    } else {
+      toast.success('岁月流转', '新季已至，资源已刷新')
+    }
+
+    close()
+    setView('hall')
+  } finally {
+    seasonBusy.value = false
+  }
 }
 </script>
 
@@ -480,16 +552,31 @@ function doAdvanceSeason() {
       v-else-if="top?.id === 'season-advance'"
       id="modal-season-advance"
       title="推进季节"
-      subtitle="将结算本季产出与事件（原型简化）"
-      @close="close"
+      subtitle="结算产出后，由主通灵生成本季待决"
+      @close="onSeasonModalClose"
     >
       <p class="lead">
-        确认后进入下一季：灵谷入账、部分资源维护扣除，并可能触发新的外交与人事事件。重大抉择建议先在天机卷轴中推演。
+        确认后进入下一季：灵谷入账、维护扣除；并调用<strong>主 API</strong>根据当前局面与记忆生成 1～3
+        条大殿「紧急与待决」。未配置主 API 时仅推进季节。
       </p>
       <template #footer>
-        <button id="btn-season-cancel" class="btn btn-ghost" type="button" @click="close">取消</button>
-        <button id="btn-season-confirm" class="btn btn-primary" type="button" @click="doAdvanceSeason">
-          确认流转
+        <button
+          id="btn-season-cancel"
+          class="btn btn-ghost"
+          type="button"
+          :disabled="seasonBusy"
+          @click="close"
+        >
+          取消
+        </button>
+        <button
+          id="btn-season-confirm"
+          class="btn btn-primary"
+          type="button"
+          :disabled="seasonBusy"
+          @click="doAdvanceSeason"
+        >
+          {{ seasonBusy ? '流转中…' : '确认流转' }}
         </button>
       </template>
     </ModalFrame>

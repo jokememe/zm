@@ -205,6 +205,41 @@ export function useGameState() {
    * 处理一条待决：应用选项资源变化，标记 resolved，大殿不再显示。
    * @returns 选项文案与是否转天机，供 UI toast / 注入
    */
+  /**
+   * 岁月流转等节点追加待决；去重标题，open 总数不超过 maxOpen（默认 5）。
+   * 返回实际写入条数。
+   */
+  function appendUrgentEvents(
+    incoming: UrgentEvent[],
+    opts?: { maxOpen?: number },
+  ): number {
+    const maxOpen = opts?.maxOpen ?? 5
+    if (!incoming.length) return 0
+    const open = urgentEvents.value.filter((e) => (e.status ?? 'open') === 'open')
+    const openTitles = new Set(open.map((e) => e.title.trim()))
+    const room = Math.max(0, maxOpen - open.length)
+    if (room <= 0) return 0
+
+    const toAdd: UrgentEvent[] = []
+    for (const raw of incoming) {
+      if (toAdd.length >= room) break
+      const title = (raw.title || '').trim()
+      if (!title || openTitles.has(title)) continue
+      openTitles.add(title)
+      toAdd.push({
+        ...raw,
+        status: 'open',
+        choices: (raw.choices || []).map((c) => ({
+          ...c,
+          resourceDelta: c.resourceDelta ? { ...c.resourceDelta } : undefined,
+        })),
+      })
+    }
+    if (!toAdd.length) return 0
+    urgentEvents.value = [...toAdd, ...urgentEvents.value]
+    return toAdd.length
+  }
+
   function resolveUrgentEvent(
     eventId: string,
     choiceId: string,
@@ -445,6 +480,7 @@ export function useGameState() {
     markNotificationRead,
     markAllNotificationsRead,
     resolveUrgentEvent,
+    appendUrgentEvents,
     adjustResource,
     setDesignatedHeir,
     advanceSeason,
