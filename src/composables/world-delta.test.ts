@@ -1,10 +1,153 @@
 import { describe, it, expect } from 'vitest'
-import { parseSettlePayload } from './world-delta'
+import {
+  parseSettlePayload,
+  validateWorldDelta,
+  applyWorldDeltaToSnapshot,
+  emptyTestSnapshot,
+} from './world-delta'
+import type { Disciple, Faction, CityState } from '@/types/game'
+
+const baseDisciple = (over: Partial<Disciple> = {}): Disciple => ({
+  id: 'd1',
+  name: '陆承渊',
+  gender: '男',
+  age: 19,
+  realm: '炼气七层',
+  aptitude: '上佳',
+  role: '内门剑修',
+  loyalty: 78,
+  mood: '求进',
+  talent: ['剑骨'],
+  status: '在宗',
+  avatarHue: 210,
+  ...over,
+})
+
+const baseFaction = (over: Partial<Faction> = {}): Faction => ({
+  id: 'fa1',
+  name: '赤焰谷',
+  power: '一方雄镇',
+  relation: -28,
+  stance: '觊觎',
+  recent: '遣使',
+  ...over,
+})
+
+const baseCity = (over: Partial<CityState> = {}): CityState => ({
+  id: 'c1',
+  name: '青石城',
+  distance: '山脚',
+  influence: 62,
+  tribute: { type: '灵谷', amount: 180, period: '每季' },
+  attitude: '恭顺',
+  governor: '张衡',
+  notes: '',
+  ...over,
+})
 
 describe('parseSettlePayload', () => {
   it('parses bare JSON', () => {
     const r = parseSettlePayload('{"resources":{},"ops":[],"summary":"无局面变更"}')
     expect(r.ok).toBe(true)
     if (r.ok) expect(r.delta.ops).toEqual([])
+  })
+
+  it('parses markdown fenced JSON', () => {
+    const r = parseSettlePayload('```json\n{"resources":{"灵石":-10},"ops":[]}\n```')
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.delta.resources?.['灵石']).toBe(-10)
+  })
+
+  it('rejects invalid JSON', () => {
+    const r = parseSettlePayload('{not json')
+    expect(r.ok).toBe(false)
+  })
+})
+
+describe('validateWorldDelta', () => {
+  it('accepts disciple.add', () => {
+    const snap = emptyTestSnapshot()
+    const v = validateWorldDelta(
+      { ops: [{ op: 'disciple.add', name: '张三', realm: '炼气一层' }] },
+      snap,
+    )
+    expect(v.ok).toBe(true)
+  })
+
+  it('rejects disciple.update unknown id', () => {
+    const snap = emptyTestSnapshot({ disciples: [baseDisciple()] })
+    const v = validateWorldDelta(
+      { ops: [{ op: 'disciple.update', id: 'nope', patch: { loyalty: 1 } }] },
+      snap,
+    )
+    expect(v.ok).toBe(false)
+    expect(v.errors.some((e) => e.includes('不存在'))).toBe(true)
+  })
+
+  it('rejects ops length > 12', () => {
+    const snap = emptyTestSnapshot()
+    const ops = Array.from({ length: 13 }, (_, i) => ({
+      op: 'notify.push' as const,
+      title: `t${i}`,
+    }))
+    const v = validateWorldDelta({ ops }, snap)
+    expect(v.ok).toBe(false)
+  })
+
+  it('rejects illegal resource key', () => {
+    const snap = emptyTestSnapshot()
+    const v = validateWorldDelta({ resources: { 金币: 1 } as never }, snap)
+    expect(v.ok).toBe(false)
+  })
+})
+
+describe('applyWorldDeltaToSnapshot', () => {
+  it('applies relative resource change', () => {
+    const snap = emptyTestSnapshot()
+    const { snap: next, result } = applyWorldDeltaToSnapshot(
+      { resources: { 灵石: '-30' } },
+      snap,
+    )
+    expect(next.resources.spiritStone).toBe(970)
+    expect(result.changed).toBe(true)
+  })
+
+  it('adds disciple', () => {
+    const snap = emptyTestSnapshot()
+    const { snap: next } = applyWorldDeltaToSnapshot(
+      { ops: [{ op: 'disciple.add', name: '张三', realm: '炼气一层' }] },
+      snap,
+    )
+    expect(next.disciples).toHaveLength(1)
+    expect(next.disciples[0].name).toBe('张三')
+  })
+
+  it('soft-removes disciple', () => {
+    const snap = emptyTestSnapshot({ disciples: [baseDisciple()] })
+    const { snap: next } = applyWorldDeltaToSnapshot(
+      { ops: [{ op: 'disciple.remove', id: 'd1' }] },
+      snap,
+    )
+    expect(next.disciples[0].status).toBe('叛离风险')
+  })
+
+  it('updates faction and city', () => {
+    const snap = emptyTestSnapshot({
+      factions: [baseFaction()],
+      cities: [baseCity()],
+    })
+    const { snap: next } = applyWorldDeltaToSnapshot(
+      {
+        ops: [
+          { op: 'faction.update', id: 'fa1', patch: { relation: -50, stance: '敌对' } },
+          { op: 'city.update', name: '青石城', patch: { attitude: '犹豫', influence: 40 } },
+        ],
+      },
+      snap,
+    )
+    expect(next.factions[0].stance).toBe('敌对')
+    expect(next.factions[0].relation).toBe(-50)
+    expect(next.cities[0].attitude).toBe('犹豫')
+    expect(next.cities[0].influence).toBe(40)
   })
 })
