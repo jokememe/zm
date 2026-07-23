@@ -5,7 +5,6 @@ import type {
   WorldDelta,
   WorldOp,
   WorldSnapshot,
-  ResourceCnName,
   ValidateResult,
   ApplyResult,
 } from '@/types/world'

@@ -132,6 +132,13 @@ export function commitVariablesFromEditor(
   return mergeSessionWithGame(rest)
 }
 
+function unrefList<T>(raw: unknown): T[] {
+  if (raw && typeof raw === 'object' && 'value' in (raw as Ref)) {
+    return ((raw as Ref<T[]>).value || []) as T[]
+  }
+  return (raw as T[]) || []
+}
+
 /** 系统世界书正文：局面摘要 */
 export function buildLiveLoreContent(extra?: {
   contextLabel?: string | null
@@ -139,17 +146,23 @@ export function buildLiveLoreContent(extra?: {
 }): string {
   const gs = useGameState()
   const snap = snapshotGameVariables()
-  const rawDisc = gs.disciples as unknown
-  const list =
-    rawDisc && typeof rawDisc === 'object' && 'value' in (rawDisc as Ref)
-      ? ((rawDisc as Ref<unknown[]>).value as unknown[])
-      : (rawDisc as unknown[])
-  const disciples = (list || []) as {
+  const disciples = unrefList<{
     name: string
     realm: string
     role: string
     status: string
-  }[]
+  }>(gs.disciples)
+  const factions = unrefList<{
+    name: string
+    relation: number
+    stance: string
+  }>(gs.factions)
+  const cities = unrefList<{
+    name: string
+    attitude: string
+    influence: number
+  }>(gs.cities)
+
   const discLine =
     disciples.length === 0
       ? '（无人）'
@@ -158,6 +171,22 @@ export function buildLiveLoreContent(extra?: {
           .map((d) => `${d.name}（${d.realm}·${d.role}·${d.status}）`)
           .join('、') + (disciples.length > 12 ? ` 等${disciples.length}人` : '')
 
+  const factionLine =
+    factions.length === 0
+      ? '（无）'
+      : factions
+          .slice(0, 8)
+          .map((f) => `${f.name}(${f.relation}/${f.stance})`)
+          .join('、')
+
+  const cityLine =
+    cities.length === 0
+      ? '（无）'
+      : cities
+          .slice(0, 8)
+          .map((c) => `${c.name}(${c.attitude}·影响${c.influence})`)
+          .join('、')
+
   const lines = [
     '【宗门当前实况 · 系统自动更新，请据此推演；与记忆条目一并常驻】',
     `宗门：${snap['宗门']}　掌门：${snap['掌门']}　难度：${snap['难度']}`,
@@ -165,6 +194,8 @@ export function buildLiveLoreContent(extra?: {
     `资源：灵石 ${snap['灵石']} · 灵谷 ${snap['灵谷']} · 丹材 ${snap['丹材']} · 矿铁 ${snap['矿铁']}`,
     `气数：声望 ${snap['声望']} · 气运 ${snap['气运']}`,
     `在册弟子（${disciples.length}）：${discLine}`,
+    `势力：${factionLine}`,
+    `城池：${cityLine}`,
   ]
   if (extra?.contextLabel) {
     lines.push(
@@ -174,7 +205,7 @@ export function buildLiveLoreContent(extra?: {
     )
   }
   lines.push(
-    '结算约定：本回合结束须在 <vars> 中给出资源绝对或相对值（如 "灵石": -30 或 "灵石": 1250），否则气数不改。',
+    '结算约定：气数与名册/外交/城池由系统 settle 根据正文写入；请保证正文事实清楚。勿依赖 <vars> 改档。',
     '记忆约定：须输出 <sum> 一句话总结；系统将写入短期记忆，并择要入中长期。',
   )
   return lines.join('\n')

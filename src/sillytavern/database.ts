@@ -253,7 +253,12 @@ export async function deletePreset(id: string): Promise<void> {
 
 export async function getSettings(): Promise<AppSettings | undefined> {
   const all = await getDatabase().settings.toArray();
-  return all[0];
+  const s = all[0];
+  if (!s) return undefined;
+  if (s.settlementMode === undefined) {
+    s.settlementMode = 'secondary_then_primary';
+  }
+  return s;
 }
 
 export async function saveSettings(settings: AppSettings): Promise<void> {

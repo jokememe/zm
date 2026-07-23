@@ -8,21 +8,27 @@ import { useGameState } from '@/composables/useGameState'
 import { useTianji } from '@/composables/useTianji'
 import {
   urgentEvents,
-  disciples,
   alchemyRecipes,
   forgeQueue,
   manuals,
   treasures,
   fieldPlots,
-  cities,
-  factions,
   heirs,
   relationEdges,
 } from '@/data/mock'
 
 const { stack, close } = useModal()
 const toast = useToast()
-const { adjustResource, setDesignatedHeir, advanceSeason, setView, focusTianji } = useGameState()
+const {
+  adjustResource,
+  setDesignatedHeir,
+  advanceSeason,
+  setView,
+  focusTianji,
+  disciples,
+  cities,
+  factions,
+} = useGameState()
 const { injectContext, pushEvent, sendPlayer } = useTianji()
 
 const top = computed(() => stack.value[stack.value.length - 1] ?? null)
@@ -32,20 +38,20 @@ function p<T = string>(key: string) {
 }
 
 const event = computed(() => urgentEvents.find((e) => e.id === p('eventId')))
-const disciple = computed(() => disciples.find((d) => d.id === p('discipleId')))
+const disciple = computed(() => disciples.value.find((d) => d.id === p('discipleId')))
 const recipe = computed(() => alchemyRecipes.find((a) => a.id === p('recipeId')))
 const forge = computed(() => forgeQueue.find((g) => g.id === p('forgeId')))
 const manual = computed(() => manuals.find((m) => m.id === p('manualId')))
 const treasure = computed(() => treasures.find((t) => t.id === p('treasureId')))
 const field = computed(() => fieldPlots.find((f) => f.id === p('fieldId')))
-const city = computed(() => cities.find((c) => c.id === p('cityId')))
-const faction = computed(() => factions.find((f) => f.id === p('factionId')))
+const city = computed(() => cities.value.find((c) => c.id === p('cityId')))
+const faction = computed(() => factions.value.find((f) => f.id === p('factionId')))
 const heir = computed(() => heirs.find((h) => h.id === p('heirId')))
 const relation = computed(() => relationEdges.find((r) => r.id === p('relationId')))
 
 function resolveName(id: string) {
   if (id === '沈青岚') return id
-  return disciples.find((d) => d.id === id)?.name ?? id
+  return disciples.value.find((d) => d.id === id)?.name ?? id
 }
 
 function onEventChoice(choiceId: string) {

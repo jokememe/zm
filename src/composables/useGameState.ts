@@ -1,10 +1,19 @@
 import { computed, reactive, ref } from 'vue'
-import type { Resources, ViewId, NotificationItem, Disciple } from '@/types/game'
+import type {
+  Resources,
+  ViewId,
+  NotificationItem,
+  Disciple,
+  Faction,
+  CityState,
+} from '@/types/game'
 import {
   resources as initialResources,
   notifications as initialNotifications,
   disciples as initialDisciples,
   heirs as initialHeirs,
+  factions as initialFactions,
+  cities as initialCities,
   CALENDAR,
   SECT_NAME as DEFAULT_SECT,
   MASTER_NAME as DEFAULT_MASTER,
@@ -87,6 +96,8 @@ const disciples = ref<Disciple[]>(
     ? initialDisciples.map((d) => ({ ...d }))
     : pickDisciplesForDifficulty(difficulty.value),
 )
+const factions = ref<Faction[]>(initialFactions.map((f) => ({ ...f })))
+const cities = ref<CityState[]>(initialCities.map((c) => ({ ...c })))
 const designatedHeirId = ref(initialHeirs.find((h) => h.designated)?.id ?? 'h2')
 
 const calendar = reactive({
@@ -264,6 +275,8 @@ export function useGameState() {
     Object.assign(resources, opt.resources)
     Object.assign(calendar, OPENING_CALENDAR)
     disciples.value = pickDisciplesForDifficulty(diff)
+    factions.value = initialFactions.map((f) => ({ ...f }))
+    cities.value = initialCities.map((c) => ({ ...c }))
     notifications.value = buildOpeningNotifications(master, name) as NotificationItem[]
     designatedHeirId.value = initialHeirs.find((h) => h.designated)?.id ?? 'h2'
 
@@ -318,6 +331,8 @@ export function useGameState() {
       sectName.value,
     ) as NotificationItem[]
     disciples.value = pickDisciplesForDifficulty('standard')
+    factions.value = initialFactions.map((f) => ({ ...f }))
+    cities.value = initialCities.map((c) => ({ ...c }))
     designatedHeirId.value = initialHeirs.find((h) => h.designated)?.id ?? 'h2'
     currentView.value = 'hall'
     tianjiCollapsed.value = isCompact.value
@@ -347,6 +362,8 @@ export function useGameState() {
     resources,
     notifications,
     disciples,
+    factions,
+    cities,
     designatedHeirId,
     calendar,
     unreadCount,

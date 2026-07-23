@@ -21,10 +21,8 @@ import {
   deletePreset as deletePresetDb,
   assemblePrompt,
   extractVariables,
-  mergeVariables,
   StreamTagParser,
   aggregateEvents,
-  applyParsedToChat,
   DEFAULT_SETTINGS,
   DEFAULT_TAGS,
   DEFAULT_OPAQUE_TAGS,
@@ -51,6 +49,8 @@ import {
 } from '@/composables/game-bridge'
 import { ensureAndRefreshSystemLorebook } from '@/composables/system-lorebook'
 import { recordTurnSum, loadMemoryBank } from '@/composables/memory-lore'
+import { runSettle } from '@/composables/settle-runner'
+import { snapshotWorldState, restoreWorldState } from '@/composables/world-state'
 import {
   isApiConfigured,
   apiConfigMissing,
@@ -265,6 +265,9 @@ async function boot() {
         merged.userName = '掌门'
       }
       merged.uiMode = 'game'
+      if (!merged.settlementMode) {
+        merged.settlementMode = 'secondary_then_primary'
+      }
 
       settings.value = merged
       // 同步一份到 localStorage，防 IDB 丢配置
@@ -363,21 +366,16 @@ async function appendToSt(
   return stMsg
 }
 
-function settleVariables(rawVars: Record<string, unknown>): Record<string, string | number> {
-  const result = applyVariablesToGame(rawVars)
-  lastSettlement.value = result.changed ? result.lines.join('；') : null
-  if (result.changed) {
-    appendLocal('system', `【气数结算】${result.lines.join('；')}`)
-  }
-  return mergeSessionWithGame(rawVars)
-}
-
-/** 从保留消息尾部恢复 variables 快照，并强制写回经营资源 */
+/** 从保留消息尾部恢复局面快照（stateAfter）或旧版资源 variables */
 function restoreVarsFromKept(
   kept: ChatMessage[],
 ): Record<string, string | number> {
   for (let i = kept.length - 1; i >= 0; i--) {
     const m = kept[i]
+    if (m.role === 'assistant' && m.stateAfter) {
+      restoreWorldState(m.stateAfter)
+      return mergeSessionWithGame({})
+    }
     if (m.role === 'assistant' && m.variablesAfter && typeof m.variablesAfter === 'object') {
       applyVariablesToGame(m.variablesAfter as Record<string, unknown>)
       return mergeSessionWithGame(m.variablesAfter as Record<string, unknown>)
@@ -586,20 +584,11 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
   const parsed = aggregateEvents(events)
   const hasTags = !!(parsed.maintext || parsed.options.length || parsed.sum)
 
-  // 无游戏标签时，用展示管线结果作为可见正文
-  const { cleanedText, updates } = extractVariables(raw)
+  // 展示：仍解析标签；局面写入改由 runSettle，story 的 <vars> 不改档
+  const { cleanedText } = extractVariables(raw)
   const displayFallback = displayPrep.text || cleanedText
-  let nextVariables: Record<string, unknown> = mergeVariables(
-    vars,
-    updates as Record<string, string | number>,
-  )
-  if (hasTags) {
-    const applied = applyParsedToChat(nextVariables, parsed)
-    nextVariables = applied.nextVariables
-  }
-
-  // ★ 气数结算写回游戏
-  const settled = settleVariables(nextVariables)
+  // 会话气数键与游戏资源对齐（只读同步），不应用 LLM vars 补丁
+  const settled = mergeSessionWithGame({})
 
   // ★ 短/中/长期记忆：写入 <sum> → 系统世界书 constant 条目
   if (parsed.sum?.trim()) {
@@ -682,11 +671,14 @@ export function useTianji() {
         await new Promise((r) => setTimeout(r, 700 + Math.random() * 500))
         const reply = pickReply(text, ctx)
         lastParsed.value = null
+        const snap = snapshotWorldState()
+        const vars = snapshotGameVariables()
         const oracleLocal = appendLocal('oracle', reply, { contextTag: ctx ?? undefined })
         await appendToSt('assistant', reply, {
           id: oracleLocal.id,
-          variables: snapshotGameVariables(),
-          variablesAfter: snapshotGameVariables(),
+          variables: vars,
+          variablesAfter: vars,
+          stateAfter: snap,
         })
         return
       }
@@ -718,6 +710,73 @@ export function useTianji() {
         )
       }
 
+      // ★ 局面结算（次 API / 主 API 回退，视密匣 settlementMode）
+      let stateAfter = snapshotWorldState()
+      if (settings.value) {
+        const settle = await runSettle({
+          userText: text,
+          maintext: result.parsed?.maintext || result.content,
+          sum: result.parsed?.sum || '',
+          settings: settings.value,
+          postChat: async ({ target, body }) => {
+            const api = settings.value!.api
+            const ep =
+              target === 'secondary' && api.secondary?.enabled
+                ? {
+                    baseUrl: normalizeBaseUrl(api.secondary.baseUrl || ''),
+                    apiKey: String(api.secondary.apiKey || ''),
+                    model: String(api.secondary.model || '').trim(),
+                  }
+                : {
+                    baseUrl: normalizeBaseUrl(api.baseUrl || ''),
+                    apiKey: String(api.apiKey || ''),
+                    model: String(api.model || '').trim() || String(body.model || ''),
+                  }
+            const model = ep.model || String(body.model || '')
+            const completion = await postChatCompletion({
+              baseUrl: ep.baseUrl,
+              apiKey: ep.apiKey,
+              body: { ...body, model, stream: false },
+            })
+            if (!completion.ok) {
+              return { ok: false as const, error: completion.error || 'settle HTTP 失败' }
+            }
+            const data = completion.data as {
+              choices?: Array<{ message?: { content?: string } }>
+            }
+            const t = data.choices?.[0]?.message?.content || ''
+            if (!t.trim()) return { ok: false as const, error: 'settle 返回为空' }
+            return { ok: true as const, text: t }
+          },
+        })
+
+        if (settle.status === 'skipped') {
+          if (settle.reason === 'secondary_only_unavailable') {
+            appendLocal(
+              'system',
+              '【局面结算】仅次通灵模式，但未启用/配齐次 API，本回局面未变更',
+            )
+          }
+          stateAfter = snapshotWorldState()
+        } else if (settle.status === 'failed') {
+          lastSettlement.value = null
+          appendLocal('system', `【局面结算失败】${settle.error}（本回局面未变更）`)
+          stateAfter = settle.stateAfter
+        } else if (settle.status === 'applied') {
+          lastSettlement.value = settle.lines.join('；')
+          appendLocal('system', `【局面结算】${settle.lines.join('；')}`)
+          stateAfter = settle.stateAfter
+          if (settings.value) {
+            await syncSystemLore(settings.value)
+            lorebooks.value = await getLorebooks()
+          }
+        } else {
+          // empty
+          stateAfter = settle.stateAfter
+        }
+      }
+
+      const sessionVars = mergeSessionWithGame({})
       if (chatSession.value) {
         const stMsg: ChatMessage = {
           id: local.id,
@@ -725,13 +784,14 @@ export function useTianji() {
           content: result.raw || result.content,
           timestamp: Date.now(),
           parsed: result.parsed ?? undefined,
-          variablesAfter: result.nextVariables,
-          variables: result.nextVariables,
+          variablesAfter: sessionVars,
+          variables: sessionVars,
+          stateAfter,
         }
         const next: ChatSession = {
           ...chatSession.value,
           messages: [...chatSession.value.messages, stMsg],
-          variables: result.nextVariables,
+          variables: sessionVars,
           updatedAt: Date.now(),
         }
         await persistSession(next)

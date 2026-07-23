@@ -600,9 +600,9 @@ function onTagsInput(value: string) {
       <div class="api-panel api-panel--secondary">
         <div class="secondary-head">
           <div>
-            <h3 class="api-panel__title">次 API（变量 / 总结）</h3>
+            <h3 class="api-panel__title">次 API（局面结算）</h3>
             <p class="tj-hint" style="margin: 0">
-              双线模式下：主线负责正文剧情，次线可承担气数/vars 等分流任务。
+              主线写剧情；局面结算（弟子/势力/城池/资源）优先走次 API 输出短 JSON。建议次模型温度 ≤0.3。
             </p>
           </div>
           <label class="switch">
@@ -616,6 +616,29 @@ function onTagsInput(value: string) {
             <span class="switch__ui" />
             <span class="switch__label">{{ draftSecondary.enabled ? '已启用' : '已关闭' }}</span>
           </label>
+        </div>
+
+        <div class="tj-field" style="margin-bottom: 0.85rem">
+          <label>局面结算</label>
+          <select
+            class="tj-input"
+            :value="props.settings.settlementMode || 'secondary_then_primary'"
+            @change="
+              patch({
+                settlementMode: ($event.target as HTMLSelectElement)
+                  .value as AppSettings['settlementMode'],
+              })
+            "
+          >
+            <option value="off">关闭（最省 token，对话不改局面）</option>
+            <option value="secondary_only">仅次通灵（未配次 API 则不结算）</option>
+            <option value="secondary_then_primary">
+              次通灵优先，否则主通灵（默认）
+            </option>
+          </select>
+          <p class="tj-hint">
+            结算为额外短 JSON 调用。关闭可避免每回合第二请求；仅次通灵更稳且不烧主模型。
+          </p>
         </div>
 
         <div class="tj-row" style="margin-bottom: 0.75rem">

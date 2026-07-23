@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import Icon from '@/components/ui/Icon.vue'
-import { cities } from '@/data/mock'
 import { useModal } from '@/composables/useModal'
 import { useTianji } from '@/composables/useTianji'
 import { useGameState } from '@/composables/useGameState'
 
 const { open } = useModal()
 const { injectContext } = useTianji()
-const { focusTianji } = useGameState()
+const { focusTianji, cities } = useGameState()
 
 const attitudeClass: Record<string, string> = {
   恭顺: 'tag-jade',
