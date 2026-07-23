@@ -162,12 +162,13 @@ export async function runSettle(input: {
     sum: input.sum,
     snap: snap0,
   })
+  // max_tokens 不宜过小：思考模型会先吃掉预算，导致 content 为空
   const body: Record<string, unknown> = {
     model: ep.model,
     messages,
     stream: false,
     temperature: 0.1,
-    max_tokens: 400,
+    max_tokens: 900,
   }
   const res = await input.postChat({ target, body })
   if (!res.ok) {

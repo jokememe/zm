@@ -48,7 +48,87 @@ export function normalizeApiBaseUrl(url: string): string {
   return u
 }
 
-/** @deprecated 兼容旧调用 */
+/**
+ * 从 OpenAI 兼容 chat/completions 响应里取出可用文本。
+ * 兼容：string content、多段 content 数组、reasoning_content（思考模型常把
+ * content 留空）、legacy choices[0].text。
+ */
+export function extractChatCompletionText(data: unknown): {
+  text: string
+  finishReason?: string
+  hadReasoning: boolean
+} {
+  const empty = { text: '', finishReason: undefined as string | undefined, hadReasoning: false }
+  if (!data || typeof data !== 'object') return empty
+  const root = data as Record<string, unknown>
+  const choices = root.choices
+  if (!Array.isArray(choices) || !choices.length) return empty
+  const c0 = choices[0]
+  if (!c0 || typeof c0 !== 'object') return empty
+  const choice = c0 as Record<string, unknown>
+  const finishReason =
+    typeof choice.finish_reason === 'string' ? choice.finish_reason : undefined
+
+  const parts: string[] = []
+  let hadReasoning = false
+
+  const pushPart = (v: unknown) => {
+    if (typeof v === 'string' && v.trim()) parts.push(v)
+  }
+
+  const flattenContent = (content: unknown) => {
+    if (typeof content === 'string') {
+      pushPart(content)
+      return
+    }
+    if (Array.isArray(content)) {
+      for (const item of content) {
+        if (typeof item === 'string') pushPart(item)
+        else if (item && typeof item === 'object') {
+          const o = item as Record<string, unknown>
+          // OpenAI parts: { type: 'text', text: '...' }
+          if (typeof o.text === 'string') pushPart(o.text)
+          else if (typeof o.content === 'string') pushPart(o.content)
+        }
+      }
+    }
+  }
+
+  const msg = choice.message
+  if (msg && typeof msg === 'object') {
+    const m = msg as Record<string, unknown>
+    flattenContent(m.content)
+    // 思考模型：content 可能为空，JSON 有时落在 reasoning / reasoning_content
+    for (const key of ['reasoning_content', 'reasoning', 'thinking'] as const) {
+      const r = m[key]
+      if (typeof r === 'string' && r.trim()) {
+        hadReasoning = true
+        // 仅当正式 content 为空时，才用 reasoning 兜底（避免把思考过程当主文）
+        if (!parts.length) pushPart(r)
+      }
+    }
+    if (typeof m.refusal === 'string' && m.refusal.trim() && !parts.length) {
+      pushPart(m.refusal)
+    }
+  }
+
+  // 部分中转把 delta 结构误放在非流式响应里
+  const delta = choice.delta
+  if (delta && typeof delta === 'object' && !parts.length) {
+    const d = delta as Record<string, unknown>
+    flattenContent(d.content)
+    if (typeof d.reasoning_content === 'string' && d.reasoning_content.trim()) {
+      hadReasoning = true
+      if (!parts.length) pushPart(d.reasoning_content)
+    }
+  }
+
+  // 旧 completions 风格
+  if (!parts.length && typeof choice.text === 'string') pushPart(choice.text)
+
+  return { text: parts.join(''), finishReason, hadReasoning }
+}
+
 export function normalizeBaseUrl(url: string): string {
   return normalizeApiBaseUrl(url)
 }

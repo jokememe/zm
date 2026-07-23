@@ -33,40 +33,89 @@ export type ParseSettleResult =
 
 function stripFence(text: string): string {
   let s = text.trim()
-  const fence = /^```(?:json)?\s*\r?\n?([\s\S]*?)\r?\n?```\s*$/i
+  // 去掉常见思考标签外壳
+  s = s.replace(/<\/?(?:think|thinking|reasoning)[^>]*>/gi, ' ')
+  const fence = /```(?:json)?\s*\r?\n?([\s\S]*?)\r?\n?```/i
   const m = s.match(fence)
   if (m) s = m[1].trim()
-  return s
+  return s.trim()
+}
+
+/** 从杂文中抠出第一个平衡的 {...} JSON 对象 */
+function extractFirstJsonObject(text: string): string | null {
+  const start = text.indexOf('{')
+  if (start < 0) return null
+  let depth = 0
+  let inStr = false
+  let esc = false
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i]
+    if (inStr) {
+      if (esc) esc = false
+      else if (ch === '\\') esc = true
+      else if (ch === '"') inStr = false
+      continue
+    }
+    if (ch === '"') {
+      inStr = true
+      continue
+    }
+    if (ch === '{') depth++
+    else if (ch === '}') {
+      depth--
+      if (depth === 0) return text.slice(start, i + 1)
+    }
+  }
+  return null
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object' && !Array.isArray(v)
 }
 
+function deltaFromParsed(parsed: Record<string, unknown>): ParseSettleResult {
+  const delta: WorldDelta = {}
+  if (parsed.resources !== undefined) {
+    if (!isPlainObject(parsed.resources)) {
+      return { ok: false, error: 'resources 须为对象' }
+    }
+    delta.resources = parsed.resources as WorldDelta['resources']
+  }
+  if (parsed.ops !== undefined) {
+    if (!Array.isArray(parsed.ops)) return { ok: false, error: 'ops 须为数组' }
+    delta.ops = parsed.ops as WorldOp[]
+  }
+  if (parsed.summary !== undefined) {
+    delta.summary = String(parsed.summary)
+  }
+  if (!delta.resources) delta.resources = {}
+  if (!delta.ops) delta.ops = []
+  return { ok: true, delta }
+}
+
 export function parseSettlePayload(text: string): ParseSettleResult {
   try {
     const raw = stripFence(text)
     if (!raw) return { ok: false, error: '空结算内容' }
-    const parsed = JSON.parse(raw) as unknown
-    if (!isPlainObject(parsed)) return { ok: false, error: '结算 JSON 须为对象' }
 
-    const delta: WorldDelta = {}
-    if (parsed.resources !== undefined) {
-      if (!isPlainObject(parsed.resources)) {
-        return { ok: false, error: 'resources 须为对象' }
+    const attempts: string[] = [raw]
+    const embedded = extractFirstJsonObject(raw)
+    if (embedded && embedded !== raw) attempts.push(embedded)
+
+    let lastErr = ''
+    for (const candidate of attempts) {
+      try {
+        const parsed = JSON.parse(candidate) as unknown
+        if (!isPlainObject(parsed)) {
+          lastErr = '结算 JSON 须为对象'
+          continue
+        }
+        return deltaFromParsed(parsed)
+      } catch (e) {
+        lastErr = (e as Error).message || String(e)
       }
-      delta.resources = parsed.resources as WorldDelta['resources']
     }
-    if (parsed.ops !== undefined) {
-      if (!Array.isArray(parsed.ops)) return { ok: false, error: 'ops 须为数组' }
-      delta.ops = parsed.ops as WorldOp[]
-    }
-    if (parsed.summary !== undefined) {
-      delta.summary = String(parsed.summary)
-    }
-    if (!delta.resources) delta.resources = {}
-    if (!delta.ops) delta.ops = []
-    return { ok: true, delta }
+    return { ok: false, error: `JSON 解析失败：${lastErr}` }
   } catch (e) {
     return { ok: false, error: `JSON 解析失败：${(e as Error).message || String(e)}` }
   }

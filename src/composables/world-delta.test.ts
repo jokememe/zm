@@ -62,6 +62,14 @@ describe('parseSettlePayload', () => {
     const r = parseSettlePayload('{not json')
     expect(r.ok).toBe(false)
   })
+
+  it('extracts JSON embedded in prose / think tags', () => {
+    const r = parseSettlePayload(
+      '分析如下\n<think>xxx</think>\n最终：{"resources":{"灵石":5},"ops":[],"summary":"得灵石"}\n完',
+    )
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.delta.resources?.['灵石']).toBe(5)
+  })
 })
 
 describe('validateWorldDelta', () => {

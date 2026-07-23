@@ -33,6 +33,7 @@ import {
   prepareAssistantDisplay,
   postChatCompletion,
   postChatCompletionStream,
+  extractChatCompletionText,
   type AppSettings,
   type ChatPreset,
   type ChatSession,
@@ -773,11 +774,20 @@ export function useTianji() {
               if (!completion.ok) {
                 return { ok: false as const, error: completion.error || 'settle HTTP 失败' }
               }
-              const data = completion.data as {
-                choices?: Array<{ message?: { content?: string } }>
+              const extracted = extractChatCompletionText(completion.data)
+              const t = extracted.text
+              if (!t.trim()) {
+                const bits = ['settle 返回为空']
+                if (extracted.finishReason) bits.push(`finish_reason=${extracted.finishReason}`)
+                if (extracted.hadReasoning) {
+                  bits.push('模型仅输出了思考未给出正文，可换非思考模型或增大 max_tokens')
+                } else if (extracted.finishReason === 'length') {
+                  bits.push('输出被截断，请增大 max_tokens 或换更快模型')
+                } else {
+                  bits.push('请检查次/主 API 模型是否支持非流式 chat.completions')
+                }
+                return { ok: false as const, error: bits.join('；') }
               }
-              const t = data.choices?.[0]?.message?.content || ''
-              if (!t.trim()) return { ok: false as const, error: 'settle 返回为空' }
               return { ok: true as const, text: t }
             },
           })
