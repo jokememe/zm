@@ -33,6 +33,8 @@ export type ParseSettleResult =
 
 function stripFence(text: string): string {
   let s = text.trim()
+  // BOM / 零宽字符
+  s = s.replace(/^\uFEFF/, '').replace(/[\u200B-\u200D\uFEFF]/g, '')
   // 去掉常见思考标签外壳
   s = s.replace(/<\/?(?:think|thinking|reasoning)[^>]*>/gi, ' ')
   const fence = /```(?:json)?\s*\r?\n?([\s\S]*?)\r?\n?```/i
@@ -41,23 +43,26 @@ function stripFence(text: string): string {
   return s.trim()
 }
 
-/** 从杂文中抠出第一个平衡的 {...} JSON 对象 */
+/**
+ * 从杂文中抠出第一个平衡的 {...} 对象。
+ * 同时识别双引号 / 单引号字符串，避免字符串内的 } 误截断。
+ */
 function extractFirstJsonObject(text: string): string | null {
   const start = text.indexOf('{')
   if (start < 0) return null
   let depth = 0
-  let inStr = false
+  let inStr: '"' | "'" | null = null
   let esc = false
   for (let i = start; i < text.length; i++) {
     const ch = text[i]
     if (inStr) {
       if (esc) esc = false
       else if (ch === '\\') esc = true
-      else if (ch === '"') inStr = false
+      else if (ch === inStr) inStr = null
       continue
     }
-    if (ch === '"') {
-      inStr = true
+    if (ch === '"' || ch === "'") {
+      inStr = ch
       continue
     }
     if (ch === '{') depth++
@@ -67,6 +72,47 @@ function extractFirstJsonObject(text: string): string | null {
     }
   }
   return null
+}
+
+/**
+ * 模型常吐出「近似 JSON」：单引号、无引号键、尾逗号、全角括号。
+ * 错误示例：Expected property name or '}' in JSON at position 1
+ * 对应：{'resources':...} 或 {resources:...}
+ */
+export function repairLooseJson(input: string): string {
+  let s = input.trim()
+  // 全角括号 / 包裹
+  s = s.replace(/^[（(【\[]+/, '').replace(/[）)】\]]+$/, '')
+  // 智能引号 → ASCII
+  s = s
+    .replace(/[\u201C\u201D\u300C\u300D]/g, '"')
+    .replace(/[\u2018\u2019\u300E\u300F]/g, "'")
+
+  // 去掉对象/数组尾逗号：{"a":1,} / [1,]
+  s = s.replace(/,(\s*[}\]])/g, '$1')
+
+  // 单引号字符串 → 双引号（键与值）
+  s = s.replace(/'((?:\\.|[^'\\])*)'/g, (_m, inner: string) => {
+    const escaped = inner
+      .replace(/\\'/g, "'")
+      .replace(/\\"/g, '"')
+      .replace(/"/g, '\\"')
+      .replace(/\n/g, '\\n')
+      .replace(/\r/g, '\\r')
+      .replace(/\t/g, '\\t')
+    return `"${escaped}"`
+  })
+
+  // 无引号键 → 加双引号（含中文键：灵石）
+  // 仅在 { 或 , 之后、: 之前
+  s = s.replace(
+    /([{\[,]\s*)([A-Za-z_\u4e00-\u9fff$][\w\u4e00-\u9fff$]*)(\s*:)/g,
+    '$1"$2"$3',
+  )
+
+  // 再次清尾逗号（引号修复后可能仍残留）
+  s = s.replace(/,(\s*[}\]])/g, '$1')
+  return s
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -93,29 +139,51 @@ function deltaFromParsed(parsed: Record<string, unknown>): ParseSettleResult {
   return { ok: true, delta }
 }
 
+function tryParseObject(candidate: string): { ok: true; obj: Record<string, unknown> } | { ok: false; error: string } {
+  try {
+    const parsed = JSON.parse(candidate) as unknown
+    if (!isPlainObject(parsed)) return { ok: false, error: '结算 JSON 须为对象' }
+    return { ok: true, obj: parsed }
+  } catch (e) {
+    return { ok: false, error: (e as Error).message || String(e) }
+  }
+}
+
+function snippet(s: string, n = 80): string {
+  const t = s.replace(/\s+/g, ' ').trim()
+  return t.length <= n ? t : t.slice(0, n) + '…'
+}
+
 export function parseSettlePayload(text: string): ParseSettleResult {
   try {
     const raw = stripFence(text)
     if (!raw) return { ok: false, error: '空结算内容' }
 
-    const attempts: string[] = [raw]
+    const seeds: string[] = [raw]
     const embedded = extractFirstJsonObject(raw)
-    if (embedded && embedded !== raw) attempts.push(embedded)
+    if (embedded && embedded !== raw) seeds.push(embedded)
+
+    // 每种种子：原样 → 宽松修复
+    const attempts: string[] = []
+    for (const seed of seeds) {
+      attempts.push(seed)
+      const repaired = repairLooseJson(seed)
+      if (repaired !== seed) attempts.push(repaired)
+      // 对修复后再抠一次对象（处理前缀「分析如下」+ 全角括号）
+      const emb2 = extractFirstJsonObject(repaired)
+      if (emb2 && !attempts.includes(emb2)) attempts.push(emb2)
+    }
 
     let lastErr = ''
     for (const candidate of attempts) {
-      try {
-        const parsed = JSON.parse(candidate) as unknown
-        if (!isPlainObject(parsed)) {
-          lastErr = '结算 JSON 须为对象'
-          continue
-        }
-        return deltaFromParsed(parsed)
-      } catch (e) {
-        lastErr = (e as Error).message || String(e)
-      }
+      const r = tryParseObject(candidate)
+      if (r.ok) return deltaFromParsed(r.obj)
+      lastErr = r.error
     }
-    return { ok: false, error: `JSON 解析失败：${lastErr}` }
+    return {
+      ok: false,
+      error: `JSON 解析失败：${lastErr}（片段：${snippet(embedded || raw)}）`,
+    }
   } catch (e) {
     return { ok: false, error: `JSON 解析失败：${(e as Error).message || String(e)}` }
   }

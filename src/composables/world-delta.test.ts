@@ -70,6 +70,32 @@ describe('parseSettlePayload', () => {
     expect(r.ok).toBe(true)
     if (r.ok) expect(r.delta.resources?.['灵石']).toBe(5)
   })
+
+  it('repairs single-quoted JSON (position 1 column 2 error)', () => {
+    const r = parseSettlePayload("{'resources':{'灵石':-10},'ops':[],'summary':'耗灵石'}")
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.delta.resources?.['灵石']).toBe(-10)
+      expect(r.delta.summary).toBe('耗灵石')
+    }
+  })
+
+  it('repairs unquoted keys and trailing commas', () => {
+    const r = parseSettlePayload('{resources:{"灵石":5,},ops:[],summary:"得",}')
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.delta.resources?.['灵石']).toBe(5)
+  })
+
+  it('repairs unquoted Chinese resource keys', () => {
+    const r = parseSettlePayload('{resources:{灵石:-3},ops:[],summary:"无"}')
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.delta.resources?.['灵石']).toBe(-3)
+  })
+
+  it('strips fullwidth wrappers', () => {
+    const r = parseSettlePayload('（{"resources":{},"ops":[],"summary":"无"}）')
+    expect(r.ok).toBe(true)
+  })
 })
 
 describe('validateWorldDelta', () => {

@@ -67,11 +67,11 @@ export function clipText(s: string, max: number): string {
   return t.slice(0, max) + '…'
 }
 
-const SETTLE_SCHEMA_HINT = `只输出 JSON，无其它文字：
+const SETTLE_SCHEMA_HINT = `只输出严格 JSON（双引号键值，无尾逗号，无其它文字）：
 {"resources":{"灵石":0},"ops":[],"summary":""}
 ops 可选：disciple.add|update|remove，faction.update，city.update，notify.push
 字段用 id 或 name 定位；无变更时 ops=[] resources={} summary="无"
-最多 8 条 op。`
+最多 8 条 op。禁止单引号、禁止 markdown 代码块外的解释。`
 
 function buildSettleMessages(input: {
   userText: string

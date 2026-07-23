@@ -805,9 +805,14 @@ export function useTianji() {
           } else if (settle.status === 'failed') {
             lastSettlement.value = null
             const raw = settle.error || '未知错误'
-            const friendly = /超时|abort|AbortError|timeout/i.test(raw)
-              ? '请求超时（约 45 秒内未返回）。可换更快的次通灵模型，或在密匣将局面结算设为关闭'
-              : raw
+            let friendly = raw
+            if (/超时|abort|AbortError|timeout/i.test(raw)) {
+              friendly =
+                '请求超时。可换更快的次通灵模型，或在密匣将局面结算设为关闭'
+            } else if (/JSON 解析失败|Expected property name|is not valid JSON/i.test(raw)) {
+              friendly =
+                '模型返回了非标准 JSON（已尝试自动修复仍失败）。可换更稳的次通灵，或本回忽略；剧情不受影响'
+            }
             appendLocal(
               'system',
               `【自动局面分析失败】${friendly}（本回局面未变更；剧情已保留）`,
