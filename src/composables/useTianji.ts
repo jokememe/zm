@@ -795,9 +795,13 @@ export function useTianji() {
             stateAfter = snapshotWorldState()
           } else if (settle.status === 'failed') {
             lastSettlement.value = null
+            const raw = settle.error || '未知错误'
+            const friendly = /超时|abort|AbortError|timeout/i.test(raw)
+              ? '请求超时（约 45 秒内未返回）。可换更快的次通灵模型，或在密匣将局面结算设为关闭'
+              : raw
             appendLocal(
               'system',
-              `【自动局面分析失败】${settle.error}（本回局面未变更；剧情已保留）`,
+              `【自动局面分析失败】${friendly}（本回局面未变更；剧情已保留）`,
             )
             stateAfter = settle.stateAfter
           } else if (settle.status === 'applied') {
