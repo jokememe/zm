@@ -370,16 +370,89 @@ export async function postChatCompletion(options: {
 }
 
 /**
+ * 从流式 SSE 的单条 data JSON 里取出正文 / 思考增量。
+ * 返回 content 优先；content 为空时记入 reasoning。
+ */
+export function extractStreamDeltaPieces(json: unknown): {
+  content: string
+  reasoning: string
+  finishReason?: string
+} {
+  if (!json || typeof json !== 'object') return { content: '', reasoning: '' }
+  const root = json as Record<string, unknown>
+  const choices = root.choices
+  if (!Array.isArray(choices) || !choices[0] || typeof choices[0] !== 'object') {
+    return { content: '', reasoning: '' }
+  }
+  const c0 = choices[0] as Record<string, unknown>
+  const finishReason =
+    typeof c0.finish_reason === 'string' ? c0.finish_reason : undefined
+
+  const takeText = (v: unknown): string => {
+    if (typeof v === 'string') return v
+    if (Array.isArray(v)) {
+      return v
+        .map((item) => {
+          if (typeof item === 'string') return item
+          if (item && typeof item === 'object') {
+            const o = item as Record<string, unknown>
+            if (typeof o.text === 'string') return o.text
+            if (typeof o.content === 'string') return o.content
+          }
+          return ''
+        })
+        .join('')
+    }
+    return ''
+  }
+
+  let content = ''
+  let reasoning = ''
+
+  const delta = c0.delta
+  if (delta && typeof delta === 'object') {
+    const d = delta as Record<string, unknown>
+    content = takeText(d.content)
+    for (const key of ['reasoning_content', 'reasoning', 'thinking'] as const) {
+      const r = takeText(d[key])
+      if (r) {
+        reasoning += r
+      }
+    }
+  }
+
+  // 偶发：中转把非流式 message 塞进 SSE 最后一包
+  const msg = c0.message
+  if (msg && typeof msg === 'object') {
+    const m = msg as Record<string, unknown>
+    if (!content) content = takeText(m.content)
+    for (const key of ['reasoning_content', 'reasoning', 'thinking'] as const) {
+      const r = takeText(m[key])
+      if (r) reasoning += r
+    }
+  }
+
+  if (!content && typeof c0.text === 'string') content = c0.text
+
+  return { content, reasoning, finishReason }
+}
+
+/**
  * 流式 chat completion（SSE）。
- * onChunk 每收到一段 delta 文本就回调一次，用于逐字显示。
- * 返回完整拼接文本。
+ * onChunk 每收到一段**正文** delta 就回调（思考增量默认不刷 UI，除非 content 始终为空最终回落）。
+ * 返回完整拼接文本：优先 content，content 全空时用 reasoning 兜底。
  */
 export async function postChatCompletionStream(options: {
   baseUrl: string
   apiKey: string
   body: Record<string, unknown>
-  onChunk: (delta: string, accumulated: string) => void
-}): Promise<{ ok: true; text: string; usedUrl: string } | { ok: false; error: string }> {
+  onChunk?: (delta: string, accumulated: string) => void
+  /** 客户端超时 ms；超时 abort */
+  timeoutMs?: number
+}): Promise<
+  | { ok: true; text: string; usedUrl: string; hadReasoning: boolean; finishReason?: string }
+  | { ok: false; error: string }
+> {
   const key = options.apiKey.trim()
   if (!key) return { ok: false, error: '请填写 API Key' }
 
@@ -394,27 +467,60 @@ export async function postChatCompletionStream(options: {
     Authorization: `Bearer ${key}`,
   }
 
+  const timeoutMs = options.timeoutMs
+  const controller = timeoutMs ? new AbortController() : null
+  const timer =
+    controller && timeoutMs ? setTimeout(() => controller.abort(), timeoutMs) : null
+
   try {
     const res = await fetch(proxify(url), {
       method: 'POST',
       headers,
       body: JSON.stringify({ ...options.body, stream: true }),
+      signal: controller?.signal,
     })
 
     if (!res.ok) {
+      if (timer) clearTimeout(timer)
       const text = await res.text().catch(() => '')
       return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 200)}` }
     }
 
+    const ct = (res.headers.get('content-type') || '').toLowerCase()
+    // 部分中转声明 stream 却返回整包 JSON
+    if (ct.includes('application/json') && !ct.includes('event-stream')) {
+      if (timer) clearTimeout(timer)
+      const data = await res.json().catch(() => null)
+      const extracted = extractChatCompletionText(data)
+      if (!extracted.text.trim()) {
+        return {
+          ok: false,
+          error: extracted.finishReason
+            ? `流式降级 JSON 为空（finish_reason=${extracted.finishReason}）`
+            : '流式降级 JSON 为空',
+        }
+      }
+      options.onChunk?.(extracted.text, extracted.text)
+      return {
+        ok: true,
+        text: extracted.text,
+        usedUrl: url,
+        hadReasoning: extracted.hadReasoning,
+        finishReason: extracted.finishReason,
+      }
+    }
+
     const reader = res.body?.getReader()
     if (!reader) {
-      // 无 body（不应该发生），降级读全文
+      if (timer) clearTimeout(timer)
       const text = await res.text().catch(() => '')
       return { ok: false, error: `无流式 body: ${text.slice(0, 120)}` }
     }
 
     const decoder = new TextDecoder()
-    let accumulated = ''
+    let contentAcc = ''
+    let reasoningAcc = ''
+    let finishReason: string | undefined
     let buffer = ''
 
     while (true) {
@@ -422,7 +528,6 @@ export async function postChatCompletionStream(options: {
       if (done) break
       buffer += decoder.decode(value, { stream: true })
 
-      // SSE 按行分割
       const lines = buffer.split('\n')
       buffer = lines.pop() || ''
 
@@ -433,10 +538,14 @@ export async function postChatCompletionStream(options: {
         if (payload === '[DONE]') continue
         try {
           const json = JSON.parse(payload)
-          const delta: string = json.choices?.[0]?.delta?.content ?? ''
-          if (delta) {
-            accumulated += delta
-            options.onChunk(delta, accumulated)
+          const pieces = extractStreamDeltaPieces(json)
+          if (pieces.finishReason) finishReason = pieces.finishReason
+          if (pieces.content) {
+            contentAcc += pieces.content
+            options.onChunk?.(pieces.content, contentAcc)
+          }
+          if (pieces.reasoning) {
+            reasoningAcc += pieces.reasoning
           }
         } catch {
           // 非 JSON 行，跳过
@@ -444,9 +553,36 @@ export async function postChatCompletionStream(options: {
       }
     }
 
-    return { ok: true, text: accumulated, usedUrl: url }
+    if (timer) clearTimeout(timer)
+
+    const hadReasoning = !!reasoningAcc.trim()
+    const text = contentAcc.trim() ? contentAcc : reasoningAcc
+    if (!text.trim()) {
+      const bits = ['流式返回为空']
+      if (finishReason) bits.push(`finish_reason=${finishReason}`)
+      if (hadReasoning) bits.push('仅有思考增量')
+      return { ok: false, error: bits.join('；') }
+    }
+
+    // content 一直空、最终用 reasoning 兜底时，给一次完整回调（settle 不依赖 UI）
+    if (!contentAcc.trim() && reasoningAcc.trim()) {
+      options.onChunk?.(reasoningAcc, reasoningAcc)
+    }
+
+    return {
+      ok: true,
+      text,
+      usedUrl: url,
+      hadReasoning,
+      finishReason,
+    }
   } catch (e) {
+    if (timer) clearTimeout(timer)
+    const name = (e as Error)?.name || ''
     const msg = (e as Error)?.message ?? String(e)
+    if (name === 'AbortError') {
+      return { ok: false, error: `流式超时（${timeoutMs}ms）` }
+    }
     return { ok: false, error: `流式请求失败: ${msg}` }
   }
 }

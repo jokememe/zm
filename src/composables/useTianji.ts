@@ -33,7 +33,6 @@ import {
   prepareAssistantDisplay,
   postChatCompletion,
   postChatCompletionStream,
-  extractChatCompletionText,
   type AppSettings,
   type ChatPreset,
   type ChatSession,
@@ -763,28 +762,28 @@ export function useTianji() {
                       model: String(api.model || '').trim() || String(body.model || ''),
                     }
               const model = ep.model || String(body.model || '')
-              // 局面分析：单次 Bearer + 客户端 45s 超时，避免多鉴权头连试与无限挂起
-              const completion = await postChatCompletion({
+              // 局面分析：默认流式 SSE（多数中转/模型非流不稳或直接拒）
+              // 单次 Bearer + 客户端 60s 超时；思考增量在 stream 层拼进正文兜底
+              const completion = await postChatCompletionStream({
                 baseUrl: ep.baseUrl,
                 apiKey: ep.apiKey,
-                body: { ...body, model, stream: false },
-                timeoutMs: 45000,
-                bearerOnly: true,
+                body: { ...body, model, stream: true },
+                timeoutMs: 60000,
               })
               if (!completion.ok) {
-                return { ok: false as const, error: completion.error || 'settle HTTP 失败' }
+                return {
+                  ok: false as const,
+                  error: completion.error || 'settle 流式失败',
+                }
               }
-              const extracted = extractChatCompletionText(completion.data)
-              const t = extracted.text
+              const t = completion.text
               if (!t.trim()) {
                 const bits = ['settle 返回为空']
-                if (extracted.finishReason) bits.push(`finish_reason=${extracted.finishReason}`)
-                if (extracted.hadReasoning) {
-                  bits.push('模型仅输出了思考未给出正文，可换非思考模型或增大 max_tokens')
-                } else if (extracted.finishReason === 'length') {
-                  bits.push('输出被截断，请增大 max_tokens 或换更快模型')
-                } else {
-                  bits.push('请检查次/主 API 模型是否支持非流式 chat.completions')
+                if (completion.finishReason) {
+                  bits.push(`finish_reason=${completion.finishReason}`)
+                }
+                if (completion.hadReasoning) {
+                  bits.push('模型仅输出了思考未给出可解析正文')
                 }
                 return { ok: false as const, error: bits.join('；') }
               }

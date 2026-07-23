@@ -162,11 +162,11 @@ export async function runSettle(input: {
     sum: input.sum,
     snap: snap0,
   })
-  // max_tokens 不宜过小：思考模型会先吃掉预算，导致 content 为空
+  // 默认 stream:true（由 postChat 侧发起 SSE）；max_tokens 留足给思考+JSON
   const body: Record<string, unknown> = {
     model: ep.model,
     messages,
-    stream: false,
+    stream: true,
     temperature: 0.1,
     max_tokens: 900,
   }

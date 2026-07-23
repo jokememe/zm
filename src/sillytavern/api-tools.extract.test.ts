@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { extractChatCompletionText } from './api-tools'
+import {
+  extractChatCompletionText,
+  extractStreamDeltaPieces,
+} from './api-tools'
 
 describe('extractChatCompletionText', () => {
   it('reads string message.content', () => {
@@ -49,5 +52,30 @@ describe('extractChatCompletionText', () => {
     })
     expect(r.text).toBe('')
     expect(r.finishReason).toBe('length')
+  })
+})
+
+describe('extractStreamDeltaPieces', () => {
+  it('reads delta.content', () => {
+    const r = extractStreamDeltaPieces({
+      choices: [{ delta: { content: '{"a"' } }],
+    })
+    expect(r.content).toBe('{"a"')
+    expect(r.reasoning).toBe('')
+  })
+
+  it('reads delta.reasoning_content', () => {
+    const r = extractStreamDeltaPieces({
+      choices: [{ delta: { content: '', reasoning_content: 'think' }, finish_reason: null }],
+    })
+    expect(r.content).toBe('')
+    expect(r.reasoning).toBe('think')
+  })
+
+  it('reads finish_reason', () => {
+    const r = extractStreamDeltaPieces({
+      choices: [{ delta: {}, finish_reason: 'stop' }],
+    })
+    expect(r.finishReason).toBe('stop')
   })
 })
