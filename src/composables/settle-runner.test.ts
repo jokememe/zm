@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { resolveSettleTarget, formatSnapshotForSettle } from './settle-runner'
+import {
+  resolveSettleTarget,
+  formatSnapshotForSettle,
+  clipText,
+} from './settle-runner'
 import { emptyTestSnapshot } from './world-delta'
 
 describe('resolveSettleTarget', () => {
@@ -23,9 +27,9 @@ describe('resolveSettleTarget', () => {
     expect(r).toEqual({ kind: 'call', targets: ['primary'] })
   })
 
-  it('secondary_then_primary with secondary → secondary then primary', () => {
+  it('secondary_then_primary with secondary → secondary only (no chain fallback)', () => {
     const r = resolveSettleTarget('secondary_then_primary', true)
-    expect(r).toEqual({ kind: 'call', targets: ['secondary', 'primary'] })
+    expect(r).toEqual({ kind: 'call', targets: ['secondary'] })
   })
 })
 
@@ -33,6 +37,11 @@ describe('formatSnapshotForSettle', () => {
   it('includes resources line', () => {
     const s = formatSnapshotForSettle(emptyTestSnapshot())
     expect(s).toContain('灵石')
-    expect(s).toContain('测试宗')
+  })
+})
+
+describe('clipText', () => {
+  it('clips long text', () => {
+    expect(clipText('abcdefghij', 5)).toBe('abcde…')
   })
 })

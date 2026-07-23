@@ -14,6 +14,7 @@ const { tianjiCollapsed, toggleTianji, tianjiFocus, isCompact, closeTianjiSheet 
 const {
   messages,
   typing,
+  settling,
   contextInjected,
   sendPlayer,
   chooseQuick,
@@ -36,6 +37,9 @@ const {
 } = useTianji()
 const toast = useToast()
 
+/** 推演中或局面分析中，禁止连发 */
+const busy = computed(() => typing.value || settling.value)
+
 const input = ref('')
 const listRef = ref<HTMLElement | null>(null)
 const editingId = ref<string | null>(null)
@@ -47,7 +51,7 @@ function startEdit(msg: { id: string; content: string }) {
 }
 
 async function confirmEdit() {
-  if (!editingId.value || !editDraft.value.trim() || typing.value) return
+  if (!editingId.value || !editDraft.value.trim() || busy.value) return
   const id = editingId.value
   const text = editDraft.value
   editingId.value = null
@@ -83,12 +87,13 @@ async function scrollBottom() {
 
 watch(messages, () => scrollBottom(), { deep: true })
 watch(typing, () => scrollBottom())
+watch(settling, () => scrollBottom())
 watch(tianjiFocus, (v) => {
   if (v) scrollBottom()
 })
 
 function submit() {
-  if (!input.value.trim() || typing.value) return
+  if (!input.value.trim() || busy.value) return
   void sendPlayer(input.value)
   input.value = ''
 }
@@ -99,13 +104,13 @@ function onChoice(label: string, parentId: string) {
 }
 
 async function onReroll() {
-  if (typing.value || !canRegenerate.value) return
+  if (busy.value || !canRegenerate.value) return
   await regenerateLast()
   toast.info('重推演', '已回滚上一轮并重新请示天机')
 }
 
 async function onDeleteFrom(id: string) {
-  if (typing.value) return
+  if (busy.value) return
   if (!confirm('删除此条及之后全部推演？气数将回滚到此条之前。')) return
   await deleteMessagesFrom(id)
   toast.info('已删楼', '会话与气数已回滚')
@@ -167,7 +172,7 @@ async function onPresetClose() {
             class="btn btn-icon btn-ghost"
             title="重 roll 上一轮"
             aria-label="重 roll"
-            :disabled="typing || !canRegenerate"
+             :disabled="busy || !canRegenerate"
             @click="onReroll"
           >
             <Icon name="spark" :size="16" />
@@ -257,7 +262,7 @@ async function onPresetClose() {
                 type="button"
                 class="msg__del"
                 title="删除此条及之后"
-                :disabled="typing"
+                 :disabled="busy"
                 @click="onDeleteFrom(m.id)"
               >
                 删
@@ -267,7 +272,7 @@ async function onPresetClose() {
           <div v-if="editingId === m.id" class="msg__edit-box">
             <textarea v-model="editDraft" rows="3" class="msg__edit-input" />
             <div class="msg__edit-actions">
-              <button type="button" class="btn btn-primary btn-sm" :disabled="typing || !editDraft.trim()" @click="confirmEdit">
+              <button type="button" class="btn btn-primary btn-sm" :disabled="busy || !editDraft.trim()" @click="confirmEdit">
                 重新推演
               </button>
               <button type="button" class="btn btn-ghost btn-sm" @click="cancelEdit">取消</button>
@@ -281,7 +286,7 @@ async function onPresetClose() {
               :key="c.id"
               type="button"
               class="btn btn-soft btn-sm"
-              :disabled="typing"
+               :disabled="busy"
               @click="onChoice(c.label, m.id)"
             >
               {{ c.label }}
@@ -295,7 +300,7 @@ async function onPresetClose() {
               v-if="m.role === 'player'"
               type="button"
               class="hint"
-              :disabled="typing"
+               :disabled="busy"
               @click="startEdit(m)"
             >
               ✎ 编辑
@@ -304,7 +309,7 @@ async function onPresetClose() {
               v-if="m.id === lastPlayerId || m.id === lastOracleId"
               type="button"
               class="hint"
-              :disabled="typing || !canRegenerate"
+               :disabled="busy || !canRegenerate"
               @click="onReroll"
             >
               ↻ 重 roll
@@ -312,7 +317,7 @@ async function onPresetClose() {
             <button
               type="button"
               class="hint hint--danger"
-              :disabled="typing"
+               :disabled="busy"
               @click="onDeleteFrom(m.id)"
             >
               删至此
@@ -331,7 +336,7 @@ async function onPresetClose() {
             id="tianji-input"
             v-model="input"
             rows="2"
-            :disabled="typing"
+             :disabled="busy"
             :placeholder="
               llmReady
                 ? '向天机询问、批示或推演……'
@@ -344,7 +349,7 @@ async function onPresetClose() {
             class="btn btn-primary btn-icon"
             type="submit"
             aria-label="发送"
-            :disabled="typing || !input.trim()"
+             :disabled="busy || !input.trim()"
           >
             <Icon name="send" :size="16" />
           </button>
@@ -353,7 +358,7 @@ async function onPresetClose() {
           <button
             type="button"
             class="hint"
-            :disabled="typing || !canRegenerate"
+             :disabled="busy || !canRegenerate"
             title="回滚上一轮掌门发言与天机答复，再推演一次"
             @click="onReroll"
           >
@@ -363,7 +368,7 @@ async function onPresetClose() {
             id="hint-ask-envoy"
             type="button"
             class="hint"
-            :disabled="typing"
+             :disabled="busy"
             @click="sendPlayer('赤焰谷使者意图如何？本宗该如何应对？')"
           >
             问使者
@@ -372,7 +377,7 @@ async function onPresetClose() {
             id="hint-ask-fields"
             type="button"
             class="hint"
-            :disabled="typing"
+             :disabled="busy"
             @click="sendPlayer('灵田现状如何，可否开荒？')"
           >
             问灵田
@@ -381,7 +386,7 @@ async function onPresetClose() {
             id="hint-ask-heir"
             type="button"
             class="hint"
-            :disabled="typing"
+             :disabled="busy"
             @click="sendPlayer('继位人选该如何权衡？')"
           >
             问继位

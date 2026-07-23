@@ -1,5 +1,6 @@
 /**
  * Post-story settle: secondary (or primary) JSON delta → validate → apply
+ * 设计目标：快、少调用。单次尝试、短 prompt、小 max_tokens；不链式二次回退。
  */
 import type { AppSettings } from '@/sillytavern/types'
 import type { SettlementMode, WorldSnapshot } from '@/types/world'
@@ -19,6 +20,10 @@ export type SettleOutcome =
   | { status: 'applied'; lines: string[]; summary?: string; stateAfter: WorldSnapshot }
   | { status: 'failed'; error: string; stateAfter: WorldSnapshot }
 
+/**
+ * 选**一个**目标端点：有次用次，否则主。
+ * 不再「次失败再打主」——链式回退会把超时叠成 60s+。
+ */
 export function resolveSettleTarget(
   mode: SettlementMode,
   secondaryEnabled: boolean,
@@ -30,85 +35,68 @@ export function resolveSettleTarget(
     if (!secondaryEnabled) return { kind: 'skip', reason: 'secondary_only_unavailable' }
     return { kind: 'call', targets: ['secondary'] }
   }
-  // secondary_then_primary
-  if (secondaryEnabled) return { kind: 'call', targets: ['secondary', 'primary'] }
+  // secondary_then_primary：优先次，否则主；只打一枪
+  if (secondaryEnabled) return { kind: 'call', targets: ['secondary'] }
   return { kind: 'call', targets: ['primary'] }
 }
 
 export function formatSnapshotForSettle(snap: WorldSnapshot): string {
   const res = snap.resources
   const disc = snap.disciples
-    .slice(0, 20)
-    .map((d) => `${d.id}:${d.name}|${d.realm}|${d.status}|忠${d.loyalty}`)
-    .join('\n')
+    .slice(0, 12)
+    .map((d) => `${d.id}:${d.name}|${d.realm}|${d.status}`)
+    .join('；')
   const fac = snap.factions
-    .map((f) => `${f.id}:${f.name}|rel${f.relation}|${f.stance}`)
-    .join('\n')
+    .map((f) => `${f.id}:${f.name}|${f.relation}|${f.stance}`)
+    .join('；')
   const city = snap.cities
-    .map((c) => `${c.id}:${c.name}|${c.attitude}|inf${c.influence}`)
-    .join('\n')
+    .map((c) => `${c.id}:${c.name}|${c.attitude}|${c.influence}`)
+    .join('；')
   return [
-    `资源：灵石${res.spiritStone} 灵谷${res.spiritGrain} 丹材${res.herb} 矿铁${res.ore} 声望${res.prestige} 气运${res.destiny}`,
-    `历法：${snap.calendar.year}年 ${snap.calendar.season} 第${snap.calendar.day}日 宗门:${snap.sectName} 掌门:${snap.masterName}`,
-    `弟子：\n${disc || '（无）'}`,
-    `势力：\n${fac || '（无）'}`,
-    `城池：\n${city || '（无）'}`,
+    `资源 灵石${res.spiritStone} 灵谷${res.spiritGrain} 丹材${res.herb} 矿铁${res.ore} 声望${res.prestige} 气运${res.destiny}`,
+    `弟子 ${disc || '无'}`,
+    `势力 ${fac || '无'}`,
+    `城池 ${city || '无'}`,
   ].join('\n')
 }
 
-const SETTLE_SCHEMA_HINT = `只输出一个 JSON 对象（不要 Markdown 围栏外的说明），形状：
-{
-  "resources": { "灵石": -30 或 绝对数, "灵谷"|"丹材"|"矿铁"|"声望"|"气运": ... },
-  "ops": [
-    { "op":"disciple.add", "name":"...", "gender":"男|女", "realm":"...", "role":"...", "status":"在宗|闭关|外勤|受伤|叛离风险" },
-    { "op":"disciple.update", "id":"d1" 或 "name":"...", "patch": { "loyalty":80, "status":"外勤", "realm":"..." } },
-    { "op":"disciple.remove", "id":"..." 或 "name":"..." },
-    { "op":"faction.update", "id":"fa1" 或 "name":"...", "patch": { "relation":40, "stance":"敌对|友好|同盟|中立|觊觎", "recent":"..." } },
-    { "op":"city.update", "id":"c1" 或 "name":"...", "patch": { "attitude":"恭顺|中立|犹豫|敌视", "influence":55 } },
-    { "op":"notify.push", "title":"...", "body":"..." }
-  ],
-  "summary": "一句话局面变化"
+/** 压缩长文，避免 settle 输入过大拖慢推理 */
+export function clipText(s: string, max: number): string {
+  const t = (s || '').trim()
+  if (t.length <= max) return t
+  return t.slice(0, max) + '…'
 }
-规则：
-1. 你是自动局面分析：综合【玩家发言】【剧情】【sum】与【当前局面】，推断本回应写入的变更。
-2. 玩家口头声明（如「收张三为徒」「与赤焰谷交恶」）若被剧情确认或未被明确否定，应结算；剧情否决则不结算。
-3. 只记本回已生效的变更；禁止凭空新增未在对话中出现的人名/势力。
-4. 无变更时 {"resources":{},"ops":[],"summary":"无局面变更"}；ops≤12，disciple.add≤3。`
+
+const SETTLE_SCHEMA_HINT = `只输出 JSON，无其它文字：
+{"resources":{"灵石":0},"ops":[],"summary":""}
+ops 可选：disciple.add|update|remove，faction.update，city.update，notify.push
+字段用 id 或 name 定位；无变更时 ops=[] resources={} summary="无"
+最多 8 条 op。`
 
 function buildSettleMessages(input: {
   userText: string
   maintext: string
   sum: string
   snap: WorldSnapshot
-  errorFeedback?: string
 }): Array<{ role: string; content: string }> {
+  // 优先 sum + 短剧情，控制 token
+  const main = clipText(input.maintext, 700)
+  const user = clipText(input.userText, 280)
+  const sum = clipText(input.sum, 200)
   const body = [
-    '【任务】对本回对话做局面变量分析，输出 JSON 补丁（系统将自动写回名册/外交/城池/资源）。',
-    '',
-    '【当前局面】',
     formatSnapshotForSettle(input.snap),
-    '',
-    '【本回玩家】',
-    input.userText || '（无）',
-    '',
-    '【本回剧情】',
-    input.maintext || '（无）',
-    '',
-    '【本回 sum】',
-    input.sum || '（无）',
-    '',
+    `玩家：${user || '无'}`,
+    `sum：${sum || '无'}`,
+    `剧情：${main || '无'}`,
     SETTLE_SCHEMA_HINT,
-  ]
-  if (input.errorFeedback) {
-    body.push('', '【上次校验失败，请修正】', input.errorFeedback)
-  }
+  ].join('\n')
   return [
     {
       role: 'system',
       content:
-        '你是宗门自动局面分析器（变量结算）。只根据本回对话与当前局面输出严格 JSON 补丁，不要写故事，不要解释。',
+        '局面结算器。根据本回对话输出严格 JSON 补丁，禁止故事与解释。',
     },
-    { role: 'user', content: body.join('\n') },
+    { role: 'user', content: body },
   ]
 }
 
@@ -157,80 +145,79 @@ export async function runSettle(input: {
   }
 
   const snap0 = snapshotWorldState()
-  let lastError = '结算失败'
-
-  for (const target of plan.targets) {
-    const ep = endpointFor(input.settings, target)
-    if (!ep.baseUrl || !ep.apiKey || !ep.model) {
-      lastError = `${target} API 未配齐`
-      continue
-    }
-
-    let errorFeedback: string | undefined
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const messages = buildSettleMessages({
-        userText: input.userText,
-        maintext: input.maintext,
-        sum: input.sum,
-        snap: snap0,
-        errorFeedback,
-      })
-      const body: Record<string, unknown> = {
-        model: ep.model,
-        messages,
-        stream: false,
-        temperature: 0.2,
-        max_tokens: 1200,
-      }
-      const res = await input.postChat({ target, body })
-      if (!res.ok) {
-        lastError = res.error
-        break // try next target
-      }
-      const parsed = parseSettlePayload(res.text)
-      if (!parsed.ok) {
-        lastError = parsed.error
-        errorFeedback = parsed.error
-        continue
-      }
-      const v = validateWorldDelta(parsed.delta, snap0)
-      if (!v.ok) {
-        lastError = v.errors.join('；')
-        errorFeedback = lastError
-        continue
-      }
-
-      const hasRes = parsed.delta.resources && Object.keys(parsed.delta.resources).length > 0
-      const hasOps = (parsed.delta.ops?.length ?? 0) > 0
-      if (!hasRes && !hasOps) {
-        return {
-          status: 'empty',
-          summary: parsed.delta.summary,
-          stateAfter: snapshotWorldState(),
-        }
-      }
-
-      const applied = applyValidatedDelta(parsed.delta)
-      const stateAfter = snapshotWorldState()
-      if (!applied.changed) {
-        return {
-          status: 'empty',
-          summary: parsed.delta.summary,
-          stateAfter,
-        }
-      }
-      return {
-        status: 'applied',
-        lines: applied.lines,
-        summary: parsed.delta.summary,
-        stateAfter,
-      }
+  const target = plan.targets[0]
+  const ep = endpointFor(input.settings, target)
+  if (!ep.baseUrl || !ep.apiKey || !ep.model) {
+    return {
+      status: 'failed',
+      error: `${target} API 未配齐`,
+      stateAfter: snapshotWorldState(),
     }
   }
 
+  // 单次调用：校验失败也不重打（避免超时叠乘）
+  const messages = buildSettleMessages({
+    userText: input.userText,
+    maintext: input.maintext,
+    sum: input.sum,
+    snap: snap0,
+  })
+  const body: Record<string, unknown> = {
+    model: ep.model,
+    messages,
+    stream: false,
+    temperature: 0.1,
+    max_tokens: 400,
+  }
+  const res = await input.postChat({ target, body })
+  if (!res.ok) {
+    return {
+      status: 'failed',
+      error: res.error,
+      stateAfter: snapshotWorldState(),
+    }
+  }
+
+  const parsed = parseSettlePayload(res.text)
+  if (!parsed.ok) {
+    return {
+      status: 'failed',
+      error: parsed.error,
+      stateAfter: snapshotWorldState(),
+    }
+  }
+  const v = validateWorldDelta(parsed.delta, snap0)
+  if (!v.ok) {
+    return {
+      status: 'failed',
+      error: v.errors.join('；'),
+      stateAfter: snapshotWorldState(),
+    }
+  }
+
+  const hasRes = parsed.delta.resources && Object.keys(parsed.delta.resources).length > 0
+  const hasOps = (parsed.delta.ops?.length ?? 0) > 0
+  if (!hasRes && !hasOps) {
+    return {
+      status: 'empty',
+      summary: parsed.delta.summary,
+      stateAfter: snapshotWorldState(),
+    }
+  }
+
+  const applied = applyValidatedDelta(parsed.delta)
+  const stateAfter = snapshotWorldState()
+  if (!applied.changed) {
+    return {
+      status: 'empty',
+      summary: parsed.delta.summary,
+      stateAfter,
+    }
+  }
   return {
-    status: 'failed',
-    error: lastError,
-    stateAfter: snapshotWorldState(),
+    status: 'applied',
+    lines: applied.lines,
+    summary: parsed.delta.summary,
+    stateAfter,
   }
 }

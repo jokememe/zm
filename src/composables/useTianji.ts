@@ -77,6 +77,8 @@ function defaultLocalMessages(): TianjiMessage[] {
 
 const messages = ref<TianjiMessage[]>(defaultLocalMessages())
 const typing = ref(false)
+/** 自动局面分析进行中（剧情已出，仍禁止连发以免状态竞态） */
+const settling = ref(false)
 const contextInjected = ref<string | null>(null)
 const contextDetail = ref<string | null>(null)
 const ready = ref(false)
@@ -655,7 +657,7 @@ export function useTianji() {
 
   async function sendPlayer(content: string) {
     const text = content.trim()
-    if (!text || typing.value) return
+    if (!text || typing.value || settling.value) return
     await boot()
     lastError.value = null
     lastSettlement.value = null
@@ -710,79 +712,9 @@ export function useTianji() {
         )
       }
 
-      // ★ 局面结算（次 API / 主 API 回退，视密匣 settlementMode）
-      let stateAfter = snapshotWorldState()
-      if (settings.value) {
-        const settle = await runSettle({
-          userText: text,
-          maintext: result.parsed?.maintext || result.content,
-          sum: result.parsed?.sum || '',
-          settings: settings.value,
-          postChat: async ({ target, body }) => {
-            const api = settings.value!.api
-            const ep =
-              target === 'secondary' && api.secondary?.enabled
-                ? {
-                    baseUrl: normalizeBaseUrl(api.secondary.baseUrl || ''),
-                    apiKey: String(api.secondary.apiKey || ''),
-                    model: String(api.secondary.model || '').trim(),
-                  }
-                : {
-                    baseUrl: normalizeBaseUrl(api.baseUrl || ''),
-                    apiKey: String(api.apiKey || ''),
-                    model: String(api.model || '').trim() || String(body.model || ''),
-                  }
-            const model = ep.model || String(body.model || '')
-            const completion = await postChatCompletion({
-              baseUrl: ep.baseUrl,
-              apiKey: ep.apiKey,
-              body: { ...body, model, stream: false },
-            })
-            if (!completion.ok) {
-              return { ok: false as const, error: completion.error || 'settle HTTP 失败' }
-            }
-            const data = completion.data as {
-              choices?: Array<{ message?: { content?: string } }>
-            }
-            const t = data.choices?.[0]?.message?.content || ''
-            if (!t.trim()) return { ok: false as const, error: 'settle 返回为空' }
-            return { ok: true as const, text: t }
-          },
-        })
-
-        if (settle.status === 'skipped') {
-          if (settle.reason === 'secondary_only_unavailable') {
-            appendLocal(
-              'system',
-              '【自动局面分析】已关闭写入：密匣为「仅次通灵」但未配齐次 API',
-            )
-          }
-          stateAfter = snapshotWorldState()
-        } else if (settle.status === 'failed') {
-          lastSettlement.value = null
-          appendLocal(
-            'system',
-            `【自动局面分析失败】${settle.error}（本回局面未变更）`,
-          )
-          stateAfter = settle.stateAfter
-        } else if (settle.status === 'applied') {
-          lastSettlement.value = settle.lines.join('；')
-          appendLocal(
-            'system',
-            `【自动局面分析】${settle.lines.join('；')}`,
-          )
-          stateAfter = settle.stateAfter
-          if (settings.value) {
-            await syncSystemLore(settings.value)
-            lorebooks.value = await getLorebooks()
-          }
-        } else {
-          // empty — still automatic; silent is fine
-          stateAfter = settle.stateAfter
-        }
-      }
-
+      // ★ 先落盘剧情，再后台局面分析（避免分析超时拖死整回合）
       const sessionVars = mergeSessionWithGame({})
+      let stateAfter = snapshotWorldState()
       if (chatSession.value) {
         const stMsg: ChatMessage = {
           id: local.id,
@@ -802,17 +734,125 @@ export function useTianji() {
         }
         await persistSession(next)
       }
+
+      // 剧情已可见：结束「推演中」；分析单独占 settling，避免叠超时体感
+      typing.value = false
+
+      if (settings.value) {
+        settling.value = true
+        const analyzingId = appendLocal('system', '【自动局面分析】进行中…').id
+        try {
+          const settle = await runSettle({
+            userText: text,
+            maintext: result.parsed?.maintext || result.content,
+            sum: result.parsed?.sum || '',
+            settings: settings.value,
+            postChat: async ({ target, body }) => {
+              const api = settings.value!.api
+              const ep =
+                target === 'secondary' && api.secondary?.enabled
+                  ? {
+                      baseUrl: normalizeBaseUrl(api.secondary.baseUrl || ''),
+                      apiKey: String(api.secondary.apiKey || ''),
+                      model: String(api.secondary.model || '').trim(),
+                    }
+                  : {
+                      baseUrl: normalizeBaseUrl(api.baseUrl || ''),
+                      apiKey: String(api.apiKey || ''),
+                      model: String(api.model || '').trim() || String(body.model || ''),
+                    }
+              const model = ep.model || String(body.model || '')
+              const completion = await postChatCompletion({
+                baseUrl: ep.baseUrl,
+                apiKey: ep.apiKey,
+                body: { ...body, model, stream: false },
+              })
+              if (!completion.ok) {
+                return { ok: false as const, error: completion.error || 'settle HTTP 失败' }
+              }
+              const data = completion.data as {
+                choices?: Array<{ message?: { content?: string } }>
+              }
+              const t = data.choices?.[0]?.message?.content || ''
+              if (!t.trim()) return { ok: false as const, error: 'settle 返回为空' }
+              return { ok: true as const, text: t }
+            },
+          })
+
+          // 去掉「进行中」提示
+          messages.value = messages.value.filter((m) => m.id !== analyzingId)
+
+          if (settle.status === 'skipped') {
+            if (settle.reason === 'secondary_only_unavailable') {
+              appendLocal(
+                'system',
+                '【自动局面分析】已跳过：密匣为「仅次通灵」但未配齐次 API',
+              )
+            }
+            stateAfter = snapshotWorldState()
+          } else if (settle.status === 'failed') {
+            lastSettlement.value = null
+            appendLocal(
+              'system',
+              `【自动局面分析失败】${settle.error}（本回局面未变更；剧情已保留）`,
+            )
+            stateAfter = settle.stateAfter
+          } else if (settle.status === 'applied') {
+            lastSettlement.value = settle.lines.join('；')
+            appendLocal(
+              'system',
+              `【自动局面分析】${settle.lines.join('；')}`,
+            )
+            stateAfter = settle.stateAfter
+            if (settings.value) {
+              await syncSystemLore(settings.value)
+              lorebooks.value = await getLorebooks()
+            }
+          } else {
+            stateAfter = settle.stateAfter
+          }
+
+          // 把 stateAfter 回写到本条 assistant，供删楼回滚
+          if (chatSession.value) {
+            const msgs = chatSession.value.messages.map((m) =>
+              m.id === local.id
+                ? {
+                    ...m,
+                    stateAfter,
+                    variablesAfter: mergeSessionWithGame({}),
+                    variables: mergeSessionWithGame({}),
+                  }
+                : m,
+            )
+            await persistSession({
+              ...chatSession.value,
+              messages: msgs,
+              variables: mergeSessionWithGame({}),
+              updatedAt: Date.now(),
+            })
+          }
+        } catch (settleErr) {
+          messages.value = messages.value.filter((m) => m.id !== analyzingId)
+          appendLocal(
+            'system',
+            `【自动局面分析失败】${(settleErr as Error).message || settleErr}（剧情已保留）`,
+          )
+        } finally {
+          settling.value = false
+        }
+      }
     } catch (e) {
       const msg = (e as Error).message || String(e)
       lastError.value = msg
       appendLocal('system', `推演中断：${msg}`)
     } finally {
       typing.value = false
+      settling.value = false
     }
   }
 
   const canRegenerate = computed(() => {
-    if (typing.value || !chatSession.value) return false
+    if (typing.value || settling.value || !chatSession.value) return false
     return chatSession.value.messages.some((m) => m.role === 'user')
   })
 
@@ -1157,6 +1197,7 @@ export function useTianji() {
   return {
     messages,
     typing,
+    settling,
     contextInjected,
     contextDetail,
     ready,

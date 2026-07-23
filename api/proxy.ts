@@ -51,8 +51,13 @@ export default async function handler(req: any, res: any) {
       }
     }
 
+    // 剧情可较长；局面分析也走此代理。默认 90s，可用 PROXY_TIMEOUT_MS 覆盖
+    const proxyTimeoutMs = Math.min(
+      Math.max(Number(process.env.PROXY_TIMEOUT_MS) || 90000, 15000),
+      120000,
+    )
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 30000)
+    const timer = setTimeout(() => controller.abort(), proxyTimeoutMs)
 
     const fetchOpts: RequestInit = {
       method: req.method,
@@ -99,7 +104,7 @@ export default async function handler(req: any, res: any) {
     res.send(text)
   } catch (e: any) {
     if (e?.name === 'AbortError') {
-      return res.status(504).json({ error: '代理超时（30s）' })
+      return res.status(504).json({ error: '代理超时（请检查上游模型速度或 PROXY_TIMEOUT_MS）' })
     }
     res.status(502).json({ error: `代理请求失败: ${e?.message || e}` })
   }

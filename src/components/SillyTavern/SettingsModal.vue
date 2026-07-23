@@ -637,7 +637,7 @@ function onTagsInput(value: string) {
             </option>
           </select>
           <p class="tj-hint">
-            每回合在剧情之后自动多一次短 JSON 调用。关闭可省 token；仅次通灵更稳且不烧主模型。
+            每回合剧情后自动多一次短 JSON（单次、不重试）。关闭可省 token。建议次 API 用小而快的模型。
           </p>
         </div>
 
