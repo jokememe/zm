@@ -7,6 +7,7 @@ import type {
   Faction,
   CityState,
   UrgentEvent,
+  FieldPlot,
 } from '@/types/game'
 import {
   resources as initialResources,
@@ -19,7 +20,12 @@ import {
   SECT_NAME as DEFAULT_SECT,
   MASTER_NAME as DEFAULT_MASTER,
   cloneUrgentEventsSeed,
+  cloneFieldPlotsSeed,
 } from '@/data/mock'
+import {
+  settleSeasonTick,
+  formatSeasonSettleSummary,
+} from '@/composables/season-settle'
 import {
   OPENING_STORAGE_KEY,
   OPENING_RESOURCES,
@@ -95,6 +101,9 @@ const notifications = ref<NotificationItem[]>(
 
 /** 大殿「紧急与待决」：运行时状态，处理后 status=resolved 并从列表隐藏 */
 const urgentEvents = ref<UrgentEvent[]>(cloneUrgentEventsSeed())
+
+/** 灵田：季节结算会推进生长/收获 */
+const fieldPlots = ref<FieldPlot[]>(cloneFieldPlotsSeed())
 
 const disciples = ref<Disciple[]>(
   openingDone.value
@@ -298,7 +307,11 @@ export function useGameState() {
     designatedHeirId.value = id
   }
 
-  function advanceSeason() {
+  /**
+   * 推进一季：历法 + 本地汇总（灵田/纳贡/修炼/外交/维护），返回结算明细行。
+   * 主 API 季报待决由 UI 在此之后调用，不在此函数内打网。
+   */
+  function advanceSeason(): { lines: string[]; summary: string } {
     const order = [
       '孟春',
       '仲春',
@@ -313,6 +326,24 @@ export function useGameState() {
       '仲冬',
       '季冬',
     ]
+    // 用推进前的季节做半年贡判断，再切历法
+    const seasonBefore = calendar.season
+    const settled = settleSeasonTick({
+      fields: fieldPlots.value,
+      cities: cities.value,
+      disciples: disciples.value,
+      factions: factions.value,
+      resources: { ...resources },
+      season: seasonBefore,
+    })
+
+    fieldPlots.value = settled.fields
+    disciples.value = settled.disciples
+    factions.value = settled.factions
+    if (settled.resourcesDelta) {
+      adjustResource(settled.resourcesDelta)
+    }
+
     const idx = order.indexOf(calendar.season)
     if (idx === order.length - 1 || idx === -1) {
       calendar.year += 1
@@ -321,12 +352,9 @@ export function useGameState() {
       calendar.season = order[idx + 1]
     }
     calendar.day = 1
-    adjustResource({
-      spiritGrain: 180,
-      spiritStone: -30,
-      herb: 8,
-      prestige: 1,
-    })
+
+    const summary = formatSeasonSettleSummary(settled.lines)
+    return { lines: settled.lines, summary }
   }
 
   function markOpeningDone() {
@@ -373,6 +401,7 @@ export function useGameState() {
     cities.value = initialCities.map((c) => ({ ...c }))
     notifications.value = buildOpeningNotifications(master, name) as NotificationItem[]
     urgentEvents.value = cloneUrgentEventsSeed()
+    fieldPlots.value = cloneFieldPlotsSeed()
     designatedHeirId.value = initialHeirs.find((h) => h.designated)?.id ?? 'h2'
 
     // 困难/硬核：继承人须在现有弟子中
@@ -426,6 +455,7 @@ export function useGameState() {
       sectName.value,
     ) as NotificationItem[]
     urgentEvents.value = cloneUrgentEventsSeed()
+    fieldPlots.value = cloneFieldPlotsSeed()
     disciples.value = pickDisciplesForDifficulty('standard')
     factions.value = initialFactions.map((f) => ({ ...f }))
     cities.value = initialCities.map((c) => ({ ...c }))
@@ -459,6 +489,7 @@ export function useGameState() {
     notifications,
     urgentEvents,
     openUrgentEvents,
+    fieldPlots,
     disciples,
     factions,
     cities,

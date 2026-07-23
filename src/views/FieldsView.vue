@@ -2,7 +2,6 @@
 import { computed, ref } from 'vue'
 import Icon from '@/components/ui/Icon.vue'
 import TabsBar from '@/components/ui/TabsBar.vue'
-import { fieldPlots } from '@/data/mock'
 import { useModal } from '@/composables/useModal'
 import { useTianji } from '@/composables/useTianji'
 import { useGameState } from '@/composables/useGameState'
@@ -10,19 +9,35 @@ import { useGameState } from '@/composables/useGameState'
 const tab = ref('all')
 const { open } = useModal()
 const { injectContext } = useTianji()
-const { focusTianji } = useGameState()
+const { focusTianji, fieldPlots } = useGameState()
 
-const tabs = [
-  { id: 'all', label: '全部', count: fieldPlots.length },
-  { id: 'growing', label: '生长中', count: fieldPlots.filter((f) => f.status === 'growing').length },
-  { id: 'harvest', label: '可收', count: fieldPlots.filter((f) => f.status === 'harvest').length },
-  { id: 'idle', label: '闲置/荒', count: fieldPlots.filter((f) => f.status === 'idle' || f.status === 'barren').length },
-]
+const plots = computed(() => fieldPlots.value)
+
+const tabs = computed(() => [
+  { id: 'all', label: '全部', count: plots.value.length },
+  {
+    id: 'growing',
+    label: '生长中',
+    count: plots.value.filter((f) => f.status === 'growing').length,
+  },
+  {
+    id: 'harvest',
+    label: '可收',
+    count: plots.value.filter((f) => f.status === 'harvest').length,
+  },
+  {
+    id: 'idle',
+    label: '闲置/荒',
+    count: plots.value.filter((f) => f.status === 'idle' || f.status === 'barren').length,
+  },
+])
 
 const filtered = computed(() => {
-  if (tab.value === 'all') return fieldPlots
-  if (tab.value === 'idle') return fieldPlots.filter((f) => f.status === 'idle' || f.status === 'barren')
-  return fieldPlots.filter((f) => f.status === tab.value)
+  if (tab.value === 'all') return plots.value
+  if (tab.value === 'idle') {
+    return plots.value.filter((f) => f.status === 'idle' || f.status === 'barren')
+  }
+  return plots.value.filter((f) => f.status === tab.value)
 })
 
 const statusLabel: Record<string, string> = {

@@ -15,7 +15,6 @@ import {
   forgeQueue,
   manuals,
   treasures,
-  fieldPlots,
   heirs,
   relationEdges,
 } from '@/data/mock'
@@ -33,6 +32,7 @@ const {
   factions,
   urgentEvents,
   openUrgentEvents,
+  fieldPlots,
   resolveUrgentEvent,
   appendUrgentEvents,
   calendar,
@@ -55,7 +55,7 @@ const recipe = computed(() => alchemyRecipes.find((a) => a.id === p('recipeId'))
 const forge = computed(() => forgeQueue.find((g) => g.id === p('forgeId')))
 const manual = computed(() => manuals.find((m) => m.id === p('manualId')))
 const treasure = computed(() => treasures.find((t) => t.id === p('treasureId')))
-const field = computed(() => fieldPlots.find((f) => f.id === p('fieldId')))
+const field = computed(() => fieldPlots.value.find((f) => f.id === p('fieldId')))
 const city = computed(() => cities.value.find((c) => c.id === p('cityId')))
 const faction = computed(() => factions.value.find((f) => f.id === p('factionId')))
 const heir = computed(() => heirs.find((h) => h.id === p('heirId')))
@@ -131,14 +131,15 @@ async function doAdvanceSeason() {
   if (seasonBusy.value) return
   seasonBusy.value = true
   try {
-    advanceSeason()
+    const local = advanceSeason()
     const year = calendar.year
     const season = calendar.season
+    const settleBrief = local.summary
     pushEvent(
-      `【岁月】进入 ${year} 年 · ${season}。灵田结实，外敌亦在暗中窥伺。`,
+      `【岁月】进入 ${year} 年 · ${season}。本季汇总：${settleBrief}`,
     )
 
-    // 主 API 生成本季待决（强模型）；未配置则只推进季节
+    // 主 API 生成本季待决（强模型）；本地结算已完成
     let settings
     try {
       settings = await getSettings()
@@ -146,13 +147,15 @@ async function doAdvanceSeason() {
       settings = null
     }
 
+    let toastBody = settleBrief
     if (settings?.api) {
-      toast.info('岁月流转', '主通灵推演本季待决…')
+      toast.info('岁月流转', '本地已结算；主通灵推演本季待决…')
       const mem = loadMemoryBank()
       const memoryBrief = [
         mem.mid,
         ...mem.short.slice(-3),
         ...mem.long.slice(-2),
+        settleBrief,
       ]
         .filter(Boolean)
         .join('；')
@@ -166,26 +169,23 @@ async function doAdvanceSeason() {
       })
       if (outcome.status === 'applied') {
         const n = appendUrgentEvents(outcome.events)
-        toast.success(
-          '岁月流转',
+        toastBody =
           n > 0
-            ? `新季已至，大殿新增 ${n} 件待决：${outcome.summary}`
-            : `新季已至（待决列表已满或标题重复）`,
-        )
+            ? `${settleBrief}｜新待决 ${n}：${outcome.summary}`
+            : `${settleBrief}｜待决未新增（已满或重复）`
         if (n > 0) {
           pushEvent(`【季报】${outcome.summary}（+${n} 待决）`, '岁月')
         }
       } else if (outcome.status === 'empty') {
-        toast.success('岁月流转', `新季已至。${outcome.summary}`)
+        toastBody = `${settleBrief}｜${outcome.summary}`
       } else if (outcome.status === 'skipped') {
-        toast.success('岁月流转', '新季已至（未配主 API，未生成新待决）')
+        toastBody = `${settleBrief}｜未配主 API，跳过待决`
       } else {
-        toast.success('岁月流转', `新季已至；待决生成失败：${outcome.error}`)
+        toastBody = `${settleBrief}｜待决生成失败：${outcome.error}`
       }
-    } else {
-      toast.success('岁月流转', '新季已至，资源已刷新')
     }
 
+    toast.success('岁月流转', toastBody.length > 120 ? toastBody.slice(0, 120) + '…' : toastBody)
     close()
     setView('hall')
   } finally {
@@ -552,12 +552,12 @@ async function doAdvanceSeason() {
       v-else-if="top?.id === 'season-advance'"
       id="modal-season-advance"
       title="推进季节"
-      subtitle="结算产出后，由主通灵生成本季待决"
+      subtitle="灵田·纳贡·修炼·外交本地汇总，再由主通灵生成待决"
       @close="onSeasonModalClose"
     >
       <p class="lead">
-        确认后进入下一季：灵谷入账、维护扣除；并调用<strong>主 API</strong>根据当前局面与记忆生成 1～3
-        条大殿「紧急与待决」。未配置主 API 时仅推进季节。
+        确认后：按灵田收获与生长、城池纳贡态度、弟子状态、势力关系与维护开销做<strong>本地季节结算</strong>；再调用<strong>主
+        API</strong>生成本季 1～3 条大殿待决。未配置主 API 时仍完成本地结算。
       </p>
       <template #footer>
         <button

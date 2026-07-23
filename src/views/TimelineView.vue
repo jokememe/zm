@@ -61,7 +61,8 @@ const { calendar } = useGameState()
       <div>
         <strong>关于时间推进</strong>
         <p>
-          确认流转后：先结算本季资源与历法，再由<strong>主 API</strong>根据局面与记忆生成本季「紧急与待决」写入大殿。剧情回合的局面分析仍由次/主 API 的 settle 负责，不在每回合刷待决。
+          每季本地汇总：灵田产出与生长、城池纳贡、弟子修炼/外勤、外交关系漂移、宗门维护开销；明细写入天机。随后由<strong>主
+          API</strong>生成本季大殿「紧急与待决」。剧情回合的局面补丁仍走 settle，不在每回刷待决。
         </p>
       </div>
     </section>

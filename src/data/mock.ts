@@ -179,6 +179,10 @@ export const fieldPlots: FieldPlot[] = [
   { id: 'f6', name: '山门侧田', grade: '黄品', crop: '待播', yieldPerSeason: 0, moisture: 54, assigned: null, status: 'idle', seasonLeft: 0 },
 ]
 
+export function cloneFieldPlotsSeed(): FieldPlot[] {
+  return fieldPlots.map((f) => ({ ...f }))
+}
+
 export const alchemyRecipes: AlchemyRecipe[] = [
   { id: 'a1', name: '聚气丹', grade: '黄品', cost: { herb: 8, spiritStone: 20 }, effect: '修炼效率 +12%，持续三日', successRate: 82, time: '两时辰', stock: 14 },
   { id: 'a2', name: '疗伤散', grade: '黄品', cost: { herb: 5, spiritStone: 10 }, effect: '外伤愈合加速，稳固经脉', successRate: 90, time: '一时辰', stock: 31 },
