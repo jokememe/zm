@@ -24,8 +24,8 @@ const FACTION_STANCE = new Set<Faction['stance']>(['同盟', '友好', '中立',
 const CITY_ATTITUDE = new Set<CityState['attitude']>(['恭顺', '中立', '犹豫', '敌视'])
 const GENDERS = new Set(['男', '女'])
 
+/** 单回 ops 总上限（防异常刷屏）；不再单独限制 disciple.add 条数 */
 const MAX_OPS = 12
-const MAX_DISC_ADD = 3
 
 export type ParseSettleResult =
   | { ok: true; delta: WorldDelta }
@@ -224,9 +224,9 @@ function pickNameAlias(raw: Record<string, unknown>): string {
 }
 
 /**
- * 规范化模型输出的 delta，避免「多加几个弟子 / 用了 姓名」整包校验失败。
- * - disciple.add：别名 → name；无 name 丢弃；超过 MAX_DISC_ADD 截断
- * - ops 超过 MAX_OPS 截断
+ * 规范化模型输出的 delta，避免「用了 姓名 / 缺 name」整包校验失败。
+ * - disciple.add：别名 → name；无 name 无法入册才丢弃；**有 name 的全部保留**
+ * - ops 超过 MAX_OPS 时截断（总条数护栏，不单独砍收徒）
  * - 非法资源键丢弃
  */
 export function sanitizeWorldDelta(delta: WorldDelta): WorldDelta {
@@ -241,7 +241,6 @@ export function sanitizeWorldDelta(delta: WorldDelta): WorldDelta {
 
   const opsIn = Array.isArray(delta.ops) ? delta.ops : []
   const ops: WorldOp[] = []
-  let addCount = 0
 
   for (const rawOp of opsIn) {
     if (ops.length >= MAX_OPS) break
@@ -252,9 +251,8 @@ export function sanitizeWorldDelta(delta: WorldDelta): WorldDelta {
 
     if (kind === 'disciple.add') {
       const name = pickNameAlias(raw)
+      // 没有可写姓名的 add 无法入册，丢弃这一条；不截断「第 4、5 个有名新人」
       if (!name) continue
-      if (addCount >= MAX_DISC_ADD) continue
-      addCount += 1
       const next: Extract<WorldOp, { op: 'disciple.add' }> = { op: 'disciple.add', name }
       if (raw.gender === '男' || raw.gender === '女') next.gender = raw.gender
       if (typeof raw.age === 'number') next.age = raw.age
@@ -290,11 +288,6 @@ export function validateWorldDelta(delta: WorldDelta, snap: WorldSnapshot): Vali
 
   if (ops.length > MAX_OPS) {
     errors.push(`ops 超过上限 ${MAX_OPS}（当前 ${ops.length}）`)
-  }
-
-  const addCount = ops.filter((o) => o && (o as WorldOp).op === 'disciple.add').length
-  if (addCount > MAX_DISC_ADD) {
-    errors.push(`disciple.add 超过上限 ${MAX_DISC_ADD}（当前 ${addCount}）`)
   }
 
   if (delta.resources) {

@@ -100,26 +100,31 @@ describe('parseSettlePayload', () => {
 })
 
 describe('sanitizeWorldDelta', () => {
-  it('caps disciple.add over MAX and drops nameless adds so validate passes', () => {
+  it('keeps all named disciple.add (5+) and only drops nameless ones', () => {
     const raw = {
       resources: {},
       ops: [
         { op: 'disciple.add', name: '甲' },
-        { op: 'disciple.add' }, // no name
+        { op: 'disciple.add' }, // no name → drop
         { op: 'disciple.add', 姓名: '乙' }, // alias
         { op: 'disciple.add', name: '丙' },
         { op: 'disciple.add', name: '丁' },
-        { op: 'disciple.add', name: '戊' }, // 4th named after drop would exceed
+        { op: 'disciple.add', name: '戊' },
         { op: 'notify.push', title: '风闻' },
       ] as never[],
-      summary: '收徒过多',
+      summary: '收徒多人',
     }
     const cleaned = sanitizeWorldDelta(raw as never)
     const adds = (cleaned.ops || []).filter((o) => o.op === 'disciple.add')
-    expect(adds.length).toBeLessThanOrEqual(3)
+    // 5 个有名新人全部入册，不因旧 MAX=3 截断
+    expect(adds.map((o) => (o.op === 'disciple.add' ? o.name : ''))).toEqual([
+      '甲',
+      '乙',
+      '丙',
+      '丁',
+      '戊',
+    ])
     expect(adds.every((o) => o.op === 'disciple.add' && o.name?.trim())).toBe(true)
-    // alias 姓名 → name
-    expect(adds.some((o) => o.op === 'disciple.add' && o.name === '乙')).toBe(true)
     const v = validateWorldDelta(cleaned, emptyTestSnapshot())
     expect(v.ok).toBe(true)
   })

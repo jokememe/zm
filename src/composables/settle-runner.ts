@@ -95,9 +95,9 @@ export function clipText(s: string, max: number): string {
 const SETTLE_SCHEMA_HINT = `只输出严格 JSON（双引号键值，无尾逗号，无其它文字）：
 {"resources":{"灵石":0},"ops":[],"summary":""}
 ops 可选：disciple.add|update|remove，faction.update，city.update，notify.push
-disciple.add 必须含 name（弟子姓名）；本回最多 3 条 disciple.add；ops 总数最多 8
+disciple.add 必须含 name（弟子姓名）；正文收了几个写几个，勿漏名
 字段用 id 或 name 定位；无变更时 ops=[] resources={} summary="无"
-禁止单引号、禁止 markdown 代码块外的解释。`
+ops 总数最多 12。禁止单引号、禁止 markdown 代码块外的解释。`
 
 function buildSettleMessages(input: {
   userText: string
