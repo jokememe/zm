@@ -40,6 +40,8 @@ export function snapshotWorldState(): WorldSnapshot {
     factions: clone(unrefVal(gs.factions) || []),
     cities: clone(unrefVal(gs.cities) || []),
     notifications: clone(unrefVal(gs.notifications) || []),
+    fieldPlots: clone(unrefVal(gs.fieldPlots) || []),
+    urgentEvents: clone(unrefVal(gs.urgentEvents) || []),
   }
 }
 
@@ -64,13 +66,32 @@ export function restoreWorldState(snap: WorldSnapshot): void {
   setRef(gs.factions as Ref<typeof snap.factions>, clone(snap.factions))
   setRef(gs.cities as Ref<typeof snap.cities>, clone(snap.cities))
   setRef(gs.notifications as Ref<typeof snap.notifications>, clone(snap.notifications))
+  // 旧 stateAfter 无 fieldPlots/urgentEvents：保留当前 live，避免误清空
+  if (Array.isArray(snap.fieldPlots)) {
+    setRef(gs.fieldPlots as Ref<typeof snap.fieldPlots>, clone(snap.fieldPlots))
+  }
+  if (Array.isArray(snap.urgentEvents)) {
+    setRef(gs.urgentEvents as Ref<typeof snap.urgentEvents>, clone(snap.urgentEvents))
+  }
+  // 删楼回滚 / apply 后同步最小存档
+  try {
+    if (typeof gs.persistGameSave === 'function') {
+      gs.persistGameSave()
+    }
+  } catch {
+    /* ignore */
+  }
 }
 
 export function applyValidatedDelta(delta: WorldDelta): ApplyResult {
   const snap = snapshotWorldState()
   const v = validateWorldDelta(delta, snap)
-  if (!v.ok) return { lines: [], changed: false }
-  const { snap: next, result } = applyWorldDeltaToSnapshot(delta, snap)
+  if (!v.ok || !v.delta) return { lines: [], changed: false }
+  const clean = v.delta
+  const hasRes = clean.resources && Object.keys(clean.resources).length > 0
+  const hasOps = (clean.ops?.length ?? 0) > 0
+  if (!hasRes && !hasOps) return { lines: [], changed: false }
+  const { snap: next, result } = applyWorldDeltaToSnapshot(clean, snap)
   restoreWorldState(next)
   return result
 }

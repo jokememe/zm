@@ -1,4 +1,12 @@
-import type { CityState, Disciple, Faction, NotificationItem, Resources } from '@/types/game'
+import type {
+  CityState,
+  Disciple,
+  Faction,
+  FieldPlot,
+  NotificationItem,
+  Resources,
+  UrgentEvent,
+} from '@/types/game'
 
 export type SettlementMode = 'off' | 'secondary_only' | 'secondary_then_primary'
 
@@ -11,6 +19,10 @@ export interface WorldSnapshot {
   factions: Faction[]
   cities: CityState[]
   notifications: NotificationItem[]
+  /** 灵田；旧会话 stateAfter 可能缺此键 → restore 保留当前 live */
+  fieldPlots?: FieldPlot[]
+  /** 待决；旧会话 stateAfter 可能缺此键 → restore 保留当前 live */
+  urgentEvents?: UrgentEvent[]
 }
 
 export type ResourceCnName = '灵石' | '灵谷' | '丹材' | '矿铁' | '声望' | '气运'

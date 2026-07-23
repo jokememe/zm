@@ -252,37 +252,40 @@ export async function runSettle(input: {
   // 模型常一次加过多弟子 / 用 姓名 代替 name：先规范化再校验
   const delta = sanitizeWorldDelta(parsed.delta)
   const v = validateWorldDelta(delta, snap0)
-  if (!v.ok) {
-    return {
-      status: 'failed',
-      error: v.errors.join('；'),
-      stateAfter: snapshotWorldState(),
-    }
-  }
-
-  const hasRes = delta.resources && Object.keys(delta.resources).length > 0
-  const hasOps = (delta.ops?.length ?? 0) > 0
+  // partial：坏 op 已跳过；仅当清洗后仍无可写内容 → empty
+  const clean = v.delta ?? { ops: [], resources: {} }
+  const hasRes = clean.resources && Object.keys(clean.resources).length > 0
+  const hasOps = (clean.ops?.length ?? 0) > 0
   if (!hasRes && !hasOps) {
+    const base = clean.summary || delta.summary || ''
+    const skipHint = v.warnings.length
+      ? `（已跳过：${v.warnings.slice(0, 2).join('；')}）`
+      : ''
+    const summary = (base + skipHint).trim() || undefined
     return {
       status: 'empty',
-      summary: delta.summary,
+      summary,
       stateAfter: snapshotWorldState(),
     }
   }
 
-  const applied = applyValidatedDelta(delta)
+  const applied = applyValidatedDelta(clean)
   const stateAfter = snapshotWorldState()
   if (!applied.changed) {
     return {
       status: 'empty',
-      summary: delta.summary,
+      summary: clean.summary ?? delta.summary,
       stateAfter,
     }
   }
+  const lines =
+    v.warnings.length > 0
+      ? [...applied.lines, `（部分跳过 ${v.warnings.length} 项）`]
+      : applied.lines
   return {
     status: 'applied',
-    lines: applied.lines,
-    summary: delta.summary,
+    lines,
+    summary: clean.summary ?? delta.summary,
     stateAfter,
   }
 }

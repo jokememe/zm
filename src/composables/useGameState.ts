@@ -8,6 +8,7 @@ import type {
   CityState,
   UrgentEvent,
   FieldPlot,
+  AlchemyRecipe,
 } from '@/types/game'
 import {
   resources as initialResources,
@@ -16,6 +17,7 @@ import {
   heirs as initialHeirs,
   factions as initialFactions,
   cities as initialCities,
+  alchemyRecipes as seedAlchemyRecipes,
   CALENDAR,
   SECT_NAME as DEFAULT_SECT,
   MASTER_NAME as DEFAULT_MASTER,
@@ -26,6 +28,16 @@ import {
   settleSeasonTick,
   formatSeasonSettleSummary,
 } from '@/composables/season-settle'
+import { seasonAtOffset } from '@/composables/timeline-seasons'
+import {
+  applyStocksToRecipes,
+  buildGameSave,
+  clearGameSaveFromStorage,
+  loadGameSaveFromStorage,
+  stocksFromRecipes,
+  writeGameSaveToStorage,
+  type GameSaveV1,
+} from '@/composables/game-save'
 import {
   OPENING_STORAGE_KEY,
   OPENING_RESOURCES,
@@ -105,6 +117,12 @@ const urgentEvents = ref<UrgentEvent[]>(cloneUrgentEventsSeed())
 /** 灵田：季节结算会推进生长/收获 */
 const fieldPlots = ref<FieldPlot[]>(cloneFieldPlotsSeed())
 
+/** 炼丹配方库存（可写；种子来自 mock） */
+function cloneAlchemySeed(): AlchemyRecipe[] {
+  return seedAlchemyRecipes.map((r) => ({ ...r, cost: { ...r.cost } }))
+}
+const alchemyRecipes = ref<AlchemyRecipe[]>(cloneAlchemySeed())
+
 const disciples = ref<Disciple[]>(
   openingDone.value
     ? initialDisciples.map((d) => ({ ...d }))
@@ -121,6 +139,71 @@ const calendar = reactive({
 const unreadCount = computed(() => notifications.value.filter((n) => !n.read).length)
 
 const difficultyLabel = computed(() => getDifficulty(difficulty.value).label)
+
+const pillStockTotal = computed(() =>
+  alchemyRecipes.value.reduce((s, r) => s + (r.stock || 0), 0),
+)
+
+function capturePayload() {
+  return {
+    sectName: sectName.value,
+    masterName: masterName.value,
+    difficulty: difficulty.value,
+    resources: { ...resources },
+    calendar: {
+      era: calendar.era,
+      year: calendar.year,
+      season: calendar.season,
+      day: calendar.day,
+      hour: calendar.hour,
+      weather: calendar.weather,
+    },
+    disciples: disciples.value,
+    factions: factions.value,
+    cities: cities.value,
+    notifications: notifications.value,
+    fieldPlots: fieldPlots.value,
+    urgentEvents: urgentEvents.value,
+    designatedHeirId: designatedHeirId.value,
+    alchemyStocks: stocksFromRecipes(alchemyRecipes.value),
+  }
+}
+
+function applySaveBlob(save: GameSaveV1) {
+  sectName.value = save.sectName || sectName.value
+  masterName.value = save.masterName || masterName.value
+  difficulty.value = save.difficulty
+  Object.assign(resources, save.resources)
+  Object.assign(calendar, save.calendar)
+  disciples.value = save.disciples.map((d) => ({ ...d }))
+  factions.value = save.factions.map((f) => ({ ...f }))
+  cities.value = save.cities.map((c) => ({ ...c }))
+  notifications.value = save.notifications.map((n) => ({ ...n }))
+  fieldPlots.value = save.fieldPlots.map((f) => ({ ...f }))
+  urgentEvents.value = save.urgentEvents.map((e) => ({
+    ...e,
+    choices: (e.choices || []).map((c) => ({
+      ...c,
+      resourceDelta: c.resourceDelta ? { ...c.resourceDelta } : undefined,
+    })),
+  }))
+  designatedHeirId.value = save.designatedHeirId
+  alchemyRecipes.value = applyStocksToRecipes(cloneAlchemySeed(), save.alchemyStocks)
+}
+
+/** 启动时若有存档且已开局过，恢复经营态 */
+function tryHydrateOnBoot() {
+  if (typeof window === 'undefined') return
+  if (!openingDone.value) return
+  const save = loadGameSaveFromStorage()
+  if (!save) return
+  try {
+    applySaveBlob(save)
+  } catch (e) {
+    console.warn('[存档] 启动恢复失败', e)
+  }
+}
+tryHydrateOnBoot()
 
 let compactMql: MediaQueryList | null = null
 let compactListener: (() => void) | null = null
@@ -199,10 +282,12 @@ export function useGameState() {
     notifications.value = notifications.value.map((n) =>
       n.id === id ? { ...n, read: true } : n,
     )
+    schedulePersist()
   }
 
   function markAllNotificationsRead() {
     notifications.value = notifications.value.map((n) => ({ ...n, read: true }))
+    schedulePersist()
   }
 
   /** 仍待处理的紧急/待决（大殿列表） */
@@ -246,6 +331,7 @@ export function useGameState() {
     }
     if (!toAdd.length) return 0
     urgentEvents.value = [...toAdd, ...urgentEvents.value]
+    schedulePersist()
     return toAdd.length
   }
 
@@ -285,6 +371,7 @@ export function useGameState() {
       read: true,
     }
     notifications.value = [note, ...notifications.value]
+    schedulePersist()
 
     return {
       ok: true,
@@ -301,10 +388,90 @@ export function useGameState() {
         resources[key] = Math.max(0, resources[key] + v)
       }
     }
+    schedulePersist()
   }
 
   function setDesignatedHeir(id: string) {
     designatedHeirId.value = id
+    schedulePersist()
+  }
+
+  /**
+   * 指派弟子打理灵田：写入 live fieldPlots.assigned。
+   * 闲田且有人看管时，下一季 tick 会自动复种（见 season-settle tickFields）。
+   */
+  function assignFieldPlot(
+    plotId: string,
+    discipleName: string,
+  ): { ok: true; plotName: string; assigned: string } | { ok: false; error: string } {
+    const name = (discipleName || '').trim()
+    if (!name) return { ok: false, error: '须指定弟子名' }
+    const idx = fieldPlots.value.findIndex((f) => f.id === plotId)
+    if (idx < 0) return { ok: false, error: '灵田不存在' }
+    const plot = fieldPlots.value[idx]
+    const next = [...fieldPlots.value]
+    next[idx] = { ...plot, assigned: name }
+    fieldPlots.value = next
+    schedulePersist()
+    return { ok: true, plotName: plot.name, assigned: name }
+  }
+
+  /**
+   * 炼丹：扣丹材/灵石，对应配方 stock+1。
+   */
+  function craftAlchemy(
+    recipeId: string,
+  ):
+    | { ok: true; name: string; stock: number }
+    | { ok: false; error: string } {
+    const idx = alchemyRecipes.value.findIndex((r) => r.id === recipeId)
+    if (idx < 0) return { ok: false, error: '丹方不存在' }
+    const recipe = alchemyRecipes.value[idx]
+    if (resources.herb < recipe.cost.herb) {
+      return { ok: false, error: `丹材不足（需 ${recipe.cost.herb}）` }
+    }
+    if (resources.spiritStone < recipe.cost.spiritStone) {
+      return { ok: false, error: `灵石不足（需 ${recipe.cost.spiritStone}）` }
+    }
+    adjustResource({
+      herb: -recipe.cost.herb,
+      spiritStone: -recipe.cost.spiritStone,
+    })
+    const stock = recipe.stock + 1
+    const next = [...alchemyRecipes.value]
+    next[idx] = { ...recipe, stock }
+    alchemyRecipes.value = next
+    schedulePersist()
+    return { ok: true, name: recipe.name, stock }
+  }
+
+  let persistTimer: ReturnType<typeof setTimeout> | null = null
+  function schedulePersist() {
+    if (!openingDone.value) return
+    if (persistTimer) clearTimeout(persistTimer)
+    persistTimer = setTimeout(() => {
+      persistTimer = null
+      persistGameSave()
+    }, 200)
+  }
+
+  function persistGameSave(): boolean {
+    try {
+      const save = buildGameSave(capturePayload())
+      return writeGameSaveToStorage(save)
+    } catch (e) {
+      console.warn('[存档] 写入失败', e)
+      return false
+    }
+  }
+
+  function hydrateFromSave(): boolean {
+    const save = loadGameSaveFromStorage()
+    if (!save) return false
+    applySaveBlob(save)
+    openingDone.value = true
+    showOpening.value = false
+    return true
   }
 
   /**
@@ -312,20 +479,6 @@ export function useGameState() {
    * 主 API 季报待决由 UI 在此之后调用，不在此函数内打网。
    */
   function advanceSeason(): { lines: string[]; summary: string } {
-    const order = [
-      '孟春',
-      '仲春',
-      '季春',
-      '孟夏',
-      '仲夏',
-      '季夏',
-      '孟秋',
-      '仲秋',
-      '季秋',
-      '孟冬',
-      '仲冬',
-      '季冬',
-    ]
     // 用推进前的季节做半年贡判断，再切历法
     const seasonBefore = calendar.season
     const settled = settleSeasonTick({
@@ -344,16 +497,13 @@ export function useGameState() {
       adjustResource(settled.resourcesDelta)
     }
 
-    const idx = order.indexOf(calendar.season)
-    if (idx === order.length - 1 || idx === -1) {
-      calendar.year += 1
-      calendar.season = '孟春'
-    } else {
-      calendar.season = order[idx + 1]
-    }
+    const next = seasonAtOffset(calendar.year, calendar.season, 1)
+    calendar.year = next.year
+    calendar.season = next.season
     calendar.day = 1
 
     const summary = formatSeasonSettleSummary(settled.lines)
+    schedulePersist()
     return { lines: settled.lines, summary }
   }
 
@@ -370,6 +520,7 @@ export function useGameState() {
       masterName: masterName.value,
       difficulty: difficulty.value,
     })
+    persistGameSave()
   }
 
   /** 仅重看开场（不重置资源） */
@@ -402,6 +553,7 @@ export function useGameState() {
     notifications.value = buildOpeningNotifications(master, name) as NotificationItem[]
     urgentEvents.value = cloneUrgentEventsSeed()
     fieldPlots.value = cloneFieldPlotsSeed()
+    alchemyRecipes.value = cloneAlchemySeed()
     designatedHeirId.value = initialHeirs.find((h) => h.designated)?.id ?? 'h2'
 
     // 困难/硬核：继承人须在现有弟子中
@@ -445,6 +597,7 @@ export function useGameState() {
   function resetGameToOpening() {
     clearMemoryBank()
     clearIdentity()
+    clearGameSaveFromStorage()
     sectName.value = DEFAULT_SECT_NAME
     masterName.value = DEFAULT_MASTER_NAME
     difficulty.value = 'standard'
@@ -456,6 +609,7 @@ export function useGameState() {
     ) as NotificationItem[]
     urgentEvents.value = cloneUrgentEventsSeed()
     fieldPlots.value = cloneFieldPlotsSeed()
+    alchemyRecipes.value = cloneAlchemySeed()
     disciples.value = pickDisciplesForDifficulty('standard')
     factions.value = initialFactions.map((f) => ({ ...f }))
     cities.value = initialCities.map((c) => ({ ...c }))
@@ -490,6 +644,8 @@ export function useGameState() {
     urgentEvents,
     openUrgentEvents,
     fieldPlots,
+    alchemyRecipes,
+    pillStockTotal,
     disciples,
     factions,
     cities,
@@ -514,6 +670,10 @@ export function useGameState() {
     appendUrgentEvents,
     adjustResource,
     setDesignatedHeir,
+    assignFieldPlot,
+    craftAlchemy,
+    persistGameSave,
+    hydrateFromSave,
     advanceSeason,
     markOpeningDone,
     replayOpening,

@@ -11,7 +11,6 @@ import { snapshotWorldState } from '@/composables/world-state'
 import { loadMemoryBank } from '@/composables/memory-lore'
 import { runSeasonUrgents } from '@/composables/season-urgent'
 import {
-  alchemyRecipes,
   forgeQueue,
   manuals,
   treasures,
@@ -25,6 +24,8 @@ const {
   adjustResource,
   setDesignatedHeir,
   advanceSeason,
+  assignFieldPlot,
+  craftAlchemy,
   setView,
   focusTianji,
   disciples,
@@ -33,6 +34,7 @@ const {
   urgentEvents,
   openUrgentEvents,
   fieldPlots,
+  alchemyRecipes,
   resolveUrgentEvent,
   appendUrgentEvents,
   calendar,
@@ -51,7 +53,7 @@ const event = computed(() =>
   urgentEvents.value.find((e) => e.id === p('eventId') && (e.status ?? 'open') === 'open'),
 )
 const disciple = computed(() => disciples.value.find((d) => d.id === p('discipleId')))
-const recipe = computed(() => alchemyRecipes.find((a) => a.id === p('recipeId')))
+const recipe = computed(() => alchemyRecipes.value.find((a) => a.id === p('recipeId')))
 const forge = computed(() => forgeQueue.find((g) => g.id === p('forgeId')))
 const manual = computed(() => manuals.find((m) => m.id === p('manualId')))
 const treasure = computed(() => treasures.find((t) => t.id === p('treasureId')))
@@ -93,13 +95,24 @@ function onEventChoice(choiceId: string) {
 function craftPill() {
   const r = recipe.value
   if (!r) return
-  adjustResource({ herb: -r.cost.herb, spiritStone: -r.cost.spiritStone })
-  toast.success('开炉成功', `${r.name} 已入丹房库存（原型模拟）`)
+  const result = craftAlchemy(r.id)
+  if (!result.ok) {
+    toast.info(result.error)
+    return
+  }
+  toast.success('开炉成功', `${result.name} 已入丹房，库存 ${result.stock} 枚`)
   close()
 }
 
 function assignField(name: string) {
-  toast.success('指派完成', `${field.value?.name ?? '灵田'} 交由 ${name} 打理`)
+  const f = field.value
+  if (!f) return
+  const result = assignFieldPlot(f.id, name)
+  if (!result.ok) {
+    toast.info(result.error)
+    return
+  }
+  toast.success('指派完成', `${result.plotName} 交由 ${result.assigned} 打理`)
   close()
 }
 
@@ -392,18 +405,20 @@ async function doAdvanceSeason() {
       :subtitle="`${field.grade} · ${field.crop}`"
       @close="close"
     >
-      <p class="muted" style="margin-bottom: 0.85rem">选择弟子打理此田（原型仅提示，不改写源数据）。</p>
+      <p class="muted" style="margin-bottom: 0.85rem">
+        选择弟子打理此田；写入后下一季闲田将自动复种。
+      </p>
       <div class="assign-list">
         <button
-          v-for="name in ['林晚舟', '赵阿禾', '苏青棠', '沈微']"
-          :id="`assign-${name}`"
-          :key="name"
+          v-for="d in disciples"
+          :id="`assign-${d.id}`"
+          :key="d.id"
           type="button"
           class="choice-card"
-          @click="assignField(name)"
+          @click="assignField(d.name)"
         >
-          <strong>{{ name }}</strong>
-          <span>{{ field.assigned === name ? '当前管事' : '可指派' }}</span>
+          <strong>{{ d.name }}</strong>
+          <span>{{ field.assigned === d.name ? '当前管事' : '可指派' }}</span>
         </button>
       </div>
       <template #footer>

@@ -1,10 +1,15 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import Icon from '@/components/ui/Icon.vue'
-import { hallStats, hallChronicle } from '@/data/mock'
+import { heirs } from '@/data/mock'
 import { useModal } from '@/composables/useModal'
 import { useGameState } from '@/composables/useGameState'
 import { useTianji } from '@/composables/useTianji'
+import {
+  buildHallChronicle,
+  buildHallShortcuts,
+  buildHallStats,
+} from '@/composables/hall-overview'
 import type { ViewId } from '@/types/game'
 
 const { open } = useModal()
@@ -18,16 +23,52 @@ const {
   disciples,
   difficultyLabel,
   openUrgentEvents,
+  factions,
+  cities,
+  fieldPlots,
+  alchemyRecipes,
+  designatedHeirId,
+  calendar,
+  resources,
 } = useGameState()
 const { injectContext, startOpeningRun } = useTianji()
 
 const discipleCount = computed(() => disciples.value.length)
 const pendingEvents = openUrgentEvents
 
+const overviewInput = computed(() => {
+  const heir = heirs.find((h) => h.id === designatedHeirId.value)
+  const heirDisc = heir ? disciples.value.find((d) => d.id === heir.discipleId) : null
+  return {
+    era: calendar.era,
+    year: calendar.year,
+    season: calendar.season,
+    sectName: sectName.value,
+    masterName: masterName.value,
+    disciples: disciples.value,
+    factions: factions.value,
+    cities: cities.value,
+    fieldPlots: fieldPlots.value,
+    openUrgents: openUrgentEvents.value,
+    alchemyRecipes: alchemyRecipes.value,
+    designatedHeirId: designatedHeirId.value,
+    heirName: heirDisc?.name || heir?.name || null,
+    resources: {
+      prestige: resources.prestige,
+      destiny: resources.destiny,
+      herb: resources.herb,
+    },
+  }
+})
+
+const hallStats = computed(() => buildHallStats(overviewInput.value))
+const shortcuts = computed(() => buildHallShortcuts(overviewInput.value))
+const hallChronicle = computed(() => buildHallChronicle(overviewInput.value))
+
 async function startFromBeginning() {
   if (
     !confirm(
-      '从头开局将重置资源、历法、通知与天机会话。当前推演进度会清空，是否继续？',
+      '从头开局将重置资源、历法、通知、存档与天机会话。当前推演进度会清空，是否继续？',
     )
   ) {
     return
@@ -36,15 +77,6 @@ async function startFromBeginning() {
   await startOpeningRun()
   replayOpening()
 }
-
-const shortcuts: { id: ViewId; label: string; desc: string; icon: string }[] = [
-  { id: 'fields', label: '灵田', desc: '东坡将熟 · 荒田待垦', icon: 'fields' },
-  { id: 'alchemy', label: '炼丹', desc: '五方丹方可用', icon: 'alchemy' },
-  { id: 'disciples', label: '弟子', desc: '名册', icon: 'disciples' },
-  { id: 'diplomacy', label: '外交', desc: '赤焰谷压境', icon: 'diplomacy' },
-  { id: 'legacy', label: '继位', desc: '储君观察中', icon: 'legacy' },
-  { id: 'cities', label: '城池', desc: '青石城恭顺', icon: 'cities' },
-]
 
 function openEvent(id: string) {
   open('event-detail', { eventId: id })

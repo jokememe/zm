@@ -1,13 +1,16 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import Icon from '@/components/ui/Icon.vue'
-import { alchemyRecipes } from '@/data/mock'
 import { useModal } from '@/composables/useModal'
 import { useTianji } from '@/composables/useTianji'
 import { useGameState } from '@/composables/useGameState'
 
 const { open } = useModal()
 const { injectContext } = useTianji()
-const { focusTianji } = useGameState()
+const { focusTianji, alchemyRecipes, resources, pillStockTotal } = useGameState()
+
+const herbStock = computed(() => resources.herb)
+const recipes = computed(() => alchemyRecipes.value)
 </script>
 
 <template>
@@ -34,17 +37,17 @@ const { focusTianji } = useGameState()
       </div>
       <div>
         <h3>赤铜鼎 · 运转中</h3>
-        <p class="muted">当前无排队任务。选择下方丹方可开炉（原型扣除资源并提示）。</p>
+        <p class="muted">选择下方丹方可开炉：扣除丹材与灵石，成丹计入库存。</p>
       </div>
       <div class="furnace__stats">
-        <div><span>丹材库存</span><strong>186</strong></div>
-        <div><span>成丹保有</span><strong>60 枚</strong></div>
+        <div><span>丹材库存</span><strong>{{ herbStock }}</strong></div>
+        <div><span>成丹保有</span><strong>{{ pillStockTotal }} 枚</strong></div>
       </div>
     </div>
 
     <div class="grid-2 stagger" style="margin-top: 1rem">
       <article
-        v-for="r in alchemyRecipes"
+        v-for="r in recipes"
         :id="`alchemy-card-${r.id}`"
         :key="r.id"
         class="panel-card recipe interactive"

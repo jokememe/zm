@@ -295,12 +295,13 @@ export const tianjiSeed: TianjiMessage[] = [
   },
 ]
 
-export const timelineSeasons = [
-  { id: 's1', label: '本季 · 仲春', events: ['灵谷抽穗', '使者到访', '雾畦待收'], status: 'current' as const },
-  { id: 's2', label: '下季 · 季夏', events: ['可能旱象', '赤焰谷议和窗口', '新弟子考核'], status: 'next' as const },
-  { id: 's3', label: '后季 · 孟秋', events: ['年贡清算', '护山阵岁修', '联姻议提？'], status: 'future' as const },
-  { id: 's4', label: '冬藏 · 仲冬', events: ['闭关潮', '矿道结冰', '气运结算'], status: 'future' as const },
-]
+/** @deprecated 岁月卡请用 buildTimelineSeasons(year, season)；保留空导出避免误 import 崩 */
+export const timelineSeasons: {
+  id: string
+  label: string
+  events: string[]
+  status: 'current' | 'next' | 'future'
+}[] = []
 
 export const hallChronicle = [
   { id: 'ch1', year: '天元 3840', text: '先师坐化，青岚宗势如残烛，外门散去过半。' },

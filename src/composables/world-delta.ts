@@ -281,116 +281,132 @@ export function sanitizeWorldDelta(delta: WorldDelta): WorldDelta {
   }
 }
 
+/**
+ * 校验单条 op；返回 null 表示通过，否则为错误文案。
+ */
+function validateOneOp(op: WorldOp & { op?: string }, snap: WorldSnapshot, index: number): string | null {
+  if (!op || typeof op !== 'object' || !op.op) {
+    return `ops[${index}] 非法`
+  }
+  const prefix = `ops[${index}] ${op.op}`
+
+  switch (op.op) {
+    case 'disciple.add': {
+      if (!op.name || !String(op.name).trim()) return `${prefix}: name 必填`
+      if (op.gender !== undefined && !GENDERS.has(op.gender)) return `${prefix}: gender 非法`
+      if (op.status !== undefined && !DISCIPLE_STATUS.has(op.status)) return `${prefix}: status 非法`
+      if (op.loyalty !== undefined && !isFiniteNumber(op.loyalty)) return `${prefix}: loyalty 须为数字`
+      return null
+    }
+    case 'disciple.update': {
+      const r = resolveByIdOrName(snap.disciples, op.id, op.name, '弟子')
+      if (r.error) return `${prefix}: ${r.error}`
+      if (!op.patch || !isPlainObject(op.patch)) return `${prefix}: patch 必填`
+      if (op.patch.status !== undefined && !DISCIPLE_STATUS.has(op.patch.status)) {
+        return `${prefix}: status 非法`
+      }
+      if (op.patch.gender !== undefined && !GENDERS.has(op.patch.gender)) {
+        return `${prefix}: gender 非法`
+      }
+      if (op.patch.loyalty !== undefined && !isFiniteNumber(op.patch.loyalty)) {
+        return `${prefix}: loyalty 须为数字`
+      }
+      return null
+    }
+    case 'disciple.remove': {
+      const r = resolveByIdOrName(snap.disciples, op.id, op.name, '弟子')
+      if (r.error) return `${prefix}: ${r.error}`
+      return null
+    }
+    case 'faction.update': {
+      const r = resolveByIdOrName(snap.factions, op.id, op.name, '势力')
+      if (r.error) return `${prefix}: ${r.error}`
+      if (!op.patch || !isPlainObject(op.patch)) return `${prefix}: patch 必填`
+      if (op.patch.stance !== undefined && !FACTION_STANCE.has(op.patch.stance)) {
+        return `${prefix}: stance 非法`
+      }
+      if (op.patch.relation !== undefined && !isFiniteNumber(op.patch.relation)) {
+        return `${prefix}: relation 须为数字`
+      }
+      return null
+    }
+    case 'city.update': {
+      const r = resolveByIdOrName(snap.cities, op.id, op.name, '城池')
+      if (r.error) return `${prefix}: ${r.error}`
+      if (!op.patch || !isPlainObject(op.patch)) return `${prefix}: patch 必填`
+      if (op.patch.attitude !== undefined && !CITY_ATTITUDE.has(op.patch.attitude)) {
+        return `${prefix}: attitude 非法`
+      }
+      if (op.patch.influence !== undefined && !isFiniteNumber(op.patch.influence)) {
+        return `${prefix}: influence 须为数字`
+      }
+      return null
+    }
+    case 'notify.push': {
+      if (!op.title || !String(op.title).trim()) return `${prefix}: title 必填`
+      return null
+    }
+    default:
+      return `${prefix}: 未知 op`
+  }
+}
+
+/**
+ * 校验并** partial 清洗**：坏 op / 非法资源键跳过写入 warnings，好项保留。
+ * ok 恒为 true（清洗后 delta 可安全 apply）；整包失败仅当调用方不使用返回的 delta。
+ * 仍把跳过原因放在 errors 数组便于日志（settle 可选用 warnings）。
+ */
 export function validateWorldDelta(delta: WorldDelta, snap: WorldSnapshot): ValidateResult {
   const errors: string[] = []
   const warnings: string[] = []
-  const ops = delta.ops ?? []
+  const opsIn = delta.ops ?? []
 
-  if (ops.length > MAX_OPS) {
-    errors.push(`ops 超过上限 ${MAX_OPS}（当前 ${ops.length}）`)
-  }
-
+  const resources: WorldDelta['resources'] = {}
   if (delta.resources) {
-    for (const key of Object.keys(delta.resources)) {
+    for (const [key, val] of Object.entries(delta.resources)) {
       if (!RESOURCE_CN.has(key)) {
-        errors.push(`非法资源键：${key}`)
+        const msg = `非法资源键：${key}`
+        errors.push(msg)
+        warnings.push(msg)
+        continue
       }
+      ;(resources as Record<string, string | number>)[key] = val as string | number
     }
   }
 
-  for (let i = 0; i < ops.length; i++) {
-    const op = ops[i] as WorldOp & { op?: string }
-    if (!op || typeof op !== 'object' || !op.op) {
-      errors.push(`ops[${i}] 非法`)
+  const kept: WorldOp[] = []
+  for (let i = 0; i < opsIn.length; i++) {
+    if (kept.length >= MAX_OPS) {
+      const msg = `ops 超过上限 ${MAX_OPS}，已截断（原 ${opsIn.length} 条）`
+      if (!warnings.includes(msg)) {
+        errors.push(msg)
+        warnings.push(msg)
+      }
+      break
+    }
+    const op = opsIn[i] as WorldOp & { op?: string }
+    const err = validateOneOp(op, snap, i)
+    if (err) {
+      errors.push(err)
+      warnings.push(`已跳过：${err}`)
       continue
     }
-    const prefix = `ops[${i}] ${op.op}`
-
-    switch (op.op) {
-      case 'disciple.add': {
-        if (!op.name || !String(op.name).trim()) {
-          errors.push(`${prefix}: name 必填`)
-        }
-        if (op.gender !== undefined && !GENDERS.has(op.gender)) {
-          errors.push(`${prefix}: gender 非法`)
-        }
-        if (op.status !== undefined && !DISCIPLE_STATUS.has(op.status)) {
-          errors.push(`${prefix}: status 非法`)
-        }
-        if (op.loyalty !== undefined && !isFiniteNumber(op.loyalty)) {
-          errors.push(`${prefix}: loyalty 须为数字`)
-        }
-        break
-      }
-      case 'disciple.update': {
-        const r = resolveByIdOrName(snap.disciples, op.id, op.name, '弟子')
-        if (r.error) errors.push(`${prefix}: ${r.error}`)
-        if (!op.patch || !isPlainObject(op.patch)) {
-          errors.push(`${prefix}: patch 必填`)
-        } else {
-          if (op.patch.status !== undefined && !DISCIPLE_STATUS.has(op.patch.status)) {
-            errors.push(`${prefix}: status 非法`)
-          }
-          if (op.patch.gender !== undefined && !GENDERS.has(op.patch.gender)) {
-            errors.push(`${prefix}: gender 非法`)
-          }
-          if (op.patch.loyalty !== undefined && !isFiniteNumber(op.patch.loyalty)) {
-            errors.push(`${prefix}: loyalty 须为数字`)
-          }
-        }
-        break
-      }
-      case 'disciple.remove': {
-        const r = resolveByIdOrName(snap.disciples, op.id, op.name, '弟子')
-        if (r.error) errors.push(`${prefix}: ${r.error}`)
-        break
-      }
-      case 'faction.update': {
-        const r = resolveByIdOrName(snap.factions, op.id, op.name, '势力')
-        if (r.error) errors.push(`${prefix}: ${r.error}`)
-        if (!op.patch || !isPlainObject(op.patch)) {
-          errors.push(`${prefix}: patch 必填`)
-        } else {
-          if (op.patch.stance !== undefined && !FACTION_STANCE.has(op.patch.stance)) {
-            errors.push(`${prefix}: stance 非法`)
-          }
-          if (op.patch.relation !== undefined && !isFiniteNumber(op.patch.relation)) {
-            errors.push(`${prefix}: relation 须为数字`)
-          }
-        }
-        break
-      }
-      case 'city.update': {
-        const r = resolveByIdOrName(snap.cities, op.id, op.name, '城池')
-        if (r.error) errors.push(`${prefix}: ${r.error}`)
-        if (!op.patch || !isPlainObject(op.patch)) {
-          errors.push(`${prefix}: patch 必填`)
-        } else {
-          if (op.patch.attitude !== undefined && !CITY_ATTITUDE.has(op.patch.attitude)) {
-            errors.push(`${prefix}: attitude 非法`)
-          }
-          if (op.patch.influence !== undefined && !isFiniteNumber(op.patch.influence)) {
-            errors.push(`${prefix}: influence 须为数字`)
-          }
-        }
-        break
-      }
-      case 'notify.push': {
-        if (!op.title || !String(op.title).trim()) {
-          errors.push(`${prefix}: title 必填`)
-        }
-        break
-      }
-      default:
-        errors.push(`${prefix}: 未知 op`)
-    }
+    kept.push(op as WorldOp)
   }
 
+  const cleaned: WorldDelta = {
+    resources: Object.keys(resources).length ? resources : undefined,
+    ops: kept,
+    summary: delta.summary !== undefined ? String(delta.summary) : undefined,
+  }
+
+  // partial apply：有可写内容或本就为空 → ok；仅当「有输入但全被丢掉」仍 ok（走 empty），
+  // 调用方用 errors/warnings 提示。不再因单条坏 op 整包失败。
   return {
-    ok: errors.length === 0,
+    ok: true,
     errors,
     warnings,
-    delta: errors.length === 0 ? delta : undefined,
+    delta: cleaned,
   }
 }
 
@@ -552,6 +568,8 @@ export function emptyTestSnapshot(partial?: Partial<WorldSnapshot>): WorldSnapsh
     factions: [],
     cities: [],
     notifications: [],
+    fieldPlots: [],
+    urgentEvents: [],
     ...partial,
   }
 }

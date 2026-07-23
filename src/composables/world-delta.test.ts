@@ -148,30 +148,46 @@ describe('validateWorldDelta', () => {
     expect(v.ok).toBe(true)
   })
 
-  it('rejects disciple.update unknown id', () => {
+  it('skips disciple.update unknown id but keeps good ops (partial)', () => {
     const snap = emptyTestSnapshot({ disciples: [baseDisciple()] })
     const v = validateWorldDelta(
-      { ops: [{ op: 'disciple.update', id: 'nope', patch: { loyalty: 1 } }] },
+      {
+        ops: [
+          { op: 'disciple.add', name: '新人甲' },
+          { op: 'disciple.update', id: 'nope', patch: { loyalty: 1 } },
+          { op: 'notify.push', title: '风闻' },
+        ],
+      },
       snap,
     )
-    expect(v.ok).toBe(false)
+    expect(v.ok).toBe(true)
     expect(v.errors.some((e) => e.includes('不存在'))).toBe(true)
+    expect(v.delta?.ops?.map((o) => o.op)).toEqual(['disciple.add', 'notify.push'])
+    expect(v.delta?.ops?.some((o) => o.op === 'disciple.update')).toBe(false)
   })
 
-  it('rejects ops length > 12', () => {
+  it('truncates ops length > 12 keeping first 12 valid', () => {
     const snap = emptyTestSnapshot()
     const ops = Array.from({ length: 13 }, (_, i) => ({
       op: 'notify.push' as const,
       title: `t${i}`,
     }))
     const v = validateWorldDelta({ ops }, snap)
-    expect(v.ok).toBe(false)
+    expect(v.ok).toBe(true)
+    expect(v.delta?.ops?.length).toBe(12)
+    expect(v.warnings.some((w) => w.includes('上限'))).toBe(true)
   })
 
-  it('rejects illegal resource key', () => {
+  it('drops illegal resource key but keeps legal ones', () => {
     const snap = emptyTestSnapshot()
-    const v = validateWorldDelta({ resources: { 金币: 1 } as never }, snap)
-    expect(v.ok).toBe(false)
+    const v = validateWorldDelta(
+      { resources: { 金币: 1, 灵石: 10 } as never },
+      snap,
+    )
+    expect(v.ok).toBe(true)
+    expect(v.delta?.resources?.['灵石']).toBe(10)
+    expect((v.delta?.resources as Record<string, unknown>)?.['金币']).toBeUndefined()
+    expect(v.errors.some((e) => e.includes('金币'))).toBe(true)
   })
 })
 

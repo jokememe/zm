@@ -1,11 +1,17 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import Icon from '@/components/ui/Icon.vue'
-import { timelineSeasons } from '@/data/mock'
 import { useModal } from '@/composables/useModal'
 import { useGameState } from '@/composables/useGameState'
+import { buildTimelineSeasons } from '@/composables/timeline-seasons'
 
 const { open } = useModal()
 const { calendar } = useGameState()
+
+/** 随历法推进刷新，不再读死 mock 四季卡 */
+const timelineSeasons = computed(() =>
+  buildTimelineSeasons(calendar.year, calendar.season, 4),
+)
 </script>
 
 <template>
