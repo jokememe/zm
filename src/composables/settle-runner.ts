@@ -6,6 +6,7 @@ import type { AppSettings } from '@/sillytavern/types'
 import type { SettlementMode, WorldSnapshot } from '@/types/world'
 import {
   parseSettlePayload,
+  sanitizeWorldDelta,
   validateWorldDelta,
 } from '@/composables/world-delta'
 import {
@@ -94,8 +95,9 @@ export function clipText(s: string, max: number): string {
 const SETTLE_SCHEMA_HINT = `只输出严格 JSON（双引号键值，无尾逗号，无其它文字）：
 {"resources":{"灵石":0},"ops":[],"summary":""}
 ops 可选：disciple.add|update|remove，faction.update，city.update，notify.push
+disciple.add 必须含 name（弟子姓名）；本回最多 3 条 disciple.add；ops 总数最多 8
 字段用 id 或 name 定位；无变更时 ops=[] resources={} summary="无"
-最多 8 条 op。禁止单引号、禁止 markdown 代码块外的解释。`
+禁止单引号、禁止 markdown 代码块外的解释。`
 
 function buildSettleMessages(input: {
   userText: string
@@ -211,7 +213,9 @@ export async function runSettle(input: {
       stateAfter: snapshotWorldState(),
     }
   }
-  const v = validateWorldDelta(parsed.delta, snap0)
+  // 模型常一次加过多弟子 / 用 姓名 代替 name：先规范化再校验
+  const delta = sanitizeWorldDelta(parsed.delta)
+  const v = validateWorldDelta(delta, snap0)
   if (!v.ok) {
     return {
       status: 'failed',
@@ -220,29 +224,29 @@ export async function runSettle(input: {
     }
   }
 
-  const hasRes = parsed.delta.resources && Object.keys(parsed.delta.resources).length > 0
-  const hasOps = (parsed.delta.ops?.length ?? 0) > 0
+  const hasRes = delta.resources && Object.keys(delta.resources).length > 0
+  const hasOps = (delta.ops?.length ?? 0) > 0
   if (!hasRes && !hasOps) {
     return {
       status: 'empty',
-      summary: parsed.delta.summary,
+      summary: delta.summary,
       stateAfter: snapshotWorldState(),
     }
   }
 
-  const applied = applyValidatedDelta(parsed.delta)
+  const applied = applyValidatedDelta(delta)
   const stateAfter = snapshotWorldState()
   if (!applied.changed) {
     return {
       status: 'empty',
-      summary: parsed.delta.summary,
+      summary: delta.summary,
       stateAfter,
     }
   }
   return {
     status: 'applied',
     lines: applied.lines,
-    summary: parsed.delta.summary,
+    summary: delta.summary,
     stateAfter,
   }
 }

@@ -214,6 +214,75 @@ function isFiniteNumber(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v)
 }
 
+/** 模型常用的 name 别名字段 */
+function pickNameAlias(raw: Record<string, unknown>): string {
+  for (const key of ['name', '姓名', '弟子名', 'character', 'disciple', 'disciple_name'] as const) {
+    const v = raw[key]
+    if (typeof v === 'string' && v.trim()) return v.trim()
+  }
+  return ''
+}
+
+/**
+ * 规范化模型输出的 delta，避免「多加几个弟子 / 用了 姓名」整包校验失败。
+ * - disciple.add：别名 → name；无 name 丢弃；超过 MAX_DISC_ADD 截断
+ * - ops 超过 MAX_OPS 截断
+ * - 非法资源键丢弃
+ */
+export function sanitizeWorldDelta(delta: WorldDelta): WorldDelta {
+  const resources: WorldDelta['resources'] = {}
+  if (delta.resources && isPlainObject(delta.resources)) {
+    for (const [k, v] of Object.entries(delta.resources)) {
+      if (RESOURCE_CN.has(k)) {
+        ;(resources as Record<string, string | number>)[k] = v as string | number
+      }
+    }
+  }
+
+  const opsIn = Array.isArray(delta.ops) ? delta.ops : []
+  const ops: WorldOp[] = []
+  let addCount = 0
+
+  for (const rawOp of opsIn) {
+    if (ops.length >= MAX_OPS) break
+    if (!rawOp || typeof rawOp !== 'object') continue
+    const raw = rawOp as Record<string, unknown>
+    const kind = typeof raw.op === 'string' ? raw.op : ''
+    if (!kind) continue
+
+    if (kind === 'disciple.add') {
+      const name = pickNameAlias(raw)
+      if (!name) continue
+      if (addCount >= MAX_DISC_ADD) continue
+      addCount += 1
+      const next: Extract<WorldOp, { op: 'disciple.add' }> = { op: 'disciple.add', name }
+      if (raw.gender === '男' || raw.gender === '女') next.gender = raw.gender
+      if (typeof raw.age === 'number') next.age = raw.age
+      if (typeof raw.realm === 'string') next.realm = raw.realm
+      if (typeof raw.aptitude === 'string') next.aptitude = raw.aptitude
+      if (typeof raw.role === 'string') next.role = raw.role
+      if (typeof raw.loyalty === 'number') next.loyalty = raw.loyalty
+      if (typeof raw.mood === 'string') next.mood = raw.mood
+      if (Array.isArray(raw.talent)) next.talent = raw.talent.map(String)
+      if (typeof raw.status === 'string' && DISCIPLE_STATUS.has(raw.status as Disciple['status'])) {
+        next.status = raw.status as Disciple['status']
+      }
+      if (typeof raw.master === 'string') next.master = raw.master
+      ops.push(next)
+      continue
+    }
+
+    // 其它 op：浅拷贝保留，后续 validate 再严查
+    ops.push(rawOp as WorldOp)
+  }
+
+  return {
+    resources,
+    ops,
+    summary: delta.summary !== undefined ? String(delta.summary) : undefined,
+  }
+}
+
 export function validateWorldDelta(delta: WorldDelta, snap: WorldSnapshot): ValidateResult {
   const errors: string[] = []
   const warnings: string[] = []

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   parseSettlePayload,
   validateWorldDelta,
+  sanitizeWorldDelta,
   applyWorldDeltaToSnapshot,
   emptyTestSnapshot,
 } from './world-delta'
@@ -95,6 +96,40 @@ describe('parseSettlePayload', () => {
   it('strips fullwidth wrappers', () => {
     const r = parseSettlePayload('（{"resources":{},"ops":[],"summary":"无"}）')
     expect(r.ok).toBe(true)
+  })
+})
+
+describe('sanitizeWorldDelta', () => {
+  it('caps disciple.add over MAX and drops nameless adds so validate passes', () => {
+    const raw = {
+      resources: {},
+      ops: [
+        { op: 'disciple.add', name: '甲' },
+        { op: 'disciple.add' }, // no name
+        { op: 'disciple.add', 姓名: '乙' }, // alias
+        { op: 'disciple.add', name: '丙' },
+        { op: 'disciple.add', name: '丁' },
+        { op: 'disciple.add', name: '戊' }, // 4th named after drop would exceed
+        { op: 'notify.push', title: '风闻' },
+      ] as never[],
+      summary: '收徒过多',
+    }
+    const cleaned = sanitizeWorldDelta(raw as never)
+    const adds = (cleaned.ops || []).filter((o) => o.op === 'disciple.add')
+    expect(adds.length).toBeLessThanOrEqual(3)
+    expect(adds.every((o) => o.op === 'disciple.add' && o.name?.trim())).toBe(true)
+    // alias 姓名 → name
+    expect(adds.some((o) => o.op === 'disciple.add' && o.name === '乙')).toBe(true)
+    const v = validateWorldDelta(cleaned, emptyTestSnapshot())
+    expect(v.ok).toBe(true)
+  })
+
+  it('fills disciple.add name from 姓名 / character aliases', () => {
+    const cleaned = sanitizeWorldDelta({
+      ops: [{ op: 'disciple.add', character: '陆承渊', realm: '炼气一层' } as never],
+    })
+    expect(cleaned.ops?.[0]).toMatchObject({ op: 'disciple.add', name: '陆承渊' })
+    expect(validateWorldDelta(cleaned, emptyTestSnapshot()).ok).toBe(true)
   })
 })
 
