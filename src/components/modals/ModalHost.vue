@@ -7,7 +7,6 @@ import { useToast } from '@/composables/useToast'
 import { useGameState } from '@/composables/useGameState'
 import { useTianji } from '@/composables/useTianji'
 import {
-  urgentEvents,
   alchemyRecipes,
   forgeQueue,
   manuals,
@@ -28,6 +27,8 @@ const {
   disciples,
   cities,
   factions,
+  urgentEvents,
+  resolveUrgentEvent,
 } = useGameState()
 const { injectContext, pushEvent, sendPlayer } = useTianji()
 
@@ -37,7 +38,9 @@ function p<T = string>(key: string) {
   return top.value?.props?.[key] as T
 }
 
-const event = computed(() => urgentEvents.find((e) => e.id === p('eventId')))
+const event = computed(() =>
+  urgentEvents.value.find((e) => e.id === p('eventId') && (e.status ?? 'open') === 'open'),
+)
 const disciple = computed(() => disciples.value.find((d) => d.id === p('discipleId')))
 const recipe = computed(() => alchemyRecipes.find((a) => a.id === p('recipeId')))
 const forge = computed(() => forgeQueue.find((g) => g.id === p('forgeId')))
@@ -57,16 +60,23 @@ function resolveName(id: string) {
 function onEventChoice(choiceId: string) {
   const e = event.value
   if (!e) return
-  const c = e.choices.find((x) => x.id === choiceId)
-  if (!c) return
-  if (choiceId === 'c3') {
-    injectContext('赤焰谷使者', e.summary)
-    pushEvent(`掌门选择：${c.label}。使者已延入侧殿，对谈即将展开。`, '赤焰谷')
+  const result = resolveUrgentEvent(e.id, choiceId)
+  if (!result.ok) {
+    toast.info(result.error)
+    close()
+    return
+  }
+  if (result.openTianji) {
+    injectContext(e.title, e.summary)
+    pushEvent(
+      `掌门选择：${result.label}。事务已销案，后续可在天机中继续交涉。`,
+      e.title,
+    )
     focusTianji()
-    toast.info('已转入天机交涉', c.label)
+    toast.info('已决并转入天机', result.label)
   } else {
-    toast.success('决策已生效', `${c.label} — ${c.effect}`)
-    pushEvent(`【决议】${e.title}：${c.label}（${c.effect}）`, e.title)
+    toast.success('决策已生效，事务已销案', `${result.label} — ${result.effect}`)
+    pushEvent(`【决议】${e.title}：${result.label}（${result.effect}）`, e.title)
   }
   close()
 }

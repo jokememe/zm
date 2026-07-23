@@ -6,6 +6,7 @@ import type {
   Disciple,
   Faction,
   CityState,
+  UrgentEvent,
 } from '@/types/game'
 import {
   resources as initialResources,
@@ -17,6 +18,7 @@ import {
   CALENDAR,
   SECT_NAME as DEFAULT_SECT,
   MASTER_NAME as DEFAULT_MASTER,
+  cloneUrgentEventsSeed,
 } from '@/data/mock'
 import {
   OPENING_STORAGE_KEY,
@@ -90,6 +92,9 @@ const notifications = ref<NotificationItem[]>(
     ? [...initialNotifications]
     : (buildOpeningNotifications(masterName.value, sectName.value) as NotificationItem[]),
 )
+
+/** 大殿「紧急与待决」：运行时状态，处理后 status=resolved 并从列表隐藏 */
+const urgentEvents = ref<UrgentEvent[]>(cloneUrgentEventsSeed())
 
 const disciples = ref<Disciple[]>(
   openingDone.value
@@ -191,6 +196,60 @@ export function useGameState() {
     notifications.value = notifications.value.map((n) => ({ ...n, read: true }))
   }
 
+  /** 仍待处理的紧急/待决（大殿列表） */
+  const openUrgentEvents = computed(() =>
+    urgentEvents.value.filter((e) => (e.status ?? 'open') === 'open'),
+  )
+
+  /**
+   * 处理一条待决：应用选项资源变化，标记 resolved，大殿不再显示。
+   * @returns 选项文案与是否转天机，供 UI toast / 注入
+   */
+  function resolveUrgentEvent(
+    eventId: string,
+    choiceId: string,
+  ): { ok: true; label: string; effect: string; openTianji: boolean } | { ok: false; error: string } {
+    const idx = urgentEvents.value.findIndex((e) => e.id === eventId)
+    if (idx < 0) return { ok: false, error: '事件不存在' }
+    const ev = urgentEvents.value[idx]
+    if ((ev.status ?? 'open') === 'resolved') {
+      return { ok: false, error: '事件已处理' }
+    }
+    const choice = ev.choices.find((c) => c.id === choiceId)
+    if (!choice) return { ok: false, error: '选项不存在' }
+
+    if (choice.resourceDelta) {
+      adjustResource(choice.resourceDelta)
+    }
+
+    const next = [...urgentEvents.value]
+    next[idx] = {
+      ...ev,
+      status: 'resolved',
+      resolvedChoiceId: choiceId,
+      resolvedLabel: choice.label,
+    }
+    urgentEvents.value = next
+
+    // 决策记入通知（已读，作履历）
+    const note: NotificationItem = {
+      id: `n-evt-${eventId}-${Date.now()}`,
+      title: `已决：${ev.title}`,
+      body: `${choice.label}（${choice.effect}）`,
+      timeLabel: '方才',
+      category: '决议',
+      read: true,
+    }
+    notifications.value = [note, ...notifications.value]
+
+    return {
+      ok: true,
+      label: choice.label,
+      effect: choice.effect,
+      openTianji: !!choice.openTianji,
+    }
+  }
+
   function adjustResource(partial: Partial<Resources>) {
     for (const [k, v] of Object.entries(partial)) {
       const key = k as keyof Resources
@@ -278,6 +337,7 @@ export function useGameState() {
     factions.value = initialFactions.map((f) => ({ ...f }))
     cities.value = initialCities.map((c) => ({ ...c }))
     notifications.value = buildOpeningNotifications(master, name) as NotificationItem[]
+    urgentEvents.value = cloneUrgentEventsSeed()
     designatedHeirId.value = initialHeirs.find((h) => h.designated)?.id ?? 'h2'
 
     // 困难/硬核：继承人须在现有弟子中
@@ -330,6 +390,7 @@ export function useGameState() {
       masterName.value,
       sectName.value,
     ) as NotificationItem[]
+    urgentEvents.value = cloneUrgentEventsSeed()
     disciples.value = pickDisciplesForDifficulty('standard')
     factions.value = initialFactions.map((f) => ({ ...f }))
     cities.value = initialCities.map((c) => ({ ...c }))
@@ -361,6 +422,8 @@ export function useGameState() {
     navDrawerOpen,
     resources,
     notifications,
+    urgentEvents,
+    openUrgentEvents,
     disciples,
     factions,
     cities,
@@ -381,6 +444,7 @@ export function useGameState() {
     closeTianjiSheet,
     markNotificationRead,
     markAllNotificationsRead,
+    resolveUrgentEvent,
     adjustResource,
     setDesignatedHeir,
     advanceSeason,

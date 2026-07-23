@@ -77,6 +77,7 @@ export const hallStats = [
   { id: 'morale', label: '宗门士气', value: '41%', sub: '较上月 +3%', icon: 'destiny', tone: 'jade' },
 ]
 
+/** 种子待决事件（运行时拷贝到 useGameState，处理后从大殿列表移除） */
 export const urgentEvents: UrgentEvent[] = [
   {
     id: 'evt-envoy',
@@ -85,10 +86,29 @@ export const urgentEvents: UrgentEvent[] = [
     severity: 'critical',
     source: '山门执事',
     timeLabel: '半个时辰前',
+    status: 'open',
     choices: [
-      { id: 'c1', label: '婉拒并赠薄礼', effect: '声望 -2 · 敌意暂缓', risk: '可能被视作软弱' },
-      { id: 'c2', label: '允许外围勘查三日', effect: '灵石 +200 · 气运 -1', risk: '矿脉信息泄露' },
-      { id: 'c3', label: '请入大殿对谈（天机）', effect: '开启叙事交涉', risk: '取决于你的辞令' },
+      {
+        id: 'c1',
+        label: '婉拒并赠薄礼',
+        effect: '声望 -2 · 敌意暂缓',
+        risk: '可能被视作软弱',
+        resourceDelta: { prestige: -2 },
+      },
+      {
+        id: 'c2',
+        label: '允许外围勘查三日',
+        effect: '灵石 +200 · 气运 -1',
+        risk: '矿脉信息泄露',
+        resourceDelta: { spiritStone: 200, destiny: -1 },
+      },
+      {
+        id: 'c3',
+        label: '请入大殿对谈（天机）',
+        effect: '开启叙事交涉',
+        risk: '取决于你的辞令',
+        openTianji: true,
+      },
     ],
   },
   {
@@ -98,9 +118,22 @@ export const urgentEvents: UrgentEvent[] = [
     severity: 'warn',
     source: '灵田管事',
     timeLabel: '今晨',
+    status: 'open',
     choices: [
-      { id: 'h1', label: '加派两名外门弟子', effect: '灵谷更稳 · 外勤 -2', risk: '无' },
-      { id: 'h2', label: '设简易禁制即可', effect: '丹材 -5 · 风险中等', risk: '或有损耗' },
+      {
+        id: 'h1',
+        label: '加派两名外门弟子',
+        effect: '灵谷更稳',
+        risk: '无',
+        resourceDelta: { spiritGrain: 40 },
+      },
+      {
+        id: 'h2',
+        label: '设简易禁制即可',
+        effect: '丹材 -5 · 风险中等',
+        risk: '或有损耗',
+        resourceDelta: { herb: -5 },
+      },
     ],
   },
   {
@@ -110,12 +143,32 @@ export const urgentEvents: UrgentEvent[] = [
     severity: 'info',
     source: '内门值事',
     timeLabel: '昨日',
+    status: 'open',
     choices: [
-      { id: 'd1', label: '准奏，授护身符', effect: '声望微升 · 法宝暂借出', risk: '弟子安危' },
-      { id: 'd2', label: '暂缓，先稳固根基', effect: '忠诚 -3', risk: '无' },
+      {
+        id: 'd1',
+        label: '准奏，授护身符',
+        effect: '声望微升',
+        risk: '弟子安危',
+        resourceDelta: { prestige: 1 },
+      },
+      {
+        id: 'd2',
+        label: '暂缓，先稳固根基',
+        effect: '暂无资源变动',
+        risk: '弟子或生怨气',
+      },
     ],
   },
 ]
+
+export function cloneUrgentEventsSeed(): UrgentEvent[] {
+  return urgentEvents.map((e) => ({
+    ...e,
+    status: 'open' as const,
+    choices: e.choices.map((c) => ({ ...c, resourceDelta: c.resourceDelta ? { ...c.resourceDelta } : undefined })),
+  }))
+}
 
 export const fieldPlots: FieldPlot[] = [
   { id: 'f1', name: '东坡一号田', grade: '黄品', crop: '青穗灵谷', yieldPerSeason: 420, moisture: 78, assigned: '林晚舟', status: 'growing', seasonLeft: 2 },

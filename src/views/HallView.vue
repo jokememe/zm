@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import Icon from '@/components/ui/Icon.vue'
-import { hallStats, urgentEvents, hallChronicle } from '@/data/mock'
+import { hallStats, hallChronicle } from '@/data/mock'
 import { useModal } from '@/composables/useModal'
 import { useGameState } from '@/composables/useGameState'
 import { useTianji } from '@/composables/useTianji'
@@ -17,10 +17,12 @@ const {
   masterName,
   disciples,
   difficultyLabel,
+  openUrgentEvents,
 } = useGameState()
 const { injectContext, startOpeningRun } = useTianji()
 
 const discipleCount = computed(() => disciples.value.length)
+const pendingEvents = openUrgentEvents
 
 async function startFromBeginning() {
   if (
@@ -65,12 +67,22 @@ function go(id: ViewId) {
         </p>
         <div class="hero__actions">
           <button
+            v-if="pendingEvents.length"
             id="btn-hall-urgent"
             class="btn btn-primary"
             type="button"
-            @click="openEvent(urgentEvents[0].id)"
+            @click="openEvent(pendingEvents[0].id)"
           >
             <Icon name="warn" :size="16" /> 处理紧急事务
+          </button>
+          <button
+            v-else
+            id="btn-hall-urgent-done"
+            class="btn btn-soft"
+            type="button"
+            disabled
+          >
+            <Icon name="spark" :size="16" /> 暂无待决
           </button>
           <button
             id="btn-hall-tianji"
@@ -119,11 +131,13 @@ function go(id: ViewId) {
       <section class="panel-card block" id="hall-urgent-list">
         <div class="section-head">
           <h2><span class="ornament" />紧急与待决</h2>
-          <span class="tag tag-rose">{{ urgentEvents.length }} 件</span>
+          <span class="tag" :class="pendingEvents.length ? 'tag-rose' : 'tag-jade'">
+            {{ pendingEvents.length ? `${pendingEvents.length} 件` : '已清' }}
+          </span>
         </div>
-        <ul class="event-list">
+        <ul v-if="pendingEvents.length" class="event-list">
           <li
-            v-for="e in urgentEvents"
+            v-for="e in pendingEvents"
             :id="`hall-event-${e.id}`"
             :key="e.id"
             class="event-item interactive"
@@ -141,6 +155,9 @@ function go(id: ViewId) {
             <Icon name="chevron-right" :size="16" class="chev" />
           </li>
         </ul>
+        <p v-else class="empty-urgent muted">
+          当前无待决事务。天机推演中的风闻与决议会出现在通知铃铛中。
+        </p>
       </section>
 
       <section class="panel-card block" id="hall-shortcuts">
@@ -319,6 +336,12 @@ function go(id: ViewId) {
   display: flex;
   flex-direction: column;
   gap: 0.65rem;
+}
+
+.empty-urgent {
+  margin: 0.5rem 0 0.25rem;
+  font-size: 0.88rem;
+  line-height: 1.6;
 }
 
 .event-item {

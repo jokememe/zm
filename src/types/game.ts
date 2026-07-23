@@ -53,6 +53,10 @@ export interface UrgentEvent {
   source: string
   timeLabel: string
   choices: EventChoice[]
+  /** open = 待决；resolved = 已处理，大殿列表默认隐藏 */
+  status?: 'open' | 'resolved'
+  resolvedChoiceId?: string
+  resolvedLabel?: string
 }
 
 export interface EventChoice {
@@ -60,6 +64,10 @@ export interface EventChoice {
   label: string
   effect: string
   risk?: string
+  /** 选择后立即写入资源的相对变化（可负） */
+  resourceDelta?: Partial<Resources>
+  /** 是否转入天机交涉（不在此关闭事件时由 UI 注入） */
+  openTianji?: boolean
 }
 
 export interface FieldPlot {
