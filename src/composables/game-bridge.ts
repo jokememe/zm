@@ -205,7 +205,7 @@ export function buildLiveLoreContent(extra?: {
     )
   }
   lines.push(
-    '结算约定：气数与名册/外交/城池由系统 settle 根据正文写入；请保证正文事实清楚。勿依赖 <vars> 改档。',
+    '结算约定：本回结束后系统会自动分析玩家发言与正文，改写资源/名册/势力/城池。勿依赖 <vars>。',
     '记忆约定：须输出 <sum> 一句话总结；系统将写入短期记忆，并择要入中长期。',
   )
   return lines.join('\n')

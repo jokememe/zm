@@ -600,9 +600,9 @@ function onTagsInput(value: string) {
       <div class="api-panel api-panel--secondary">
         <div class="secondary-head">
           <div>
-            <h3 class="api-panel__title">次 API（局面结算）</h3>
+            <h3 class="api-panel__title">次 API（自动局面分析）</h3>
             <p class="tj-hint" style="margin: 0">
-              主线写剧情；局面结算（弟子/势力/城池/资源）优先走次 API 输出短 JSON。建议次模型温度 ≤0.3。
+              每回合推演结束后，系统自动分析本回对话并改写名册/外交/城池/资源（无需你手填变量）。优先用次 API 出短 JSON；建议温度 ≤0.3。
             </p>
           </div>
           <label class="switch">
@@ -619,7 +619,7 @@ function onTagsInput(value: string) {
         </div>
 
         <div class="tj-field" style="margin-bottom: 0.85rem">
-          <label>局面结算</label>
+          <label>自动局面分析</label>
           <select
             class="tj-input"
             :value="props.settings.settlementMode || 'secondary_then_primary'"
@@ -631,13 +631,13 @@ function onTagsInput(value: string) {
             "
           >
             <option value="off">关闭（最省 token，对话不改局面）</option>
-            <option value="secondary_only">仅次通灵（未配次 API 则不结算）</option>
+            <option value="secondary_only">仅次通灵分析（未配次 API 则不写入）</option>
             <option value="secondary_then_primary">
-              次通灵优先，否则主通灵（默认）
+              次通灵优先，否则主通灵分析（默认）
             </option>
           </select>
           <p class="tj-hint">
-            结算为额外短 JSON 调用。关闭可避免每回合第二请求；仅次通灵更稳且不烧主模型。
+            每回合在剧情之后自动多一次短 JSON 调用。关闭可省 token；仅次通灵更稳且不烧主模型。
           </p>
         </div>
 

@@ -69,7 +69,11 @@ const SETTLE_SCHEMA_HINT = `只输出一个 JSON 对象（不要 Markdown 围栏
   ],
   "summary": "一句话局面变化"
 }
-规则：只记录正文已发生或明确立即生效的变更；禁止虚构未出场人物入册；无变更时 {"resources":{},"ops":[],"summary":"无局面变更"}；ops≤12，disciple.add≤3。`
+规则：
+1. 你是自动局面分析：综合【玩家发言】【剧情】【sum】与【当前局面】，推断本回应写入的变更。
+2. 玩家口头声明（如「收张三为徒」「与赤焰谷交恶」）若被剧情确认或未被明确否定，应结算；剧情否决则不结算。
+3. 只记本回已生效的变更；禁止凭空新增未在对话中出现的人名/势力。
+4. 无变更时 {"resources":{},"ops":[],"summary":"无局面变更"}；ops≤12，disciple.add≤3。`
 
 function buildSettleMessages(input: {
   userText: string
@@ -79,6 +83,8 @@ function buildSettleMessages(input: {
   errorFeedback?: string
 }): Array<{ role: string; content: string }> {
   const body = [
+    '【任务】对本回对话做局面变量分析，输出 JSON 补丁（系统将自动写回名册/外交/城池/资源）。',
+    '',
     '【当前局面】',
     formatSnapshotForSettle(input.snap),
     '',
@@ -100,7 +106,7 @@ function buildSettleMessages(input: {
     {
       role: 'system',
       content:
-        '你是宗门局面结算官。根据剧情输出严格 JSON 局面补丁，不要写故事，不要解释。',
+        '你是宗门自动局面分析器（变量结算）。只根据本回对话与当前局面输出严格 JSON 补丁，不要写故事，不要解释。',
     },
     { role: 'user', content: body.join('\n') },
   ]

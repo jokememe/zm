@@ -754,24 +754,30 @@ export function useTianji() {
           if (settle.reason === 'secondary_only_unavailable') {
             appendLocal(
               'system',
-              '【局面结算】仅次通灵模式，但未启用/配齐次 API，本回局面未变更',
+              '【自动局面分析】已关闭写入：密匣为「仅次通灵」但未配齐次 API',
             )
           }
           stateAfter = snapshotWorldState()
         } else if (settle.status === 'failed') {
           lastSettlement.value = null
-          appendLocal('system', `【局面结算失败】${settle.error}（本回局面未变更）`)
+          appendLocal(
+            'system',
+            `【自动局面分析失败】${settle.error}（本回局面未变更）`,
+          )
           stateAfter = settle.stateAfter
         } else if (settle.status === 'applied') {
           lastSettlement.value = settle.lines.join('；')
-          appendLocal('system', `【局面结算】${settle.lines.join('；')}`)
+          appendLocal(
+            'system',
+            `【自动局面分析】${settle.lines.join('；')}`,
+          )
           stateAfter = settle.stateAfter
           if (settings.value) {
             await syncSystemLore(settings.value)
             lorebooks.value = await getLorebooks()
           }
         } else {
-          // empty
+          // empty — still automatic; silent is fine
           stateAfter = settle.stateAfter
         }
       }
