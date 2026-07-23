@@ -197,6 +197,10 @@ export async function postChatCompletion(options: {
   baseUrl: string
   apiKey: string
   body: Record<string, unknown>
+  /** 客户端超时 ms；超时 abort，避免局面分析无限挂起 */
+  timeoutMs?: number
+  /** 仅用 Bearer（局面分析默认 true，避免 401 连试 3 套头拖死） */
+  bearerOnly?: boolean
 }): Promise<{ ok: true; data: unknown; usedUrl: string } | { ok: false; error: string; status?: number }> {
   const diag = diagnoseBrowserApiBlock(options.baseUrl)
   if (diag.blocked && diag.reason === 'mixed-content') {
@@ -209,43 +213,67 @@ export async function postChatCompletion(options: {
   const bases = candidateBases(options.baseUrl)
   if (!bases.length) return { ok: false, error: '请填写 Base URL' }
 
-  const headerVariants: Record<string, string>[] = [
-    {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-      Authorization: `Bearer ${key}`,
-    },
-    {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-      'api-key': key,
-    },
-    {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-      'x-api-key': key,
-    },
-  ]
+  const headerVariants: Record<string, string>[] = options.bearerOnly
+    ? [
+        {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          Authorization: `Bearer ${key}`,
+        },
+      ]
+    : [
+        {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          Authorization: `Bearer ${key}`,
+        },
+        {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'api-key': key,
+        },
+        {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'x-api-key': key,
+        },
+      ]
 
+  const timeoutMs = options.timeoutMs
   const errors: string[] = []
   for (const base of bases) {
     const url = `${base}/chat/completions`
     for (const headers of headerVariants) {
+      const controller = timeoutMs ? new AbortController() : null
+      const timer =
+        controller && timeoutMs
+          ? setTimeout(() => controller.abort(), timeoutMs)
+          : null
       try {
         const res = await fetch(proxify(url), {
           method: 'POST',
           headers,
           body: JSON.stringify(options.body),
+          signal: controller?.signal,
         })
+        if (timer) clearTimeout(timer)
         if (res.ok) {
           const data = await res.json()
           return { ok: true, data, usedUrl: url }
         }
         const text = await res.text().catch(() => '')
         errors.push(`${url} HTTP ${res.status}: ${text.slice(0, 160)}`)
+        // 401/403 才试下一套鉴权头；其它错误直接结束该 base
         if (res.status !== 401 && res.status !== 403) break
       } catch (e) {
+        if (timer) clearTimeout(timer)
+        const name = (e as Error)?.name || ''
         const msg = (e as Error)?.message ?? String(e)
+        if (name === 'AbortError') {
+          errors.push(`${url} 超时（${timeoutMs}ms）`)
+          // 超时不试其它头/base，直接失败
+          return { ok: false, error: errors[errors.length - 1] }
+        }
         if (/Failed to fetch|NetworkError|Load failed/i.test(msg)) {
           errors.push(
             `${url} 失败（多为 CORS 或混合内容）。API 需 HTTPS + Access-Control-Allow-Origin。`,

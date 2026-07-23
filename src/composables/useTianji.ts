@@ -762,10 +762,13 @@ export function useTianji() {
                       model: String(api.model || '').trim() || String(body.model || ''),
                     }
               const model = ep.model || String(body.model || '')
+              // 局面分析：单次 Bearer + 客户端 45s 超时，避免多鉴权头连试与无限挂起
               const completion = await postChatCompletion({
                 baseUrl: ep.baseUrl,
                 apiKey: ep.apiKey,
                 body: { ...body, model, stream: false },
+                timeoutMs: 45000,
+                bearerOnly: true,
               })
               if (!completion.ok) {
                 return { ok: false as const, error: completion.error || 'settle HTTP 失败' }
