@@ -4,6 +4,9 @@ import {
   formatSnapshotForSettle,
   clipText,
   textFromSettleCompletion,
+  buildSettleMessages,
+  SETTLE_SYSTEM_PROMPT,
+  SETTLE_CONTRACT_HINT,
 } from './settle-runner'
 import { parseSettlePayload, emptyTestSnapshot } from './world-delta'
 
@@ -52,6 +55,31 @@ describe('formatSnapshotForSettle', () => {
 describe('clipText', () => {
   it('clips long text', () => {
     expect(clipText('abcdefghij', 5)).toBe('abcde…')
+  })
+})
+
+describe('buildSettleMessages (NL contract, no API json_schema)', () => {
+  it('uses natural-language system + contract, not response_format schema', () => {
+    const msgs = buildSettleMessages({
+      userText: '收陆承渊为徒',
+      maintext: '山门之下，陆承渊拜入青岚。',
+      sum: '收徒陆承渊',
+      snap: emptyTestSnapshot(),
+    })
+    expect(msgs).toHaveLength(2)
+    expect(msgs[0].role).toBe('system')
+    expect(msgs[0].content).toBe(SETTLE_SYSTEM_PROMPT)
+    expect(msgs[0].content).toMatch(/JSON\.parse|JSON/)
+    expect(msgs[1].role).toBe('user')
+    expect(msgs[1].content).toContain('【当前局面】')
+    expect(msgs[1].content).toContain('收陆承渊为徒')
+    expect(msgs[1].content).toContain(SETTLE_CONTRACT_HINT)
+    // 示例驱动：update 必须 patch；资源中文键
+    expect(msgs[1].content).toContain('"patch"')
+    expect(msgs[1].content).toContain('灵石')
+    expect(msgs[1].content).toContain('disciple.add')
+    // 明确不依赖 API structured output 字段名
+    expect(JSON.stringify(msgs)).not.toMatch(/response_format|json_schema/)
   })
 })
 

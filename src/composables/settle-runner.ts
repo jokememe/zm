@@ -92,36 +92,72 @@ export function clipText(s: string, max: number): string {
   return t.slice(0, max) + '…'
 }
 
-const SETTLE_SCHEMA_HINT = `只输出严格 JSON（双引号键值，无尾逗号，无其它文字）：
-{"resources":{"灵石":0},"ops":[],"summary":""}
-ops 可选：disciple.add|update|remove，faction.update，city.update，notify.push
-disciple.add 必须含 name（弟子姓名）；正文收了几个写几个，勿漏名
-字段用 id 或 name 定位；无变更时 ops=[] resources={} summary="无"
-ops 总数最多 12。禁止单引号、禁止 markdown 代码块外的解释。`
+/**
+ * 局面结算系统提示。
+ * 刻意不用 API 的 response_format / json_schema：多数中转与本地模型不支持，
+ * 靠自然语言契约 + 示例 + 客户端 parse/sanitize/validate 兜底。
+ */
+export const SETTLE_SYSTEM_PROMPT = [
+  '你是宗门经营游戏的局面结算器，不是说书人。',
+  '唯一任务：根据【当前局面】与本回【玩家/sum/剧情】，输出一个可被 JSON.parse 的对象，表示本回应写入存档的变更。',
+  '禁止：故事正文、分析过程、markdown 代码围栏、前后缀说明、思考标签。',
+  '禁止：虚构正文未出现的收徒/交恶/纳贡；禁止编造快照中不存在的弟子 id。',
+  '无任何局面变更时只输出：{"resources":{},"ops":[],"summary":"无"}',
+].join('')
 
-function buildSettleMessages(input: {
+/**
+ * 放在 user 末尾的契约说明（示例驱动，兼容不支持 structured output 的模型）。
+ */
+export const SETTLE_CONTRACT_HINT = `【输出契约·严格遵守】
+只输出一个 JSON 对象（双引号键值，无尾逗号，无其它文字）。不要用单引号。不要包 \`\`\`json。
+
+根结构：
+{"resources":{},"ops":[],"summary":"一句话"}
+
+resources：可选。键只能是中文：灵石、灵谷、丹材、矿铁、声望、气运。
+值用数字相对变化（可负），如 {"灵石":-30,"声望":1}。不要用英文键 spiritStone。
+
+ops：数组，本回最多 12 条。op 只能是下列之一（字面量完全一致）：
+- disciple.add：新人入宗。必须有 name。正文收了几个就写几条，勿漏名。
+  例 {"op":"disciple.add","name":"陆承渊","realm":"炼气一层","role":"外门弟子","gender":"男"}
+- disciple.update：改现有弟子。必须用快照里的 id 或 name，且必须有 patch 对象。
+  例 {"op":"disciple.update","name":"陆承渊","patch":{"loyalty":85,"status":"外勤"}}
+  错误示例（禁止）：{"op":"disciple.update","name":"陆承渊","loyalty":85}
+- disciple.remove：离宗/除名。id 或 name 二选一。
+  例 {"op":"disciple.remove","name":"某某"}
+- faction.update：改势力。id 或 name + patch。
+  例 {"op":"faction.update","name":"赤焰谷","patch":{"relation":-40,"stance":"敌对","recent":"遣使"}}
+  stance 只能是：同盟、友好、中立、敌对、觊觎
+- city.update：改城池。id 或 name + patch。
+  例 {"op":"city.update","name":"青石城","patch":{"attitude":"犹豫","influence":40}}
+  attitude 只能是：恭顺、中立、犹豫、敌视
+- notify.push：系统风闻。必须有 title。
+  例 {"op":"notify.push","title":"山门来客","body":"……"}
+
+弟子 status 只能是：在宗、闭关、外勤、受伤、叛离风险。
+定位优先用【当前局面】里的 id:名；改已有角色用 update，不要对已在册者再 add。
+只记录正文已发生或明确承诺且应立即生效的变更。`
+
+/** 组装 settle 的 messages（纯函数，便于单测；不依赖 API schema 能力） */
+export function buildSettleMessages(input: {
   userText: string
   maintext: string
   sum: string
   snap: WorldSnapshot
 }): Array<{ role: string; content: string }> {
-  // 优先 sum + 短剧情，控制 token
   const main = clipText(input.maintext, 700)
   const user = clipText(input.userText, 280)
   const sum = clipText(input.sum, 200)
   const body = [
+    '【当前局面】',
     formatSnapshotForSettle(input.snap),
-    `玩家：${user || '无'}`,
-    `sum：${sum || '无'}`,
-    `剧情：${main || '无'}`,
-    SETTLE_SCHEMA_HINT,
+    `【玩家】${user || '无'}`,
+    `【sum】${sum || '无'}`,
+    `【剧情】${main || '无'}`,
+    SETTLE_CONTRACT_HINT,
   ].join('\n')
   return [
-    {
-      role: 'system',
-      content:
-        '局面结算器。根据本回对话输出严格 JSON 补丁，禁止故事与解释。',
-    },
+    { role: 'system', content: SETTLE_SYSTEM_PROMPT },
     { role: 'user', content: body },
   ]
 }
