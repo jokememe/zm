@@ -77,6 +77,84 @@ describe('yuzuki prompt contracts (shipped)', () => {
   })
 })
 
+describe('resolveMemoryTraceTarget (independent memory API)', () => {
+  it('prefers memory when enabled and ready', () => {
+    const settings: AppSettings = {
+      ...DEFAULT_SETTINGS,
+      api: {
+        ...DEFAULT_SETTINGS.api,
+        baseUrl: 'https://primary.test/v1',
+        apiKey: 'sk-primary',
+        model: 'primary-model',
+        secondary: {
+          enabled: true,
+          baseUrl: 'https://secondary.test/v1',
+          apiKey: 'sk-sec',
+          model: 'sec-model',
+        },
+        memory: {
+          enabled: true,
+          baseUrl: 'https://memory.test/v1',
+          apiKey: 'sk-mem',
+          model: 'mem-model',
+        },
+      },
+    }
+    expect(resolveMemoryTraceTarget(settings)).toBe('memory')
+  })
+
+  it('does not silently fall back when memory enabled but incomplete', () => {
+    const settings: AppSettings = {
+      ...DEFAULT_SETTINGS,
+      api: {
+        ...DEFAULT_SETTINGS.api,
+        baseUrl: 'https://primary.test/v1',
+        apiKey: 'sk-primary',
+        model: 'primary-model',
+        memory: {
+          enabled: true,
+          baseUrl: '',
+          apiKey: '',
+          model: '',
+        },
+      },
+    }
+    expect(resolveMemoryTraceTarget(settings)).toBeNull()
+  })
+
+  it('falls back secondary → primary when memory not enabled', () => {
+    const withSec: AppSettings = {
+      ...DEFAULT_SETTINGS,
+      api: {
+        ...DEFAULT_SETTINGS.api,
+        baseUrl: 'https://primary.test/v1',
+        apiKey: 'sk-primary',
+        model: 'primary-model',
+        secondary: {
+          enabled: true,
+          baseUrl: 'https://secondary.test/v1',
+          apiKey: 'sk-sec',
+          model: 'sec-model',
+        },
+        memory: { enabled: false, baseUrl: '', apiKey: '', model: '' },
+      },
+    }
+    expect(resolveMemoryTraceTarget(withSec)).toBe('secondary')
+
+    const primaryOnly: AppSettings = {
+      ...DEFAULT_SETTINGS,
+      api: {
+        ...DEFAULT_SETTINGS.api,
+        baseUrl: 'https://primary.test/v1',
+        apiKey: 'sk-primary',
+        model: 'primary-model',
+        memory: { enabled: false, baseUrl: '', apiKey: '', model: '' },
+      },
+    }
+    expect(resolveMemoryTraceTarget(primaryOnly)).toBe('primary')
+  })
+})
+
 describe('runMemoryTrace (shipped entry)', () => {
   it('applies Memory from mocked LLM via real apply path', async () => {
     const settings: AppSettings = {
@@ -114,6 +192,47 @@ describe('runMemoryTrace (shipped entry)', () => {
     expect(char?.values['当前位置']).toBe('山门')
   })
 
+  it('routes postChat to memory target and uses memory model', async () => {
+    const settings: AppSettings = {
+      ...DEFAULT_SETTINGS,
+      api: {
+        ...DEFAULT_SETTINGS.api,
+        baseUrl: 'https://primary.test/v1',
+        apiKey: 'sk-primary',
+        model: 'primary-model',
+        memory: {
+          enabled: true,
+          baseUrl: 'https://memory.test/v1',
+          apiKey: 'sk-mem',
+          model: 'mem-model',
+          temperature: 0.15,
+          maxTokens: 900,
+        },
+      },
+    }
+    let seenTarget: string | null = null
+    let seenModel: string | null = null
+    let seenTemp: number | null = null
+    const outcome = await runMemoryTrace({
+      userText: 'u',
+      maintext: '陆承渊路过',
+      settings,
+      postChat: async ({ target, body }) => {
+        seenTarget = target
+        seenModel = String(body.model || '')
+        seenTemp = Number(body.temperature)
+        return {
+          ok: true as const,
+          text: `<Memory>#角色档案\n[陆承渊]|身份：客卿</Memory>`,
+        }
+      },
+    })
+    expect(seenTarget).toBe('memory')
+    expect(seenModel).toBe('mem-model')
+    expect(seenTemp).toBeCloseTo(0.15)
+    expect(outcome.status).toBe('applied')
+  })
+
   it('buildMemoryTraceRequestBody is non-empty and pure', () => {
     const { messages, body } = buildMemoryTraceRequestBody({
       model: 'm',
@@ -133,6 +252,28 @@ describe('runMemoryTrace (shipped entry)', () => {
       postChat: async () => ({ ok: true as const, text: '' }),
     })
     expect(outcome.status).toBe('skipped')
+  })
+
+  it('skips with memory_api_not_ready when memory on but incomplete', async () => {
+    const outcome = await runMemoryTrace({
+      userText: 'x',
+      maintext: 'y',
+      settings: {
+        ...DEFAULT_SETTINGS,
+        api: {
+          ...DEFAULT_SETTINGS.api,
+          baseUrl: 'https://p.test/v1',
+          apiKey: 'sk-p',
+          model: 'p',
+          memory: { enabled: true, baseUrl: '', apiKey: '', model: '' },
+        },
+      },
+      postChat: async () => ({ ok: true as const, text: '' }),
+    })
+    expect(outcome.status).toBe('skipped')
+    if (outcome.status === 'skipped') {
+      expect(outcome.reason).toBe('memory_api_not_ready')
+    }
   })
 })
 

@@ -51,6 +51,7 @@ export function loadApiCache(): Partial<ApiSettings> | null {
       model: typeof o.model === 'string' ? o.model : '',
       timeout: typeof o.timeout === 'number' ? o.timeout : 60000,
       secondary: o.secondary,
+      memory: o.memory,
     }
   } catch {
     return null
@@ -67,6 +68,7 @@ export function saveApiCache(api: ApiSettings) {
         model: api.model ?? '',
         timeout: api.timeout ?? 60000,
         secondary: api.secondary,
+        memory: api.memory,
       }),
     )
   } catch {
@@ -89,6 +91,11 @@ export function mergeApiSettings(
       ...defaults.secondary!,
       ...(fromDb?.secondary || {}),
       ...(cache?.secondary || {}),
+    },
+    memory: {
+      ...defaults.memory!,
+      ...(fromDb?.memory || {}),
+      ...(cache?.memory || {}),
     },
   }
 

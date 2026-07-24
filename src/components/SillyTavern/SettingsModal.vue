@@ -47,6 +47,7 @@ async function updateSettings(partial: Partial<AppSettings>) {
 const tabs = [
   { id: 'primary', label: '主 API' },
   { id: 'secondary', label: '次 API' },
+  { id: 'memory', label: '记忆 API' },
   { id: 'tags', label: '称谓' },
   { id: 'prompt', label: '格式' },
   { id: 'display', label: '显示' },
@@ -58,6 +59,7 @@ const tab = ref<TabId>('primary')
 const busy = ref<string | null>(null)
 const primaryModels = ref<string[]>([])
 const secondaryModels = ref<string[]>([])
+const memoryModels = ref<string[]>([])
 const storageInfo = getActiveStorageInfo()
 const legacySharedDbs = ref<string[]>([])
 const allowCrossAppImport = ref(false)
@@ -79,6 +81,14 @@ const draftSecondary = reactive({
   temperature: 0.7,
   maxTokens: 8000,
 })
+const draftMemory = reactive({
+  enabled: false,
+  baseUrl: '',
+  apiKey: '',
+  model: '',
+  temperature: 0.2,
+  maxTokens: 1200,
+})
 
 function pullDraftFromProps() {
   const api = props.settings.api
@@ -94,6 +104,13 @@ function pullDraftFromProps() {
   draftSecondary.model = sec?.model ?? ''
   draftSecondary.temperature = sec?.temperature ?? 0.7
   draftSecondary.maxTokens = sec?.maxTokens ?? 8000
+  const mem = api.memory
+  draftMemory.enabled = !!mem?.enabled
+  draftMemory.baseUrl = mem?.baseUrl ?? ''
+  draftMemory.apiKey = mem?.apiKey ?? ''
+  draftMemory.model = mem?.model ?? ''
+  draftMemory.temperature = mem?.temperature ?? 0.2
+  draftMemory.maxTokens = mem?.maxTokens ?? 1200
 }
 
 onMounted(async () => {
@@ -116,8 +133,62 @@ const secondary = computed(
     },
 )
 
+const memory = computed(
+  () =>
+    props.settings.api.memory ?? {
+      enabled: false,
+      baseUrl: '',
+      apiKey: '',
+      model: '',
+      temperature: 0.2,
+      maxTokens: 1200,
+    },
+)
+
 function patch(partial: Partial<AppSettings>) {
   void updateSettings(partial)
+}
+
+/** 显示页 · 历史限制自定义：钳制后写入 */
+function clampInt(n: number, min: number, max: number): number {
+  if (!Number.isFinite(n)) return min
+  return Math.max(min, Math.min(max, Math.round(n)))
+}
+
+function patchHistoryKeep(raw: string | number) {
+  const n = clampInt(Number(raw), 0, 200)
+  patch({ historyKeepMessages: n })
+}
+
+function patchHistoryMaxTokens(raw: string | number) {
+  const n = clampInt(Number(raw), 0, 500_000)
+  patch({ historyMaxTokens: n })
+}
+
+const KEEP_PRESETS = [0, 4, 8, 12, 16, 24, 32, 48, 64] as const
+const TOKEN_PRESETS = [0, 4000, 8000, 12000, 16000, 20000, 32000, 48000, 64000] as const
+
+function packSideChannels() {
+  return {
+    secondary: {
+      ...secondary.value,
+      enabled: draftSecondary.enabled,
+      baseUrl: draftSecondary.baseUrl.trim(),
+      apiKey: draftSecondary.apiKey.trim(),
+      model: draftSecondary.model.trim(),
+      temperature: draftSecondary.temperature,
+      maxTokens: draftSecondary.maxTokens,
+    },
+    memory: {
+      ...memory.value,
+      enabled: draftMemory.enabled,
+      baseUrl: draftMemory.baseUrl.trim(),
+      apiKey: draftMemory.apiKey.trim(),
+      model: draftMemory.model.trim(),
+      temperature: draftMemory.temperature,
+      maxTokens: draftMemory.maxTokens,
+    },
+  }
 }
 
 /** 把主 API 草稿写入全局设置（内存 + 尽量落库） */
@@ -132,15 +203,7 @@ async function flushPrimary() {
         model: draftPrimary.model.trim(),
         timeout: Number(draftPrimary.timeout) || 60000,
         stream: draftPrimary.stream,
-        secondary: {
-          ...secondary.value,
-          enabled: draftSecondary.enabled,
-          baseUrl: draftSecondary.baseUrl.trim(),
-          apiKey: draftSecondary.apiKey.trim(),
-          model: draftSecondary.model.trim(),
-          temperature: draftSecondary.temperature,
-          maxTokens: draftSecondary.maxTokens,
-        },
+        ...packSideChannels(),
       },
     })
     saveHint.value = '已保存'
@@ -154,14 +217,6 @@ async function flushPrimary() {
 async function flushSecondary() {
   saveHint.value = '保存中…'
   try {
-    const nextSec = {
-      enabled: draftSecondary.enabled,
-      baseUrl: draftSecondary.baseUrl.trim(),
-      apiKey: draftSecondary.apiKey.trim(),
-      model: draftSecondary.model.trim(),
-      temperature: draftSecondary.temperature,
-      maxTokens: draftSecondary.maxTokens,
-    }
     await updateSettings({
       apiMode: draftSecondary.enabled ? 'dual' : props.settings.apiMode,
       api: {
@@ -169,11 +224,31 @@ async function flushSecondary() {
         baseUrl: draftPrimary.baseUrl.trim() || props.settings.api.baseUrl,
         apiKey: draftPrimary.apiKey.trim() || props.settings.api.apiKey,
         model: draftPrimary.model.trim() || props.settings.api.model,
-        secondary: nextSec,
+        ...packSideChannels(),
       },
     })
     saveHint.value = '已保存'
     showToast('次 API 已保存')
+  } catch (e) {
+    saveHint.value = '保存失败'
+    showToast('保存失败：' + ((e as Error).message || String(e)))
+  }
+}
+
+async function flushMemory() {
+  saveHint.value = '保存中…'
+  try {
+    await updateSettings({
+      api: {
+        ...props.settings.api,
+        baseUrl: draftPrimary.baseUrl.trim() || props.settings.api.baseUrl,
+        apiKey: draftPrimary.apiKey.trim() || props.settings.api.apiKey,
+        model: draftPrimary.model.trim() || props.settings.api.model,
+        ...packSideChannels(),
+      },
+    })
+    saveHint.value = '已保存'
+    showToast('记忆 API 已保存')
   } catch (e) {
     saveHint.value = '保存失败'
     showToast('保存失败：' + ((e as Error).message || String(e)))
@@ -190,6 +265,12 @@ function patchSecondary(partial: Partial<typeof draftSecondary>) {
   }
 }
 
+function patchMemory(partial: Partial<typeof draftMemory>) {
+  Object.assign(draftMemory, partial)
+  // 开关即时落盘，避免只改开关却未保存
+  void flushMemory()
+}
+
 function copyPrimaryToSecondary() {
   draftSecondary.enabled = true
   draftSecondary.baseUrl = draftPrimary.baseUrl
@@ -200,12 +281,40 @@ function copyPrimaryToSecondary() {
   tab.value = 'secondary'
 }
 
+function copyPrimaryToMemory() {
+  draftMemory.enabled = true
+  draftMemory.baseUrl = draftPrimary.baseUrl
+  draftMemory.apiKey = draftPrimary.apiKey
+  draftMemory.model = draftPrimary.model
+  void flushMemory()
+  showToast('已从主 API 复制到记忆 API 并启用')
+  tab.value = 'memory'
+}
+
+function copySecondaryToMemory() {
+  draftMemory.enabled = true
+  draftMemory.baseUrl = draftSecondary.baseUrl || draftPrimary.baseUrl
+  draftMemory.apiKey = draftSecondary.apiKey || draftPrimary.apiKey
+  draftMemory.model = draftSecondary.model || draftPrimary.model
+  void flushMemory()
+  showToast('已从次 API 复制到记忆 API 并启用')
+  tab.value = 'memory'
+}
+
 const secondaryReady = computed(
   () =>
     !!draftSecondary.enabled &&
     !!draftSecondary.baseUrl.trim() &&
     !!draftSecondary.apiKey.trim() &&
     !!draftSecondary.model.trim(),
+)
+
+const memoryReady = computed(
+  () =>
+    !!draftMemory.enabled &&
+    !!draftMemory.baseUrl.trim() &&
+    !!draftMemory.apiKey.trim() &&
+    !!draftMemory.model.trim(),
 )
 
 const primaryReady = computed(
@@ -225,21 +334,27 @@ const primaryAccessWarn = computed(() => {
 const lastFetchError = ref('')
 const lastFetchSource = ref<'remote' | 'fallback' | ''>('')
 
-function pickModel(which: 'primary' | 'secondary', id: string) {
+type ApiWhich = 'primary' | 'secondary' | 'memory'
+
+function pickModel(which: ApiWhich, id: string) {
   if (which === 'primary') {
     draftPrimary.model = id
     void flushPrimary()
-  } else {
+  } else if (which === 'secondary') {
     draftSecondary.model = id
     void flushSecondary()
+  } else {
+    draftMemory.model = id
+    void flushMemory()
   }
   showToast(`已选用模型：${id}`)
 }
 
-async function handleFetchModels(which: 'primary' | 'secondary') {
+async function handleFetchModels(which: ApiWhich) {
   // 先落盘草稿，保证用最新值拉模型
   if (which === 'primary') await flushPrimary()
-  else await flushSecondary()
+  else if (which === 'secondary') await flushSecondary()
+  else await flushMemory()
   busy.value = `fetch-${which}`
   lastFetchError.value = ''
   lastFetchSource.value = ''
@@ -247,10 +362,13 @@ async function handleFetchModels(which: 'primary' | 'secondary') {
     const target =
       which === 'primary'
         ? { baseUrl: draftPrimary.baseUrl, apiKey: draftPrimary.apiKey }
-        : { baseUrl: draftSecondary.baseUrl, apiKey: draftSecondary.apiKey }
+        : which === 'secondary'
+          ? { baseUrl: draftSecondary.baseUrl, apiKey: draftSecondary.apiKey }
+          : { baseUrl: draftMemory.baseUrl, apiKey: draftMemory.apiKey }
     const { models, source, error } = await fetchModels(target)
     if (which === 'primary') primaryModels.value = models
-    else secondaryModels.value = models
+    else if (which === 'secondary') secondaryModels.value = models
+    else memoryModels.value = models
     lastFetchSource.value = source
     if (source === 'remote') {
       showToast(`已从接口获取 ${models.length} 个模型`)
@@ -262,6 +380,10 @@ async function handleFetchModels(which: 'primary' | 'secondary') {
       if (which === 'secondary' && !draftSecondary.model.trim() && models[0]) {
         draftSecondary.model = models[0]
         await flushSecondary()
+      }
+      if (which === 'memory' && !draftMemory.model.trim() && models[0]) {
+        draftMemory.model = models[0]
+        await flushMemory()
       }
     } else {
       lastFetchError.value = error || '拉取失败，以下为猜测的常用模型，可手动改名'
@@ -275,9 +397,10 @@ async function handleFetchModels(which: 'primary' | 'secondary') {
   }
 }
 
-async function handleTest(which: 'primary' | 'secondary') {
+async function handleTest(which: ApiWhich) {
   if (which === 'primary') await flushPrimary()
-  else await flushSecondary()
+  else if (which === 'secondary') await flushSecondary()
+  else await flushMemory()
   busy.value = `test-${which}`
   try {
     const target =
@@ -287,16 +410,23 @@ async function handleTest(which: 'primary' | 'secondary') {
             apiKey: draftPrimary.apiKey,
             model: draftPrimary.model,
           }
-        : {
-            baseUrl: draftSecondary.baseUrl,
-            apiKey: draftSecondary.apiKey,
-            model: draftSecondary.model,
-          }
+        : which === 'secondary'
+          ? {
+              baseUrl: draftSecondary.baseUrl,
+              apiKey: draftSecondary.apiKey,
+              model: draftSecondary.model,
+            }
+          : {
+              baseUrl: draftMemory.baseUrl,
+              apiKey: draftMemory.apiKey,
+              model: draftMemory.model,
+            }
     const result = await testConnection(target)
     if (result.ok) {
+      const label =
+        which === 'primary' ? '主' : which === 'secondary' ? '辅' : '记忆'
       showToast(
-        `${which === 'primary' ? '主' : '辅'}线连通` +
-          (result.usedUrl ? ` · ${result.usedUrl}` : ''),
+        `${label}线连通` + (result.usedUrl ? ` · ${result.usedUrl}` : ''),
       )
     } else {
       const detail = [result.error, result.errorBody].filter(Boolean).join('\n')
@@ -386,7 +516,7 @@ function onTagsInput(value: string) {
   <ModalFrame
     id="modal-tianji-settings"
     title="密匣"
-    subtitle="主 API · 次 API · 推演格式 · 备份"
+    subtitle="主 API · 次 API · 记忆 API · 推演格式 · 备份"
     width="760px"
     @close="emit('close')"
   >
@@ -412,6 +542,11 @@ function onTagsInput(value: string) {
           class="tab-dot"
           :class="secondaryReady ? 'is-on' : draftSecondary.enabled ? 'is-warn' : 'is-off'"
         />
+        <span
+          v-if="t.id === 'memory'"
+          class="tab-dot"
+          :class="memoryReady ? 'is-on' : draftMemory.enabled ? 'is-warn' : 'is-off'"
+        />
       </button>
     </div>
 
@@ -427,6 +562,16 @@ function onTagsInput(value: string) {
             secondaryReady
               ? '已就绪'
               : draftSecondary.enabled
+                ? '已开未配齐'
+                : '未启用'
+          }}
+        </span>
+        <span class="api-pill" :class="memoryReady ? 'is-on' : draftMemory.enabled ? 'is-warn' : 'is-off'">
+          记忆
+          {{
+            memoryReady
+              ? '已就绪'
+              : draftMemory.enabled
                 ? '已开未配齐'
                 : '未启用'
           }}
@@ -582,6 +727,18 @@ function onTagsInput(value: string) {
         </div>
         <button type="button" class="btn btn-soft btn-sm" @click="tab = 'secondary'">
           {{ draftSecondary.enabled ? '编辑次 API' : '配置次 API' }}
+        </button>
+      </div>
+
+      <div class="api-secondary-teaser">
+        <div>
+          <strong>记忆 API</strong>
+          <p class="tj-hint" style="margin: 0.2rem 0 0">
+            表格记忆追溯专用通道（yuzuki-Memory）。启用后只走此通道，不抢主/次 API。
+          </p>
+        </div>
+        <button type="button" class="btn btn-soft btn-sm" @click="tab = 'memory'">
+          {{ draftMemory.enabled ? '编辑记忆 API' : '配置记忆 API' }}
         </button>
       </div>
     </template>
@@ -769,6 +926,168 @@ function onTagsInput(value: string) {
       </div>
     </template>
 
+    <!-- 记忆 API（独立追溯通道） -->
+    <template v-else-if="tab === 'memory'">
+      <div class="api-status-bar">
+        <span class="api-pill" :class="draftMemory.enabled ? 'is-on' : 'is-off'">
+          {{ draftMemory.enabled ? '记忆 API 已启用' : '记忆 API 未启用' }}
+        </span>
+        <span class="api-pill" :class="memoryReady ? 'is-on' : 'is-warn'">
+          {{ memoryReady ? '字段已配齐' : draftMemory.enabled ? '请补全地址 / 密钥 / 模型' : '关闭时回退主/次' }}
+        </span>
+      </div>
+
+      <div class="api-panel api-panel--secondary">
+        <div class="secondary-head">
+          <div>
+            <h3 class="api-panel__title">记忆 API（表格追溯填表）</h3>
+            <p class="tj-hint" style="margin: 0">
+              每回合剧情后的「记忆追溯」与锦囊手动追溯走此通道。
+              <strong>启用并配齐后只使用记忆 API</strong>，不会静默改用主/次线；
+              未启用时兼容旧行为（次 API → 主 API）。建议小模型、温度 ≤0.3。
+            </p>
+          </div>
+          <label class="switch">
+            <input
+              type="checkbox"
+              :checked="draftMemory.enabled"
+              @change="
+                patchMemory({ enabled: ($event.target as HTMLInputElement).checked })
+              "
+            />
+            <span class="switch__ui" />
+            <span class="switch__label">{{ draftMemory.enabled ? '已启用' : '已关闭' }}</span>
+          </label>
+        </div>
+
+        <div class="tj-row" style="margin-bottom: 0.75rem">
+          <button
+            type="button"
+            class="btn btn-ghost btn-sm"
+            :disabled="!primaryReady"
+            @click="copyPrimaryToMemory"
+          >
+            从主 API 复制
+          </button>
+          <button
+            type="button"
+            class="btn btn-ghost btn-sm"
+            :disabled="!secondaryReady && !primaryReady"
+            @click="copySecondaryToMemory"
+          >
+            从次 API 复制
+          </button>
+          <button type="button" class="btn btn-primary btn-sm" @click="flushMemory">
+            保存记忆 API
+          </button>
+        </div>
+
+        <div class="tj-field">
+          <label>Base URL</label>
+          <input
+            v-model="draftMemory.baseUrl"
+            class="tj-input"
+            :disabled="!draftMemory.enabled"
+            placeholder="https://api.deepseek.com/v1 或本地 http://localhost:1234/v1"
+            autocomplete="off"
+            spellcheck="false"
+            @blur="flushMemory"
+          />
+          <p class="tj-hint">OpenAI 兼容，不要带 /chat/completions</p>
+        </div>
+        <div class="tj-field">
+          <label>API Key</label>
+          <input
+            v-model="draftMemory.apiKey"
+            class="tj-input"
+            type="password"
+            :disabled="!draftMemory.enabled"
+            placeholder="sk-...（可与主/次不同）"
+            autocomplete="off"
+            @blur="flushMemory"
+          />
+        </div>
+        <div class="tj-field">
+          <label>模型</label>
+          <input
+            v-model="draftMemory.model"
+            class="tj-input"
+            list="tj-memory-models"
+            :disabled="!draftMemory.enabled"
+            placeholder="deepseek-chat / gpt-4o-mini …"
+            autocomplete="off"
+            @blur="flushMemory"
+          />
+          <datalist id="tj-memory-models">
+            <option v-for="m in memoryModels" :key="m" :value="m" />
+          </datalist>
+        </div>
+        <div v-if="memoryModels.length && draftMemory.enabled" class="model-pick">
+          <p class="model-pick__label">
+            {{ lastFetchSource === 'remote' ? '接口返回' : '参考列表' }} · 点击选用
+          </p>
+          <div class="model-pick__list">
+            <button
+              v-for="m in memoryModels.slice(0, 80)"
+              :key="m"
+              type="button"
+              class="model-chip"
+              :class="{ 'is-on': draftMemory.model === m }"
+              @click="pickModel('memory', m)"
+            >
+              {{ m }}
+            </button>
+          </div>
+        </div>
+
+        <div class="secondary-grid">
+          <div class="tj-field">
+            <label>温度 {{ draftMemory.temperature }}</label>
+            <input
+              v-model.number="draftMemory.temperature"
+              type="range"
+              min="0"
+              max="1"
+              step="0.05"
+              :disabled="!draftMemory.enabled"
+              @change="flushMemory"
+            />
+          </div>
+          <div class="tj-field">
+            <label>最大 tokens</label>
+            <input
+              v-model.number="draftMemory.maxTokens"
+              class="tj-input"
+              type="number"
+              min="256"
+              step="128"
+              :disabled="!draftMemory.enabled"
+              @blur="flushMemory"
+            />
+          </div>
+        </div>
+
+        <div class="tj-row">
+          <button
+            type="button"
+            class="btn btn-ghost btn-sm"
+            :disabled="!draftMemory.enabled || busy === 'fetch-memory'"
+            @click="handleFetchModels('memory')"
+          >
+            拉取模型列表
+          </button>
+          <button
+            type="button"
+            class="btn btn-primary btn-sm"
+            :disabled="!draftMemory.enabled || busy === 'test-memory'"
+            @click="handleTest('memory')"
+          >
+            测试记忆 API
+          </button>
+        </div>
+      </div>
+    </template>
+
     <template v-else-if="tab === 'tags'">
       <div class="tj-field">
         <label>输出标签（须含 maintext 与 option）</label>
@@ -838,27 +1157,136 @@ function onTagsInput(value: string) {
           <option value="hide">隐藏</option>
         </select>
       </div>
+
+      <div class="api-panel" style="margin-top: 1rem">
+        <div class="secondary-head">
+          <div>
+            <h3 class="api-panel__title">表格记忆（总开关）</h3>
+            <p class="tj-hint" style="margin: 0">
+              开启后：主文 Memory 契约、回合追溯填表、系统世界书注入「表格世界状态」。
+              关闭后旧楼仍可压缩，但不再追溯/注入表格（短中长期 &lt;sum&gt; 仍保留）。
+            </p>
+          </div>
+          <label class="switch">
+            <input
+              type="checkbox"
+              :checked="settings.tableMemoryEnabled !== false"
+              @change="
+                patch({
+                  tableMemoryEnabled: ($event.target as HTMLInputElement).checked,
+                })
+              "
+            />
+            <span class="switch__ui" />
+            <span class="switch__label">{{
+              settings.tableMemoryEnabled !== false ? '已开启' : '已关闭'
+            }}</span>
+          </label>
+        </div>
+        <p class="tj-hint" style="margin-top: 0.5rem">
+          召回方式：不写 SQL。隐藏楼层后靠「表格世界状态 + 短/中/长期小结」常驻世界书召回，
+          与 yuzuki 思路一致（表里有事实，楼层只留近端正文）。
+        </p>
+      </div>
+
+      <div class="api-panel" style="margin-top: 0.85rem">
+        <div class="secondary-head">
+          <div>
+            <h3 class="api-panel__title">隐藏楼层 · 压缩</h3>
+            <p class="tj-hint" style="margin: 0">
+              拼装时把助手楼压成 maintext/小结，去掉 thinking/option/Memory 原文；
+              更早的楼只留一句话小结。这才是「隐藏楼层」真正省 token 的地方。
+            </p>
+          </div>
+          <label class="switch">
+            <input
+              type="checkbox"
+              :checked="settings.historyCompress !== false"
+              @change="
+                patch({
+                  historyCompress: ($event.target as HTMLInputElement).checked,
+                })
+              "
+            />
+            <span class="switch__ui" />
+            <span class="switch__label">{{
+              settings.historyCompress !== false ? '已开启' : '已关闭'
+            }}</span>
+          </label>
+        </div>
+      </div>
+
       <div class="tj-field" style="margin-top: 0.85rem">
-        <label>天机上下文 · 至少保留最近消息条数</label>
-        <select
-          class="tj-select"
-          :value="String(settings.historyKeepMessages ?? 12)"
-          @change="
-            patch({
-              historyKeepMessages: Number(($event.target as HTMLSelectElement).value),
-            })
-          "
-        >
-          <option value="0">0 · 仅按 token 预算（旧行为）</option>
-          <option value="4">4 · 约近 2 回合</option>
-          <option value="8">8 · 约近 4 回合</option>
-          <option value="12">12 · 约近 6 回合（默认）</option>
-          <option value="16">16 · 约近 8 回合</option>
-          <option value="24">24 · 约近 12 回合</option>
-          <option value="32">32 · 更长近端（占更多上下文）</option>
-        </select>
+        <label>近端保底条数（自定义 0～200）</label>
+        <div class="limit-row">
+          <input
+            class="tj-input limit-input"
+            type="number"
+            min="0"
+            max="200"
+            step="1"
+            :value="settings.historyKeepMessages ?? 12"
+            @change="patchHistoryKeep(($event.target as HTMLInputElement).value)"
+            @blur="patchHistoryKeep(($event.target as HTMLInputElement).value)"
+          />
+          <span class="limit-unit">条 user/assistant</span>
+        </div>
+        <div class="limit-presets">
+          <button
+            v-for="n in KEEP_PRESETS"
+            :key="'keep-' + n"
+            type="button"
+            class="model-chip"
+            :class="{ 'is-on': (settings.historyKeepMessages ?? 12) === n }"
+            @click="patchHistoryKeep(n)"
+          >
+            {{ n === 0 ? '0·仅预算' : n === 12 ? '12·默认' : String(n) }}
+          </button>
+        </div>
         <p class="tj-hint">
-          拼装 prompt 时优先保留最近 N 条玩家/天机消息，再在 token 预算内尽量塞更早的楼。条数越大，近端连贯越好，但更易挤占世界书与 system。
+          优先保留最近 N 条（压缩开启时这 N 条用 maintext+sum，更早的只留小结）。
+          0 = 不按条数保底，只靠下方 token 预算。可手填任意整数。
+        </p>
+      </div>
+
+      <div class="tj-field" style="margin-top: 0.85rem">
+        <label>历史硬预算（自定义 0～500000 粗估 token）</label>
+        <div class="limit-row">
+          <input
+            class="tj-input limit-input"
+            type="number"
+            min="0"
+            max="500000"
+            step="500"
+            :value="settings.historyMaxTokens ?? 12000"
+            @change="patchHistoryMaxTokens(($event.target as HTMLInputElement).value)"
+            @blur="patchHistoryMaxTokens(($event.target as HTMLInputElement).value)"
+          />
+          <span class="limit-unit">token（粗估≈字数/4）</span>
+        </div>
+        <div class="limit-presets">
+          <button
+            v-for="n in TOKEN_PRESETS"
+            :key="'tok-' + n"
+            type="button"
+            class="model-chip"
+            :class="{ 'is-on': (settings.historyMaxTokens ?? 12000) === n }"
+            @click="patchHistoryMaxTokens(n)"
+          >
+            {{
+              n === 0
+                ? '0·不限'
+                : n === 12000
+                  ? '12k·默认'
+                  : n >= 1000
+                    ? Math.round(n / 1000) + 'k'
+                    : String(n)
+            }}
+          </button>
+        </div>
+        <p class="tj-hint">
+          历史消息总粗估超过此值就截断更早楼。与心法「上下文长度 ×75%」取更小者。
+          0 = 不设硬上限（大上下文易回到数万 token）。系统世界书不计入此预算。可手填如 15000、24000。
         </p>
       </div>
       <p class="tj-hint">库标识：{{ storageInfo.dbName }}（与其它项目隔离）</p>
@@ -1150,6 +1578,31 @@ function onTagsInput(value: string) {
   background: var(--jade-soft);
   color: var(--jade);
   font-weight: 600;
+}
+
+.limit-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-bottom: 0.45rem;
+}
+
+.limit-input {
+  max-width: 9rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.limit-unit {
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+
+.limit-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-bottom: 0.35rem;
 }
 
 .model-fetch-err {

@@ -261,7 +261,14 @@ export async function getSettings(): Promise<AppSettings | undefined> {
   if (s.historyKeepMessages === undefined || !Number.isFinite(s.historyKeepMessages)) {
     s.historyKeepMessages = 12;
   } else {
-    s.historyKeepMessages = Math.max(0, Math.min(64, Math.round(Number(s.historyKeepMessages))));
+    s.historyKeepMessages = Math.max(0, Math.min(200, Math.round(Number(s.historyKeepMessages))));
+  }
+  if (s.tableMemoryEnabled === undefined) s.tableMemoryEnabled = true;
+  if (s.historyCompress === undefined) s.historyCompress = true;
+  if (s.historyMaxTokens === undefined || !Number.isFinite(s.historyMaxTokens)) {
+    s.historyMaxTokens = 12000;
+  } else {
+    s.historyMaxTokens = Math.max(0, Math.min(500_000, Math.round(Number(s.historyMaxTokens))));
   }
   return s;
 }

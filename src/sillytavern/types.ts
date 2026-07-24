@@ -134,6 +134,16 @@ export interface ChatPreset {
 
 // ========== Settings Types ==========
 
+/** 次 API / 记忆 API 共用的旁路通道配置 */
+export interface SideApiChannel {
+  enabled: boolean;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  temperature?: number;
+  maxTokens?: number;
+}
+
 export interface ApiSettings {
   baseUrl: string;
   apiKey: string;
@@ -141,14 +151,13 @@ export interface ApiSettings {
   timeout: number;
   /** 启用流式输出（SSE），天机逐字显示 */
   stream?: boolean;
-  secondary?: {
-    enabled: boolean;
-    baseUrl: string;
-    apiKey: string;
-    model: string;
-    temperature?: number;
-    maxTokens?: number;
-  };
+  /** 局面分析 / 变量结算旁路 */
+  secondary?: SideApiChannel;
+  /**
+   * 表格记忆追溯专用通道（yuzuki-Memory 独立 API）。
+   * 启用并配齐后，记忆追溯只走此通道，不抢主/次 API。
+   */
+  memory?: SideApiChannel;
 }
 
 export interface AppSettings {
@@ -171,10 +180,28 @@ export interface AppSettings {
   /** World settle after story: off | secondary API only | secondary then primary fallback */
   settlementMode?: 'off' | 'secondary_only' | 'secondary_then_primary';
   /**
-   * 天机拼装 prompt 时，至少保留最近多少条 user/assistant 消息。
+   * 天机拼装 prompt 时，至少保留最近多少条 user/assistant 消息（可自定义 0～200）。
    * 在 token 预算之外优先保近端上下文；0 = 仅按 token 预算裁剪（旧行为）。
    */
   historyKeepMessages?: number;
+  /**
+   * 表格记忆总开关（yuzuki 式：追溯填表 + 世界状态注入 + 主文 Memory 契约）。
+   * 关闭后旧楼仍可被压缩，但不跑记忆 API / 不注入表格状态。
+   * 默认 true。
+   */
+  tableMemoryEnabled?: boolean;
+  /**
+   * 拼装时压缩隐藏楼层：助手文只保留 maintext/sum，去掉 thinking / option / Memory 原文。
+   * 远端楼进一步只留小结。默认 true（解决整段 raw 撑到数万 token）。
+   */
+  historyCompress?: boolean;
+  /**
+   * 历史消息硬预算（粗估 token，可自定义 0～500000）。
+   * 超出则丢弃更早楼层，靠世界书/表格召回。
+   * 0 = 仅用预设上下文的 75%（旧行为，大上下文时极易到 6～9 万）。
+   * 默认 12000。
+   */
+  historyMaxTokens?: number;
 }
 
 export const DEFAULT_FORMAT_PROMPT = `你必须严格按照以下 XML 标签格式输出回复，不要使用 Markdown 包裹：
@@ -214,6 +241,14 @@ export const DEFAULT_SETTINGS: AppSettings = {
       temperature: 0.7,
       maxTokens: 8000,
     },
+    memory: {
+      enabled: false,
+      baseUrl: '',
+      apiKey: '',
+      model: '',
+      temperature: 0.2,
+      maxTokens: 1200,
+    },
   },
   apiMode: 'single',
   activePresetId: null,
@@ -230,6 +265,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   thinkingDisplay: 'fold',
   settlementMode: 'secondary_then_primary',
   historyKeepMessages: 12,
+  tableMemoryEnabled: true,
+  historyCompress: true,
+  historyMaxTokens: 12000,
 };
 
 // ========== Chat Types ==========
@@ -338,4 +376,4 @@ export interface VarsPatch {
 }
 
 export type Task = 'story' | 'summary' | 'vars' | 'settle';
-export type ApiTarget = 'primary' | 'secondary';
+export type ApiTarget = 'primary' | 'secondary' | 'memory';

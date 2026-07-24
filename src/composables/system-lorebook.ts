@@ -59,26 +59,35 @@ function makeEntry(
 function buildSystemEntries(extra?: {
   contextLabel?: string | null
   contextDetail?: string | null
+  /** 关闭表格记忆时不注入世界状态表（仍可保留 sum 层） */
+  tableMemoryEnabled?: boolean
 }): LorebookEntry[] {
   loadMemoryBank()
-  loadTableMemory()
-  return [
+  const tableOn = extra?.tableMemoryEnabled !== false
+  if (tableOn) loadTableMemory()
+  const entries: LorebookEntry[] = [
     makeEntry(LIVE_ENTRY_ID, buildLiveLoreContent(extra), '系统自动 · 局面快照', 0),
     makeEntry(MEM_SHORT_ID, formatShortMemory(), '系统自动 · 短期记忆', 1),
     makeEntry(MEM_MID_ID, formatMidMemory(), '系统自动 · 中期记忆', 2),
     makeEntry(MEM_LONG_ID, formatLongMemory(), '系统自动 · 长期记忆', 3),
-    makeEntry(
-      TABLE_WORLD_STATE_ENTRY_ID,
-      formatWorldStateInjection(),
-      '系统自动 · 表格世界状态',
-      4,
-    ),
   ]
+  if (tableOn) {
+    entries.push(
+      makeEntry(
+        TABLE_WORLD_STATE_ENTRY_ID,
+        formatWorldStateInjection(),
+        '系统自动 · 表格世界状态',
+        4,
+      ),
+    )
+  }
+  return entries
 }
 
 export async function ensureAndRefreshSystemLorebook(extra?: {
   contextLabel?: string | null
   contextDetail?: string | null
+  tableMemoryEnabled?: boolean
 }): Promise<Lorebook> {
   const systemEntries = buildSystemEntries(extra)
   const all = await getLorebooks()

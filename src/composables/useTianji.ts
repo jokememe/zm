@@ -243,6 +243,7 @@ async function ensureSession(s: AppSettings, allChats: ChatSession[]): Promise<C
 
 async function syncSystemLore(s: AppSettings) {
   const book = await ensureAndRefreshSystemLorebook({
+    tableMemoryEnabled: s.tableMemoryEnabled !== false,
     contextLabel: contextInjected.value,
     contextDetail: contextDetail.value,
   })
@@ -288,6 +289,14 @@ async function boot() {
       merged.uiMode = 'game'
       if (!merged.settlementMode) {
         merged.settlementMode = 'secondary_then_primary'
+      }
+      if (merged.tableMemoryEnabled === undefined) merged.tableMemoryEnabled = true
+      if (merged.historyCompress === undefined) merged.historyCompress = true
+      if (
+        merged.historyMaxTokens === undefined ||
+        !Number.isFinite(merged.historyMaxTokens)
+      ) {
+        merged.historyMaxTokens = 12000
       }
 
       settings.value = merged
@@ -489,11 +498,15 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
   const session = chatSession.value
   if (!s || !session) throw new Error('天机未就绪')
 
+  const tableMemoryOn = s.tableMemoryEnabled !== false
+
   // 推演前：用经营名册/势力/宝物填表格记忆底表，再刷系统世界书
-  try {
-    syncTableMemoryFromGame()
-  } catch (e) {
-    console.warn('[天机] 表格记忆同步失败', e)
+  if (tableMemoryOn) {
+    try {
+      syncTableMemoryFromGame()
+    } catch (e) {
+      console.warn('[天机] 表格记忆同步失败', e)
+    }
   }
   await syncSystemLore(s)
 
@@ -532,13 +545,13 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
   )
   const livePreset: ChatPreset = { ...preset, settings: normalizedSettings }
 
-  // 主推演格式 = 用户模板 + yuzuki 填表契约（TABLE_DEFINITIONS 动态）
+  // 主推演格式 = 用户模板 +（可选）yuzuki 填表契约
   const baseFormat =
     s.formatPromptTemplate || DEFAULT_SETTINGS.formatPromptTemplate || ''
-  const memoryFormatHint = buildMainFormatMemoryHint()
-  const formatPrompt = baseFormat.includes('<Memory>')
+  const memoryFormatHint = tableMemoryOn ? buildMainFormatMemoryHint() : ''
+  const formatPrompt = memoryFormatHint
     ? `${baseFormat}\n\n${memoryFormatHint}`
-    : `${baseFormat}\n\n${memoryFormatHint}`
+    : baseFormat
 
   const { messages: promptMessages } = assemblePrompt({
     userInput: userText + contextBlock,
@@ -552,6 +565,9 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
     formatPrompt,
     historyKeepMessages:
       typeof s.historyKeepMessages === 'number' ? s.historyKeepMessages : 12,
+    historyCompress: s.historyCompress !== false,
+    historyMaxTokens:
+      typeof s.historyMaxTokens === 'number' ? s.historyMaxTokens : 12000,
   })
 
   const sampling = getSamplingForApi(normalizedSettings)
@@ -628,7 +644,7 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
   const settled = mergeSessionWithGame({})
 
   // ★ 表格记忆：助手文中 <Memory>/<GaigaiMemory>/<tableEdit> → 主键合并
-  const memoryTagged = hasMemoryTag(raw)
+  const memoryTagged = tableMemoryOn && hasMemoryTag(raw)
   if (memoryTagged) {
     applyAssistantMemoryTags(raw)
   }
@@ -642,6 +658,7 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
     await ensureAndRefreshSystemLorebook({
       contextLabel: contextInjected.value,
       contextDetail: contextDetail.value,
+      tableMemoryEnabled: tableMemoryOn,
     })
     lorebooks.value = await getLorebooks()
   }
@@ -788,22 +805,30 @@ export function useTianji() {
           target,
           body,
         }: {
-          target: 'primary' | 'secondary'
+          target: 'primary' | 'secondary' | 'memory'
           body: Record<string, unknown>
         }) => {
           const api = settings.value!.api
-          const ep =
-            target === 'secondary' && api.secondary?.enabled
-              ? {
-                  baseUrl: normalizeBaseUrl(api.secondary.baseUrl || ''),
-                  apiKey: String(api.secondary.apiKey || ''),
-                  model: String(api.secondary.model || '').trim(),
-                }
-              : {
-                  baseUrl: normalizeBaseUrl(api.baseUrl || ''),
-                  apiKey: String(api.apiKey || ''),
-                  model: String(api.model || '').trim() || String(body.model || ''),
-                }
+          let ep: { baseUrl: string; apiKey: string; model: string }
+          if (target === 'memory' && api.memory?.enabled) {
+            ep = {
+              baseUrl: normalizeBaseUrl(api.memory.baseUrl || ''),
+              apiKey: String(api.memory.apiKey || ''),
+              model: String(api.memory.model || '').trim(),
+            }
+          } else if (target === 'secondary' && api.secondary?.enabled) {
+            ep = {
+              baseUrl: normalizeBaseUrl(api.secondary.baseUrl || ''),
+              apiKey: String(api.secondary.apiKey || ''),
+              model: String(api.secondary.model || '').trim(),
+            }
+          } else {
+            ep = {
+              baseUrl: normalizeBaseUrl(api.baseUrl || ''),
+              apiKey: String(api.apiKey || ''),
+              model: String(api.model || '').trim() || String(body.model || ''),
+            }
+          }
           const model = ep.model || String(body.model || '')
           const completion = await postChatCompletion({
             baseUrl: ep.baseUrl,
@@ -854,42 +879,51 @@ export function useTianji() {
             lastSettlement.value = '本回无变更'
           }
 
-          // ★ yuzuki 式独立记忆追溯：主文若未带 Memory，用二次任务强制抽表
-          memoryTracing.value = true
-          lastMemoryTraceKind.value = 'info'
-          lastMemoryTrace.value = '记忆追溯中…'
-          try {
-            const mem = await runMemoryTrace({
-              userText: text,
-              maintext: result.parsed?.maintext || result.content,
-              sum: result.parsed?.sum || '',
-              settings: settings.value,
-              postChat: postChatForSide,
-            })
-            if (mem.status === 'applied') {
-              lastMemoryTraceKind.value = 'ok'
-              lastMemoryTrace.value = `表格已更新 ${mem.count} 行`
-              if (settings.value) {
-                await syncSystemLore(settings.value)
-                lorebooks.value = await getLorebooks()
+          // ★ yuzuki 式独立记忆追溯：总开关开启时，用二次任务强制抽表
+          if (settings.value.tableMemoryEnabled !== false) {
+            memoryTracing.value = true
+            lastMemoryTraceKind.value = 'info'
+            lastMemoryTrace.value = '记忆追溯中…'
+            try {
+              const mem = await runMemoryTrace({
+                userText: text,
+                maintext: result.parsed?.maintext || result.content,
+                sum: result.parsed?.sum || '',
+                settings: settings.value,
+                postChat: postChatForSide,
+              })
+              if (mem.status === 'applied') {
+                lastMemoryTraceKind.value = 'ok'
+                lastMemoryTrace.value = `表格已更新 ${mem.count} 行`
+                if (settings.value) {
+                  await syncSystemLore(settings.value)
+                  lorebooks.value = await getLorebooks()
+                }
+              } else if (mem.status === 'empty') {
+                lastMemoryTraceKind.value = 'info'
+                lastMemoryTrace.value = '记忆追溯无新增'
+              } else if (mem.status === 'skipped') {
+                lastMemoryTraceKind.value = 'info'
+                lastMemoryTrace.value =
+                  mem.reason === 'memory_api_not_ready'
+                    ? '记忆追溯跳过（记忆 API 未配齐）'
+                    : mem.reason === 'api_not_ready'
+                      ? '记忆追溯跳过（未通灵）'
+                      : '记忆追溯跳过'
+              } else {
+                lastMemoryTraceKind.value = 'fail'
+                const raw = mem.error || '失败'
+                lastMemoryTrace.value = raw.length > 48 ? raw.slice(0, 48) + '…' : raw
               }
-            } else if (mem.status === 'empty') {
-              lastMemoryTraceKind.value = 'info'
-              lastMemoryTrace.value = '记忆追溯无新增'
-            } else if (mem.status === 'skipped') {
-              lastMemoryTraceKind.value = 'info'
-              lastMemoryTrace.value =
-                mem.reason === 'api_not_ready' ? '记忆追溯跳过（未通灵）' : `记忆追溯跳过`
-            } else {
+            } catch (memErr) {
               lastMemoryTraceKind.value = 'fail'
-              const raw = mem.error || '失败'
-              lastMemoryTrace.value = raw.length > 48 ? raw.slice(0, 48) + '…' : raw
+              lastMemoryTrace.value = String((memErr as Error).message || memErr).slice(0, 48)
+            } finally {
+              memoryTracing.value = false
             }
-          } catch (memErr) {
-            lastMemoryTraceKind.value = 'fail'
-            lastMemoryTrace.value = String((memErr as Error).message || memErr).slice(0, 48)
-          } finally {
-            memoryTracing.value = false
+          } else {
+            lastMemoryTraceKind.value = 'info'
+            lastMemoryTrace.value = '表格记忆已关闭'
           }
 
           // 把 stateAfter 回写到本条 assistant，供删楼回滚
@@ -1035,6 +1069,7 @@ export function useTianji() {
         api: {
           ...DEFAULT_SETTINGS.api,
           secondary: { ...DEFAULT_SETTINGS.api.secondary! },
+          memory: { ...DEFAULT_SETTINGS.api.memory! },
         },
       }
     }
@@ -1056,6 +1091,12 @@ export function useTianji() {
             ? JSON.parse(JSON.stringify(partial.api.secondary))
             : {}),
         },
+        memory: {
+          ...(plainBase.api.memory ?? DEFAULT_SETTINGS.api.memory!),
+          ...(partial.api.memory
+            ? JSON.parse(JSON.stringify(partial.api.memory))
+            : {}),
+        },
       }
     }
     // 规范化 URL；数组字段保证是纯数组
@@ -1068,6 +1109,12 @@ export function useTianji() {
             baseUrl: normalizeBaseUrl(next.api.secondary.baseUrl || ''),
           }
         : next.api.secondary,
+      memory: next.api.memory
+        ? {
+            ...next.api.memory,
+            baseUrl: normalizeBaseUrl(next.api.memory.baseUrl || ''),
+          }
+        : next.api.memory,
     }
     next.activeLorebookIds = Array.isArray(next.activeLorebookIds)
       ? [...next.activeLorebookIds]
@@ -1192,6 +1239,9 @@ export function useTianji() {
    */
   async function runManualMemoryTrace(): Promise<{ ok: boolean; message: string }> {
     await boot()
+    if (!settings.value || settings.value.tableMemoryEnabled === false) {
+      return { ok: false, message: '表格记忆总开关已关闭' }
+    }
     if (!settings.value || !hasApiKey(settings.value)) {
       return { ok: false, message: '未通灵，无法追溯' }
     }
@@ -1220,18 +1270,26 @@ export function useTianji() {
         settings: settings.value,
         postChat: async ({ target, body }) => {
           const api = settings.value!.api
-          const ep =
-            target === 'secondary' && api.secondary?.enabled
-              ? {
-                  baseUrl: normalizeBaseUrl(api.secondary.baseUrl || ''),
-                  apiKey: String(api.secondary.apiKey || ''),
-                  model: String(api.secondary.model || '').trim(),
-                }
-              : {
-                  baseUrl: normalizeBaseUrl(api.baseUrl || ''),
-                  apiKey: String(api.apiKey || ''),
-                  model: String(api.model || '').trim() || String(body.model || ''),
-                }
+          let ep: { baseUrl: string; apiKey: string; model: string }
+          if (target === 'memory' && api.memory?.enabled) {
+            ep = {
+              baseUrl: normalizeBaseUrl(api.memory.baseUrl || ''),
+              apiKey: String(api.memory.apiKey || ''),
+              model: String(api.memory.model || '').trim(),
+            }
+          } else if (target === 'secondary' && api.secondary?.enabled) {
+            ep = {
+              baseUrl: normalizeBaseUrl(api.secondary.baseUrl || ''),
+              apiKey: String(api.secondary.apiKey || ''),
+              model: String(api.secondary.model || '').trim(),
+            }
+          } else {
+            ep = {
+              baseUrl: normalizeBaseUrl(api.baseUrl || ''),
+              apiKey: String(api.apiKey || ''),
+              model: String(api.model || '').trim() || String(body.model || ''),
+            }
+          }
           const model = ep.model || String(body.model || '')
           const completion = await postChatCompletion({
             baseUrl: ep.baseUrl,
@@ -1258,7 +1316,12 @@ export function useTianji() {
       }
       if (mem.status === 'skipped') {
         lastMemoryTraceKind.value = 'info'
-        lastMemoryTrace.value = '手动追溯已跳过'
+        lastMemoryTrace.value =
+          mem.reason === 'memory_api_not_ready'
+            ? '手动追溯跳过（记忆 API 未配齐）'
+            : mem.reason === 'api_not_ready'
+              ? '手动追溯跳过（未通灵）'
+              : '手动追溯已跳过'
         return { ok: false, message: lastMemoryTrace.value }
       }
       lastMemoryTraceKind.value = 'fail'

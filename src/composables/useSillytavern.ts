@@ -130,6 +130,10 @@ async function loadAll(force = false) {
               ...DEFAULT_SETTINGS.api.secondary!,
               ...s.api?.secondary,
             },
+            memory: {
+              ...DEFAULT_SETTINGS.api.memory!,
+              ...s.api?.memory,
+            },
           },
         }
       : { ...DEFAULT_SETTINGS }
@@ -190,6 +194,10 @@ export function useSillytavern() {
         secondary: {
           ...settings.value.api.secondary!,
           ...updates.api.secondary,
+        },
+        memory: {
+          ...settings.value.api.memory!,
+          ...updates.api.memory,
         },
       }
     }
@@ -314,6 +322,11 @@ export function useSillytavern() {
           typeof settings.value.historyKeepMessages === 'number'
             ? settings.value.historyKeepMessages
             : 12,
+        historyCompress: settings.value.historyCompress !== false,
+        historyMaxTokens:
+          typeof settings.value.historyMaxTokens === 'number'
+            ? settings.value.historyMaxTokens
+            : 12000,
       })
 
       const requestBody: Record<string, unknown> = {
@@ -419,6 +432,11 @@ export function useSillytavern() {
         typeof settings.value.historyKeepMessages === 'number'
           ? settings.value.historyKeepMessages
           : 12,
+      historyCompress: settings.value.historyCompress !== false,
+      historyMaxTokens:
+        typeof settings.value.historyMaxTokens === 'number'
+          ? settings.value.historyMaxTokens
+          : 12000,
     })
 
     const tags = settings.value.customTags?.length

@@ -31,6 +31,16 @@ export interface AssembleOptions {
    * 0 = 仅按 token 预算；默认由调用方从 settings.historyKeepMessages 传入。
    */
   historyKeepMessages?: number
+  /**
+   * 压缩隐藏楼层：assistant 只留 maintext/sum，远端只留小结。
+   * 默认 true。
+   */
+  historyCompress?: boolean
+  /**
+   * 历史硬预算（粗估 token）。>0 时与「上下文 75%」取更小者。
+   * 0 = 不设硬上限（旧行为）。
+   */
+  historyMaxTokens?: number
 }
 
 /** 粗估 token（与现有拼装一致：字数/4） */
@@ -39,10 +49,65 @@ export function estimateTokensRough(text: string): number {
 }
 
 /**
+ * 把助手楼压缩成适合注入的短文（隐藏 thinking / option / Memory 原文）。
+ * - full：maintext + 可选小结
+ * - summary：仅小结（或正文头 200 字）
+ */
+export function compressAssistantFloor(
+  msg: ChatMessage,
+  mode: 'full' | 'summary' = 'full',
+): string {
+  const parsed = msg.parsed
+  const main =
+    parsed?.maintext?.trim() ||
+    extractTagInner(msg.content, 'maintext') ||
+    ''
+  const sum =
+    parsed?.sum?.trim() || extractTagInner(msg.content, 'sum') || ''
+
+  if (mode === 'summary') {
+    if (sum) return `〔回目小结〕${sum}`
+    if (main) {
+      const clip = main.length > 200 ? main.slice(0, 200) + '…' : main
+      return `〔回目摘要〕${clip}`
+    }
+    // 无标签：截断 raw，避免 thinking 全文
+    const raw = stripHeavyTags(String(msg.content || ''))
+    return raw.length > 280 ? raw.slice(0, 280) + '…' : raw
+  }
+
+  // full：正文 + 小结；不要 option/thinking/Memory
+  if (main || sum) {
+    let out = main
+    if (sum) out = out ? `${out}\n\n〔小结〕${sum}` : `〔小结〕${sum}`
+    return out || stripHeavyTags(String(msg.content || ''))
+  }
+  return stripHeavyTags(String(msg.content || ''))
+}
+
+function extractTagInner(raw: string, tag: string): string {
+  const re = new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)</${tag}>`, 'i')
+  const m = String(raw || '').match(re)
+  return m?.[1]?.trim() || ''
+}
+
+/** 去掉 thinking / option / Memory 等重块，尽量保正文 */
+function stripHeavyTags(raw: string): string {
+  let t = String(raw || '')
+  t = t.replace(/<(thinking|think|option|Memory|GaigaiMemory|tableEdit|vars)\b[^>]*>[\s\S]*?<\/\1>/gi, '')
+  t = t.replace(/<\/?(?:maintext|sum)\b[^>]*>/gi, '')
+  t = t.replace(/\n{3,}/g, '\n\n').trim()
+  // 仍过长则截断（无 parsed 的旧消息）
+  if (t.length > 4000) t = t.slice(0, 4000) + '…'
+  return t
+}
+
+/**
  * 从会话历史选出注入 prompt 的近期消息。
- * - keepMessages &gt; 0：先锁定最近 N 条（近端必留）
+ * - keepMessages > 0：先锁定最近 N 条（近端必留）
  * - 再在 token 预算内尽量向前多装旧消息
  * - system 角色跳过
+ * - compress：近端 full 压缩，远端 summary 压缩
  */
 export function selectRecentHistory(
   history: ChatMessage[],
@@ -50,27 +115,55 @@ export function selectRecentHistory(
     maxContextTokens?: number
     budgetRatio?: number
     keepMessages?: number
+    /** 历史硬预算；与 soft budget 取 min */
+    hardMaxTokens?: number
+    compress?: boolean
     transformContent?: (content: string, role: string) => string
   } = {},
 ): { role: 'user' | 'assistant'; content: string }[] {
   const maxContextTokens = opts.maxContextTokens ?? 8192
   const budgetRatio = opts.budgetRatio ?? 0.75
-  const budget = Math.max(256, maxContextTokens * budgetRatio)
-  const keep = Math.max(0, Math.min(64, Math.round(opts.keepMessages ?? 0)))
+  const softBudget = Math.max(256, maxContextTokens * budgetRatio)
+  const hard =
+    typeof opts.hardMaxTokens === 'number' && opts.hardMaxTokens > 0
+      ? Math.max(256, opts.hardMaxTokens)
+      : Infinity
+  const budget = Math.min(softBudget, hard)
+  // 自定义上限：0=不按条数保底；最大 200 条避免失控
+  const keep = Math.max(0, Math.min(200, Math.round(opts.keepMessages ?? 0)))
+  const compress = opts.compress !== false
   const transform =
     opts.transformContent ?? ((c: string) => c)
 
   type Row = { role: 'user' | 'assistant'; content: string; tokens: number }
   const candidates: Row[] = []
+  // 从新到旧编号：index 0 = 最新
+  let floorFromNewest = 0
   for (let i = history.length - 1; i >= 0; i--) {
     const msg = history[i]
     if (msg.role !== 'user' && msg.role !== 'assistant') continue
-    const content = transform(msg.content, msg.role)
+    let content: string
+    if (msg.role === 'assistant' && compress) {
+      // 近端 keep 条用 full；更早用 summary（隐藏楼层）
+      const mode: 'full' | 'summary' =
+        keep > 0 && floorFromNewest < keep ? 'full' : 'summary'
+      // 若 keep=0，最近 4 条仍 full，再远 summary
+      const nearFull = keep === 0 && floorFromNewest < 4
+      content = compressAssistantFloor(msg, nearFull || mode === 'full' ? 'full' : 'summary')
+    } else {
+      content = String(msg.content || '')
+      // 用户楼也截过长（防止粘贴万字）
+      if (compress && msg.role === 'user' && content.length > 2000) {
+        content = content.slice(0, 2000) + '…'
+      }
+    }
+    content = transform(content, msg.role)
     candidates.push({
       role: msg.role,
       content,
       tokens: estimateTokensRough(content),
     })
+    floorFromNewest += 1
   }
   // candidates[0] = 最新
 
@@ -81,6 +174,24 @@ export function selectRecentHistory(
     const row = candidates[i]
     const withinKeep = keep > 0 && selected.length < keep
     if (withinKeep) {
+      // 近端保底也受硬预算约束：单条过胖则截断内容
+      if (used + row.tokens > budget && selected.length > 0) {
+        break
+      }
+      if (row.tokens > budget && selected.length === 0) {
+        const maxChars = Math.max(200, Math.floor(budget * 4 * 0.9))
+        const clipped =
+          row.content.length > maxChars
+            ? row.content.slice(0, maxChars) + '…'
+            : row.content
+        selected.push({
+          ...row,
+          content: clipped,
+          tokens: estimateTokensRough(clipped),
+        })
+        used += estimateTokensRough(clipped)
+        continue
+      }
       selected.push(row)
       used += row.tokens
       continue
@@ -168,13 +279,20 @@ export function assemblePrompt(options: AssembleOptions): AssembleResult {
     8192
   const keepMessages =
     typeof options.historyKeepMessages === 'number' && Number.isFinite(options.historyKeepMessages)
-      ? Math.max(0, Math.min(64, Math.round(options.historyKeepMessages)))
+      ? Math.max(0, Math.min(200, Math.round(options.historyKeepMessages)))
       : 12
+  const historyCompress = options.historyCompress !== false
+  const historyMaxTokens =
+    typeof options.historyMaxTokens === 'number' && Number.isFinite(options.historyMaxTokens)
+      ? Math.max(0, Math.min(500_000, Math.round(options.historyMaxTokens)))
+      : 12000
 
   const recentHistory = selectRecentHistory(history, {
     maxContextTokens,
     budgetRatio: 0.75,
     keepMessages,
+    hardMaxTokens: historyMaxTokens > 0 ? historyMaxTokens : undefined,
+    compress: historyCompress,
     transformContent: (content, role) =>
       applyPromptRegex(content, scripts, role === 'user'),
   })
