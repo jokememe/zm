@@ -8,8 +8,13 @@ import type {
   Disciple,
   Faction,
   FieldPlot,
+  ForgeItem,
+  HeirCandidate,
+  Manual,
   NotificationItem,
+  RelationEdge,
   Resources,
+  Treasure,
   UrgentEvent,
 } from '@/types/game'
 import type { DifficultyId } from '@/data/opening'
@@ -60,6 +65,12 @@ export interface GameSaveV1 {
   designatedHeirId: string
   /** recipeId → 成丹库存 */
   alchemyStocks: Record<string, number>
+  /** 第二期活世界；旧档缺省 → 空数组，hydrate 时 mergeSparse 保留种子 */
+  manuals: Manual[]
+  treasures: Treasure[]
+  forgeQueue: ForgeItem[]
+  relationEdges: RelationEdge[]
+  heirs: HeirCandidate[]
 }
 
 export interface GameSavePayload {
@@ -76,6 +87,11 @@ export interface GameSavePayload {
   urgentEvents: UrgentEvent[]
   designatedHeirId: string
   alchemyStocks: Record<string, number>
+  manuals: Manual[]
+  treasures: Treasure[]
+  forgeQueue: ForgeItem[]
+  relationEdges: RelationEdge[]
+  heirs: HeirCandidate[]
 }
 
 function clone<T>(v: T): T {
@@ -121,6 +137,11 @@ export function buildGameSave(payload: GameSavePayload, savedAt = Date.now()): G
     urgentEvents: clone(payload.urgentEvents),
     designatedHeirId: payload.designatedHeirId,
     alchemyStocks: { ...payload.alchemyStocks },
+    manuals: clone(payload.manuals || []),
+    treasures: clone(payload.treasures || []),
+    forgeQueue: clone(payload.forgeQueue || []),
+    relationEdges: clone(payload.relationEdges || []),
+    heirs: clone(payload.heirs || []),
   }
 }
 
@@ -199,6 +220,13 @@ export function parseGameSave(raw: unknown): GameSaveV1 | null {
       o.alchemyStocks && typeof o.alchemyStocks === 'object'
         ? { ...(o.alchemyStocks as Record<string, number>) }
         : {},
+    manuals: Array.isArray(o.manuals) ? clone(o.manuals as Manual[]) : [],
+    treasures: Array.isArray(o.treasures) ? clone(o.treasures as Treasure[]) : [],
+    forgeQueue: Array.isArray(o.forgeQueue) ? clone(o.forgeQueue as ForgeItem[]) : [],
+    relationEdges: Array.isArray(o.relationEdges)
+      ? clone(o.relationEdges as RelationEdge[])
+      : [],
+    heirs: Array.isArray(o.heirs) ? clone(o.heirs as HeirCandidate[]) : [],
   }
 }
 

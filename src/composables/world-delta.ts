@@ -8,7 +8,18 @@ import type {
   ValidateResult,
   ApplyResult,
 } from '@/types/world'
-import type { CityState, Disciple, Faction, NotificationItem, Resources } from '@/types/game'
+import type {
+  CityState,
+  Disciple,
+  Faction,
+  ForgeItem,
+  HeirCandidate,
+  Manual,
+  NotificationItem,
+  RelationEdge,
+  Resources,
+  Treasure,
+} from '@/types/game'
 import {
   RESOURCE_VAR_MAP,
   resolveRelativeResourceValue,
@@ -27,6 +38,15 @@ const DISCIPLE_STATUS = new Set<Disciple['status']>([
 const FACTION_STANCE = new Set<Faction['stance']>(['同盟', '友好', '中立', '敌对', '觊觎'])
 const CITY_ATTITUDE = new Set<CityState['attitude']>(['恭顺', '中立', '犹豫', '敌视'])
 const GENDERS = new Set(['男', '女'])
+const RELATION_TYPES = new Set<RelationEdge['type']>([
+  '师徒',
+  '道侣',
+  '结义',
+  '仇恨',
+  '竞争',
+  '血缘',
+])
+const FORGE_TYPES = new Set<ForgeItem['type']>(['法宝', '飞剑', '护甲', '法器'])
 
 /** 单回 ops 总上限（防异常刷屏）；不再单独限制 disciple.add 条数 */
 const MAX_OPS = 12
@@ -218,9 +238,23 @@ function isFiniteNumber(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v)
 }
 
-/** 模型常用的 name 别名字段 */
+/** 模型常用的 name 别名字段（弟子 / 势力 / 城池） */
 function pickNameAlias(raw: Record<string, unknown>): string {
-  for (const key of ['name', '姓名', '弟子名', 'character', 'disciple', 'disciple_name'] as const) {
+  for (const key of [
+    'name',
+    '姓名',
+    '弟子名',
+    '势力名',
+    '城名',
+    '城池名',
+    'character',
+    'disciple',
+    'disciple_name',
+    'faction',
+    'faction_name',
+    'city',
+    'city_name',
+  ] as const) {
     const v = raw[key]
     if (typeof v === 'string' && v.trim()) return v.trim()
   }
@@ -274,6 +308,126 @@ export function sanitizeWorldDelta(delta: WorldDelta): WorldDelta {
       continue
     }
 
+    if (kind === 'faction.add') {
+      const name = pickNameAlias(raw)
+      if (!name) continue
+      const next: Extract<WorldOp, { op: 'faction.add' }> = { op: 'faction.add', name }
+      if (typeof raw.power === 'string') next.power = raw.power
+      if (typeof raw.relation === 'number') next.relation = raw.relation
+      if (typeof raw.stance === 'string' && FACTION_STANCE.has(raw.stance as Faction['stance'])) {
+        next.stance = raw.stance as Faction['stance']
+      }
+      if (typeof raw.recent === 'string') next.recent = raw.recent
+      if (typeof raw.demand === 'string') next.demand = raw.demand
+      ops.push(next)
+      continue
+    }
+
+    if (kind === 'city.add') {
+      const name = pickNameAlias(raw)
+      if (!name) continue
+      const next: Extract<WorldOp, { op: 'city.add' }> = { op: 'city.add', name }
+      if (typeof raw.distance === 'string') next.distance = raw.distance
+      if (typeof raw.influence === 'number') next.influence = raw.influence
+      if (
+        typeof raw.attitude === 'string' &&
+        CITY_ATTITUDE.has(raw.attitude as CityState['attitude'])
+      ) {
+        next.attitude = raw.attitude as CityState['attitude']
+      }
+      if (typeof raw.governor === 'string') next.governor = raw.governor
+      if (typeof raw.notes === 'string') next.notes = raw.notes
+      if (raw.tribute && typeof raw.tribute === 'object' && !Array.isArray(raw.tribute)) {
+        const t = raw.tribute as Record<string, unknown>
+        next.tribute = {
+          type: typeof t.type === 'string' ? t.type : undefined,
+          amount: typeof t.amount === 'number' ? t.amount : undefined,
+          period: typeof t.period === 'string' ? t.period : undefined,
+        }
+      }
+      ops.push(next)
+      continue
+    }
+
+    if (kind === 'manual.add') {
+      const name = pickNameAlias(raw)
+      if (!name) continue
+      const next: Extract<WorldOp, { op: 'manual.add' }> = { op: 'manual.add', name }
+      if (typeof raw.school === 'string') next.school = raw.school
+      if (typeof raw.grade === 'string') next.grade = raw.grade
+      if (typeof raw.restriction === 'string') next.restriction = raw.restriction
+      if (typeof raw.readers === 'number') next.readers = raw.readers
+      if (typeof raw.insight === 'string') next.insight = raw.insight
+      if (typeof raw.sealed === 'boolean') next.sealed = raw.sealed
+      ops.push(next)
+      continue
+    }
+
+    if (kind === 'treasure.add') {
+      const name = pickNameAlias(raw)
+      if (!name) continue
+      const next: Extract<WorldOp, { op: 'treasure.add' }> = { op: 'treasure.add', name }
+      if (typeof raw.type === 'string') next.type = raw.type
+      if (typeof raw.grade === 'string') next.grade = raw.grade
+      if (raw.owner === null) next.owner = null
+      else if (typeof raw.owner === 'string') next.owner = raw.owner
+      if (typeof raw.desc === 'string') next.desc = raw.desc
+      if (typeof raw.bound === 'boolean') next.bound = raw.bound
+      ops.push(next)
+      continue
+    }
+
+    if (kind === 'forge.add') {
+      const name = pickNameAlias(raw)
+      if (!name) continue
+      const next: Extract<WorldOp, { op: 'forge.add' }> = { op: 'forge.add', name }
+      if (typeof raw.type === 'string' && FORGE_TYPES.has(raw.type as ForgeItem['type'])) {
+        next.type = raw.type as ForgeItem['type']
+      }
+      if (typeof raw.grade === 'string') next.grade = raw.grade
+      if (typeof raw.progress === 'number') next.progress = raw.progress
+      if (raw.craftsman === null) next.craftsman = null
+      else if (typeof raw.craftsman === 'string') next.craftsman = raw.craftsman
+      if (typeof raw.materials === 'string') next.materials = raw.materials
+      if (typeof raw.power === 'string') next.power = raw.power
+      ops.push(next)
+      continue
+    }
+
+    if (kind === 'relation.add') {
+      const from = typeof raw.from === 'string' ? raw.from.trim() : ''
+      const to = typeof raw.to === 'string' ? raw.to.trim() : ''
+      const relType = typeof raw.type === 'string' ? raw.type : ''
+      if (!from || !to || !RELATION_TYPES.has(relType as RelationEdge['type'])) continue
+      const next: Extract<WorldOp, { op: 'relation.add' }> = {
+        op: 'relation.add',
+        from,
+        to,
+        type: relType as RelationEdge['type'],
+      }
+      if (typeof raw.intensity === 'number') next.intensity = raw.intensity
+      if (typeof raw.note === 'string') next.note = raw.note
+      ops.push(next)
+      continue
+    }
+
+    if (kind === 'heir.add') {
+      const name =
+        pickNameAlias(raw) ||
+        (typeof raw.discipleId === 'string' ? raw.discipleId.trim() : '')
+      if (!name && typeof raw.discipleId !== 'string') continue
+      const next: Extract<WorldOp, { op: 'heir.add' }> = { op: 'heir.add' }
+      if (typeof raw.discipleId === 'string') next.discipleId = raw.discipleId.trim()
+      if (name) next.name = name
+      if (typeof raw.score === 'number') next.score = raw.score
+      if (Array.isArray(raw.strengths)) next.strengths = raw.strengths.map(String)
+      if (Array.isArray(raw.risks)) next.risks = raw.risks.map(String)
+      if (typeof raw.support === 'number') next.support = raw.support
+      if (typeof raw.designated === 'boolean') next.designated = raw.designated
+      ops.push(next)
+      continue
+    }
+
     // 其它 op：浅拷贝保留，后续 validate 再严查
     ops.push(rawOp as WorldOp)
   }
@@ -322,6 +476,16 @@ function validateOneOp(op: WorldOp & { op?: string }, snap: WorldSnapshot, index
       if (r.error) return `${prefix}: ${r.error}`
       return null
     }
+    case 'faction.add': {
+      if (!op.name || !String(op.name).trim()) return `${prefix}: name 必填`
+      if (op.stance !== undefined && !FACTION_STANCE.has(op.stance)) return `${prefix}: stance 非法`
+      if (op.relation !== undefined && !isFiniteNumber(op.relation)) return `${prefix}: relation 须为数字`
+      // 同名已在册 → 跳过 add（避免重复），由 update 负责改关系
+      if (snap.factions.some((f) => f.name === String(op.name).trim())) {
+        return `${prefix}: 势力已在册，请用 faction.update`
+      }
+      return null
+    }
     case 'faction.update': {
       const r = resolveByIdOrName(snap.factions, op.id, op.name, '势力')
       if (r.error) return `${prefix}: ${r.error}`
@@ -331,6 +495,19 @@ function validateOneOp(op: WorldOp & { op?: string }, snap: WorldSnapshot, index
       }
       if (op.patch.relation !== undefined && !isFiniteNumber(op.patch.relation)) {
         return `${prefix}: relation 须为数字`
+      }
+      return null
+    }
+    case 'city.add': {
+      if (!op.name || !String(op.name).trim()) return `${prefix}: name 必填`
+      if (op.attitude !== undefined && !CITY_ATTITUDE.has(op.attitude)) {
+        return `${prefix}: attitude 非法`
+      }
+      if (op.influence !== undefined && !isFiniteNumber(op.influence)) {
+        return `${prefix}: influence 须为数字`
+      }
+      if (snap.cities.some((c) => c.name === String(op.name).trim())) {
+        return `${prefix}: 城池已在册，请用 city.update`
       }
       return null
     }
@@ -346,6 +523,141 @@ function validateOneOp(op: WorldOp & { op?: string }, snap: WorldSnapshot, index
       }
       return null
     }
+    case 'manual.add': {
+      if (!op.name || !String(op.name).trim()) return `${prefix}: name 必填`
+      if (op.readers !== undefined && !isFiniteNumber(op.readers)) return `${prefix}: readers 须为数字`
+      const list = snap.manuals || []
+      if (list.some((m) => m.name === String(op.name).trim())) {
+        return `${prefix}: 秘籍已在册，请用 manual.update`
+      }
+      return null
+    }
+    case 'manual.update': {
+      const list = snap.manuals || []
+      const r = resolveByIdOrName(list, op.id, op.name, '秘籍')
+      if (r.error) return `${prefix}: ${r.error}`
+      if (!op.patch || !isPlainObject(op.patch)) return `${prefix}: patch 必填`
+      if (op.patch.readers !== undefined && !isFiniteNumber(op.patch.readers)) {
+        return `${prefix}: readers 须为数字`
+      }
+      return null
+    }
+    case 'treasure.add': {
+      if (!op.name || !String(op.name).trim()) return `${prefix}: name 必填`
+      const list = snap.treasures || []
+      if (list.some((t) => t.name === String(op.name).trim())) {
+        return `${prefix}: 宝物已在册，请用 treasure.update`
+      }
+      return null
+    }
+    case 'treasure.update': {
+      const list = snap.treasures || []
+      const r = resolveByIdOrName(list, op.id, op.name, '宝物')
+      if (r.error) return `${prefix}: ${r.error}`
+      if (!op.patch || !isPlainObject(op.patch)) return `${prefix}: patch 必填`
+      return null
+    }
+    case 'forge.add': {
+      if (!op.name || !String(op.name).trim()) return `${prefix}: name 必填`
+      if (op.type !== undefined && !FORGE_TYPES.has(op.type)) return `${prefix}: type 非法`
+      if (op.progress !== undefined && !isFiniteNumber(op.progress)) {
+        return `${prefix}: progress 须为数字`
+      }
+      const list = snap.forgeQueue || []
+      if (list.some((g) => g.name === String(op.name).trim())) {
+        return `${prefix}: 锻器已在队列，请用 forge.update`
+      }
+      return null
+    }
+    case 'forge.update': {
+      const list = snap.forgeQueue || []
+      const r = resolveByIdOrName(list, op.id, op.name, '锻器')
+      if (r.error) return `${prefix}: ${r.error}`
+      if (!op.patch || !isPlainObject(op.patch)) return `${prefix}: patch 必填`
+      if (op.patch.type !== undefined && !FORGE_TYPES.has(op.patch.type)) {
+        return `${prefix}: type 非法`
+      }
+      if (op.patch.progress !== undefined && !isFiniteNumber(op.patch.progress)) {
+        return `${prefix}: progress 须为数字`
+      }
+      return null
+    }
+    case 'relation.add': {
+      if (!op.from?.trim() || !op.to?.trim()) return `${prefix}: from/to 必填`
+      if (!RELATION_TYPES.has(op.type)) return `${prefix}: type 非法`
+      if (op.intensity !== undefined && !isFiniteNumber(op.intensity)) {
+        return `${prefix}: intensity 须为数字`
+      }
+      return null
+    }
+    case 'relation.update': {
+      const list = snap.relationEdges || []
+      if (op.id) {
+        if (!list.some((e) => e.id === op.id)) return `${prefix}: 关系 id 不存在：${op.id}`
+      } else if (op.from && op.to) {
+        const hits = list.filter(
+          (e) =>
+            e.from === op.from &&
+            e.to === op.to &&
+            (op.type ? e.type === op.type : true),
+        )
+        if (!hits.length) return `${prefix}: 关系边不存在`
+        if (hits.length > 1 && !op.type) return `${prefix}: 关系边不唯一，请带 type 或 id`
+      } else {
+        return `${prefix}: 须提供 id 或 from+to`
+      }
+      if (!op.patch || !isPlainObject(op.patch)) return `${prefix}: patch 必填`
+      if (op.patch.type !== undefined && !RELATION_TYPES.has(op.patch.type)) {
+        return `${prefix}: type 非法`
+      }
+      if (op.patch.intensity !== undefined && !isFiniteNumber(op.patch.intensity)) {
+        return `${prefix}: intensity 须为数字`
+      }
+      return null
+    }
+    case 'heir.add': {
+      const key = (op.discipleId || op.name || '').trim()
+      if (!key) return `${prefix}: discipleId 或 name 必填`
+      // 允许仅姓名：apply 时再解析弟子
+      if (op.score !== undefined && !isFiniteNumber(op.score)) return `${prefix}: score 须为数字`
+      if (op.support !== undefined && !isFiniteNumber(op.support)) return `${prefix}: support 须为数字`
+      const list = snap.heirs || []
+      if (
+        list.some(
+          (h) =>
+            h.discipleId === key ||
+            h.name === key ||
+            (op.name && h.name === String(op.name).trim()),
+        )
+      ) {
+        return `${prefix}: 继承人已在观察名单，请用 heir.update`
+      }
+      return null
+    }
+    case 'heir.update': {
+      const list = snap.heirs || []
+      if (op.id) {
+        if (!list.some((h) => h.id === op.id)) return `${prefix}: 继承人 id 不存在`
+      } else if (op.name || op.discipleId) {
+        const hits = list.filter(
+          (h) =>
+            (op.name && h.name === op.name) ||
+            (op.discipleId && (h.discipleId === op.discipleId || h.name === op.discipleId)),
+        )
+        if (!hits.length) return `${prefix}: 继承人不存在`
+        if (hits.length > 1) return `${prefix}: 继承人不唯一`
+      } else {
+        return `${prefix}: 须提供 id / name / discipleId`
+      }
+      if (!op.patch || !isPlainObject(op.patch)) return `${prefix}: patch 必填`
+      if (op.patch.score !== undefined && !isFiniteNumber(op.patch.score)) {
+        return `${prefix}: score 须为数字`
+      }
+      if (op.patch.support !== undefined && !isFiniteNumber(op.patch.support)) {
+        return `${prefix}: support 须为数字`
+      }
+      return null
+    }
     case 'notify.push': {
       if (!op.title || !String(op.title).trim()) return `${prefix}: title 必填`
       return null
@@ -353,6 +665,161 @@ function validateOneOp(op: WorldOp & { op?: string }, snap: WorldSnapshot, index
     default:
       return `${prefix}: 未知 op`
   }
+}
+
+/** 把同包已排队入册的名字并入快照，供 resolve / 去重 */
+function snapWithPendingNames(
+  snap: WorldSnapshot,
+  factionNames: Set<string>,
+  cityNames: Set<string>,
+): WorldSnapshot {
+  const extraF = [...factionNames]
+    .filter((n) => !snap.factions.some((f) => f.name === n))
+    .map(
+      (n): Faction => ({
+        id: `pending-${n}`,
+        name: n,
+        power: '',
+        relation: 0,
+        stance: '中立',
+        recent: '',
+      }),
+    )
+  const extraC = [...cityNames]
+    .filter((n) => !snap.cities.some((c) => c.name === n))
+    .map(
+      (n): CityState => ({
+        id: `pending-${n}`,
+        name: n,
+        distance: '',
+        influence: 0,
+        tribute: { type: '', amount: 0, period: '' },
+        attitude: '中立',
+        governor: '',
+        notes: '',
+      }),
+    )
+  if (!extraF.length && !extraC.length) return snap
+  return {
+    ...snap,
+    factions: extraF.length ? [...snap.factions, ...extraF] : snap.factions,
+    cities: extraC.length ? [...snap.cities, ...extraC] : snap.cities,
+  }
+}
+
+/**
+ * 活世界：模型常对「正文新实体」误用 update。
+ * 若按 id/name 找不到实体，且带了 name，则提升为 add（patch 字段并入）。
+ */
+function promoteUnknownUpdateToAdd(
+  op: WorldOp,
+  snap: WorldSnapshot,
+): { op: WorldOp; promoted: boolean } {
+  if (op.op === 'faction.update') {
+    const r = resolveByIdOrName(snap.factions, op.id, op.name, '势力')
+    if (r.error && op.name && String(op.name).trim()) {
+      const p = op.patch || {}
+      const next: Extract<WorldOp, { op: 'faction.add' }> = {
+        op: 'faction.add',
+        name: String(op.name).trim(),
+      }
+      if (p.power !== undefined) next.power = String(p.power)
+      if (typeof p.relation === 'number') next.relation = p.relation
+      if (p.stance && FACTION_STANCE.has(p.stance)) next.stance = p.stance
+      if (p.recent !== undefined) next.recent = String(p.recent)
+      if (p.demand !== undefined) next.demand = String(p.demand)
+      return { op: next, promoted: true }
+    }
+  }
+  if (op.op === 'city.update') {
+    const r = resolveByIdOrName(snap.cities, op.id, op.name, '城池')
+    if (r.error && op.name && String(op.name).trim()) {
+      const p = op.patch || {}
+      const next: Extract<WorldOp, { op: 'city.add' }> = {
+        op: 'city.add',
+        name: String(op.name).trim(),
+      }
+      if (typeof p.influence === 'number') next.influence = p.influence
+      if (p.attitude && CITY_ATTITUDE.has(p.attitude)) next.attitude = p.attitude
+      if (p.governor !== undefined) next.governor = String(p.governor)
+      if (p.notes !== undefined) next.notes = String(p.notes)
+      return { op: next, promoted: true }
+    }
+  }
+  if (op.op === 'manual.update') {
+    const r = resolveByIdOrName(snap.manuals || [], op.id, op.name, '秘籍')
+    if (r.error && op.name && String(op.name).trim()) {
+      const p = op.patch || {}
+      const next: Extract<WorldOp, { op: 'manual.add' }> = {
+        op: 'manual.add',
+        name: String(op.name).trim(),
+      }
+      if (p.school !== undefined) next.school = String(p.school)
+      if (p.grade !== undefined) next.grade = String(p.grade)
+      if (p.restriction !== undefined) next.restriction = String(p.restriction)
+      if (typeof p.readers === 'number') next.readers = p.readers
+      if (p.insight !== undefined) next.insight = String(p.insight)
+      if (typeof p.sealed === 'boolean') next.sealed = p.sealed
+      return { op: next, promoted: true }
+    }
+  }
+  if (op.op === 'treasure.update') {
+    const r = resolveByIdOrName(snap.treasures || [], op.id, op.name, '宝物')
+    if (r.error && op.name && String(op.name).trim()) {
+      const p = op.patch || {}
+      const next: Extract<WorldOp, { op: 'treasure.add' }> = {
+        op: 'treasure.add',
+        name: String(op.name).trim(),
+      }
+      if (p.type !== undefined) next.type = String(p.type)
+      if (p.grade !== undefined) next.grade = String(p.grade)
+      if (p.owner !== undefined) next.owner = p.owner
+      if (p.desc !== undefined) next.desc = String(p.desc)
+      if (typeof p.bound === 'boolean') next.bound = p.bound
+      return { op: next, promoted: true }
+    }
+  }
+  if (op.op === 'forge.update') {
+    const r = resolveByIdOrName(snap.forgeQueue || [], op.id, op.name, '锻器')
+    if (r.error && op.name && String(op.name).trim()) {
+      const p = op.patch || {}
+      const next: Extract<WorldOp, { op: 'forge.add' }> = {
+        op: 'forge.add',
+        name: String(op.name).trim(),
+      }
+      if (p.type && FORGE_TYPES.has(p.type)) next.type = p.type
+      if (p.grade !== undefined) next.grade = String(p.grade)
+      if (typeof p.progress === 'number') next.progress = p.progress
+      if (p.craftsman !== undefined) next.craftsman = p.craftsman
+      if (p.materials !== undefined) next.materials = String(p.materials)
+      if (p.power !== undefined) next.power = String(p.power)
+      return { op: next, promoted: true }
+    }
+  }
+  if (op.op === 'heir.update') {
+    const list = snap.heirs || []
+    const key = (op.name || op.discipleId || '').trim()
+    const found = op.id
+      ? list.some((h) => h.id === op.id)
+      : key
+        ? list.some((h) => h.name === key || h.discipleId === key)
+        : false
+    if (!found && key) {
+      const p = op.patch || {}
+      const next: Extract<WorldOp, { op: 'heir.add' }> = {
+        op: 'heir.add',
+        name: op.name ? String(op.name).trim() : key,
+        discipleId: op.discipleId,
+      }
+      if (typeof p.score === 'number') next.score = p.score
+      if (Array.isArray(p.strengths)) next.strengths = p.strengths.map(String)
+      if (Array.isArray(p.risks)) next.risks = p.risks.map(String)
+      if (typeof p.support === 'number') next.support = p.support
+      if (typeof p.designated === 'boolean') next.designated = p.designated
+      return { op: next, promoted: true }
+    }
+  }
+  return { op, promoted: false }
 }
 
 /**
@@ -379,6 +846,10 @@ export function validateWorldDelta(delta: WorldDelta, snap: WorldSnapshot): Vali
   }
 
   const kept: WorldOp[] = []
+  // 同包内连续 add 后，后续 op 应看到已入册名（防同名双 add）
+  const pendingFactionNames = new Set(snap.factions.map((f) => f.name))
+  const pendingCityNames = new Set(snap.cities.map((c) => c.name))
+
   for (let i = 0; i < opsIn.length; i++) {
     if (kept.length >= MAX_OPS) {
       const msg = `ops 超过上限 ${MAX_OPS}，已截断（原 ${opsIn.length} 条）`
@@ -388,14 +859,23 @@ export function validateWorldDelta(delta: WorldDelta, snap: WorldSnapshot): Vali
       }
       break
     }
-    const op = opsIn[i] as WorldOp & { op?: string }
-    const err = validateOneOp(op, snap, i)
+    let op = opsIn[i] as WorldOp & { op?: string }
+    const validateSnap = snapWithPendingNames(snap, pendingFactionNames, pendingCityNames)
+    const promo = promoteUnknownUpdateToAdd(op as WorldOp, validateSnap)
+    if (promo.promoted) {
+      warnings.push(`ops[${i}] 未在册实体，已将 update 提升为 add`)
+      op = promo.op as WorldOp & { op?: string }
+    }
+
+    const err = validateOneOp(op, validateSnap, i)
     if (err) {
       errors.push(err)
       warnings.push(`已跳过：${err}`)
       continue
     }
     kept.push(op as WorldOp)
+    if (op.op === 'faction.add' && op.name) pendingFactionNames.add(String(op.name).trim())
+    if (op.op === 'city.add' && op.name) pendingCityNames.add(String(op.name).trim())
   }
 
   const cleaned: WorldDelta = {
@@ -505,6 +985,24 @@ export function applyWorldDeltaToSnapshot(
         changed = true
         break
       }
+      case 'faction.add': {
+        const name = String(op.name).trim()
+        if (!name) break
+        if (next.factions.some((f) => f.name === name)) break
+        const f: Faction = {
+          id: nextId('fa'),
+          name,
+          power: op.power ? String(op.power) : '新势力',
+          relation: typeof op.relation === 'number' ? clamp(op.relation, -100, 100) : 0,
+          stance: op.stance && FACTION_STANCE.has(op.stance) ? op.stance : '中立',
+          recent: op.recent ? String(op.recent) : '初现山门视野',
+          demand: op.demand ? String(op.demand) : undefined,
+        }
+        next.factions.push(f)
+        lines.push(`新势力入册 ${f.name}（${f.stance}·关系${f.relation}）`)
+        changed = true
+        break
+      }
       case 'faction.update': {
         const r = resolveByIdOrName(next.factions, op.id, op.name, '势力')
         if (!r.item || !op.patch) break
@@ -518,6 +1016,35 @@ export function applyWorldDeltaToSnapshot(
         changed = true
         break
       }
+      case 'city.add': {
+        const name = String(op.name).trim()
+        if (!name) break
+        if (next.cities.some((c) => c.name === name)) break
+        const tributeType =
+          op.tribute?.type && String(op.tribute.type).trim()
+            ? String(op.tribute.type).trim()
+            : '灵石折色'
+        const tributeAmount =
+          typeof op.tribute?.amount === 'number' ? clamp(op.tribute.amount, 0, 99999) : 0
+        const tributePeriod =
+          op.tribute?.period && String(op.tribute.period).trim()
+            ? String(op.tribute.period).trim()
+            : '每季'
+        const c: CityState = {
+          id: nextId('c'),
+          name,
+          distance: op.distance ? String(op.distance) : '未详',
+          influence: typeof op.influence === 'number' ? clamp(op.influence, 0, 100) : 20,
+          tribute: { type: tributeType, amount: tributeAmount, period: tributePeriod },
+          attitude: op.attitude && CITY_ATTITUDE.has(op.attitude) ? op.attitude : '中立',
+          governor: op.governor ? String(op.governor) : '未详',
+          notes: op.notes ? String(op.notes) : '新纳入视野的城坞',
+        }
+        next.cities.push(c)
+        lines.push(`新城池入册 ${c.name}（${c.attitude}·影响${c.influence}）`)
+        changed = true
+        break
+      }
       case 'city.update': {
         const r = resolveByIdOrName(next.cities, op.id, op.name, '城池')
         if (!r.item || !op.patch) break
@@ -527,6 +1054,218 @@ export function applyWorldDeltaToSnapshot(
         if (p.notes !== undefined) r.item.notes = String(p.notes)
         if (p.governor !== undefined) r.item.governor = String(p.governor)
         lines.push(`城池 ${r.item.name} 态度更新`)
+        changed = true
+        break
+      }
+      case 'manual.add': {
+        if (!next.manuals) next.manuals = []
+        const name = String(op.name).trim()
+        if (!name || next.manuals.some((m) => m.name === name)) break
+        const m: Manual = {
+          id: nextId('m'),
+          name,
+          school: op.school ? String(op.school) : '外来',
+          grade: op.grade ? String(op.grade) : '黄品',
+          restriction: op.restriction ? String(op.restriction) : '掌门裁定',
+          readers: typeof op.readers === 'number' ? clamp(op.readers, 0, 999) : 0,
+          insight: op.insight ? String(op.insight) : '待悟',
+          sealed: typeof op.sealed === 'boolean' ? op.sealed : false,
+        }
+        next.manuals.push(m)
+        lines.push(`藏经新入 ${m.name}${m.sealed ? '（封印）' : ''}`)
+        changed = true
+        break
+      }
+      case 'manual.update': {
+        if (!next.manuals) next.manuals = []
+        const r = resolveByIdOrName(next.manuals, op.id, op.name, '秘籍')
+        if (!r.item || !op.patch) break
+        const p = op.patch
+        if (p.name !== undefined) r.item.name = String(p.name)
+        if (p.school !== undefined) r.item.school = String(p.school)
+        if (p.grade !== undefined) r.item.grade = String(p.grade)
+        if (p.restriction !== undefined) r.item.restriction = String(p.restriction)
+        if (typeof p.readers === 'number') r.item.readers = clamp(p.readers, 0, 999)
+        if (p.insight !== undefined) r.item.insight = String(p.insight)
+        if (typeof p.sealed === 'boolean') r.item.sealed = p.sealed
+        lines.push(`秘籍 ${r.item.name} 状态更新`)
+        changed = true
+        break
+      }
+      case 'treasure.add': {
+        if (!next.treasures) next.treasures = []
+        const name = String(op.name).trim()
+        if (!name || next.treasures.some((t) => t.name === name)) break
+        const t: Treasure = {
+          id: nextId('t'),
+          name,
+          type: op.type ? String(op.type) : '杂物',
+          grade: op.grade ? String(op.grade) : '黄品',
+          owner: op.owner === null ? null : op.owner != null ? String(op.owner) : null,
+          desc: op.desc ? String(op.desc) : '正文新获',
+          bound: typeof op.bound === 'boolean' ? op.bound : false,
+        }
+        next.treasures.push(t)
+        lines.push(`宝库新入 ${t.name}`)
+        changed = true
+        break
+      }
+      case 'treasure.update': {
+        if (!next.treasures) next.treasures = []
+        const r = resolveByIdOrName(next.treasures, op.id, op.name, '宝物')
+        if (!r.item || !op.patch) break
+        const p = op.patch
+        if (p.name !== undefined) r.item.name = String(p.name)
+        if (p.type !== undefined) r.item.type = String(p.type)
+        if (p.grade !== undefined) r.item.grade = String(p.grade)
+        if (p.owner !== undefined) r.item.owner = p.owner
+        if (p.desc !== undefined) r.item.desc = String(p.desc)
+        if (typeof p.bound === 'boolean') r.item.bound = p.bound
+        lines.push(`宝物 ${r.item.name} 状态更新`)
+        changed = true
+        break
+      }
+      case 'forge.add': {
+        if (!next.forgeQueue) next.forgeQueue = []
+        const name = String(op.name).trim()
+        if (!name || next.forgeQueue.some((g) => g.name === name)) break
+        const g: ForgeItem = {
+          id: nextId('g'),
+          name,
+          type: op.type && FORGE_TYPES.has(op.type) ? op.type : '法器',
+          grade: op.grade ? String(op.grade) : '黄品',
+          progress: typeof op.progress === 'number' ? clamp(op.progress, 0, 100) : 0,
+          craftsman: op.craftsman === null ? null : op.craftsman != null ? String(op.craftsman) : null,
+          materials: op.materials ? String(op.materials) : '待备料',
+          power: op.power ? String(op.power) : '未成器',
+        }
+        next.forgeQueue.push(g)
+        lines.push(`锻器入列 ${g.name}`)
+        changed = true
+        break
+      }
+      case 'forge.update': {
+        if (!next.forgeQueue) next.forgeQueue = []
+        const r = resolveByIdOrName(next.forgeQueue, op.id, op.name, '锻器')
+        if (!r.item || !op.patch) break
+        const p = op.patch
+        if (p.name !== undefined) r.item.name = String(p.name)
+        if (p.type && FORGE_TYPES.has(p.type)) r.item.type = p.type
+        if (p.grade !== undefined) r.item.grade = String(p.grade)
+        if (typeof p.progress === 'number') r.item.progress = clamp(p.progress, 0, 100)
+        if (p.craftsman !== undefined) r.item.craftsman = p.craftsman
+        if (p.materials !== undefined) r.item.materials = String(p.materials)
+        if (p.power !== undefined) r.item.power = String(p.power)
+        lines.push(`锻器 ${r.item.name} 进度更新`)
+        changed = true
+        break
+      }
+      case 'relation.add': {
+        if (!next.relationEdges) next.relationEdges = []
+        const from = String(op.from).trim()
+        const to = String(op.to).trim()
+        if (!from || !to || !RELATION_TYPES.has(op.type)) break
+        const edge: RelationEdge = {
+          id: nextId('r'),
+          from,
+          to,
+          type: op.type,
+          intensity: typeof op.intensity === 'number' ? clamp(op.intensity, 0, 100) : 40,
+          note: op.note ? String(op.note) : '正文新结',
+        }
+        next.relationEdges.push(edge)
+        lines.push(`关系 ${from}↔${to}（${edge.type}）`)
+        changed = true
+        break
+      }
+      case 'relation.update': {
+        if (!next.relationEdges) next.relationEdges = []
+        let item: RelationEdge | undefined
+        if (op.id) {
+          item = next.relationEdges.find((e) => e.id === op.id)
+        } else if (op.from && op.to) {
+          const hits = next.relationEdges.filter(
+            (e) =>
+              e.from === op.from &&
+              e.to === op.to &&
+              (op.type ? e.type === op.type : true),
+          )
+          item = hits.length === 1 ? hits[0] : undefined
+        }
+        if (!item || !op.patch) break
+        const p = op.patch
+        if (p.from !== undefined) item.from = String(p.from)
+        if (p.to !== undefined) item.to = String(p.to)
+        if (p.type && RELATION_TYPES.has(p.type)) item.type = p.type
+        if (typeof p.intensity === 'number') item.intensity = clamp(p.intensity, 0, 100)
+        if (p.note !== undefined) item.note = String(p.note)
+        lines.push(`关系 ${item.from}↔${item.to} 更新`)
+        changed = true
+        break
+      }
+      case 'heir.add': {
+        if (!next.heirs) next.heirs = []
+        const key = (op.discipleId || op.name || '').trim()
+        if (!key) break
+        // 解析弟子：id 或姓名
+        const disc =
+          next.disciples.find((d) => d.id === key || d.name === key) ||
+          (op.name
+            ? next.disciples.find((d) => d.name === String(op.name).trim())
+            : undefined)
+        const discipleId = disc?.id || (op.discipleId?.startsWith('d') ? op.discipleId : key)
+        const heirName = disc?.name || (op.name ? String(op.name).trim() : key)
+        if (
+          next.heirs.some(
+            (h) => h.discipleId === discipleId || h.name === heirName,
+          )
+        ) {
+          break
+        }
+        const h: HeirCandidate = {
+          id: nextId('h'),
+          discipleId,
+          name: heirName,
+          score: typeof op.score === 'number' ? clamp(op.score, 0, 100) : 50,
+          strengths: Array.isArray(op.strengths) ? op.strengths.map(String) : ['新晋'],
+          risks: Array.isArray(op.risks) ? op.risks.map(String) : ['根基未稳'],
+          support: typeof op.support === 'number' ? clamp(op.support, 0, 100) : 20,
+          designated: !!op.designated,
+        }
+        if (h.designated) {
+          next.heirs = next.heirs.map((x) => ({ ...x, designated: false }))
+        }
+        next.heirs.push(h)
+        lines.push(`继位观察 +${h.name}`)
+        changed = true
+        break
+      }
+      case 'heir.update': {
+        if (!next.heirs) next.heirs = []
+        let item: HeirCandidate | undefined
+        if (op.id) item = next.heirs.find((h) => h.id === op.id)
+        else {
+          const key = (op.name || op.discipleId || '').trim()
+          const hits = next.heirs.filter(
+            (h) => h.name === key || h.discipleId === key || h.discipleId === op.discipleId,
+          )
+          item = hits.length === 1 ? hits[0] : undefined
+        }
+        if (!item || !op.patch) break
+        const p = op.patch
+        if (p.name !== undefined) item.name = String(p.name)
+        if (typeof p.score === 'number') item.score = clamp(p.score, 0, 100)
+        if (Array.isArray(p.strengths)) item.strengths = p.strengths.map(String)
+        if (Array.isArray(p.risks)) item.risks = p.risks.map(String)
+        if (typeof p.support === 'number') item.support = clamp(p.support, 0, 100)
+        if (typeof p.designated === 'boolean') {
+          if (p.designated) {
+            for (const h of next.heirs) h.designated = h.id === item.id
+          } else {
+            item.designated = false
+          }
+        }
+        lines.push(`继承人 ${item.name} 观察更新`)
         changed = true
         break
       }
@@ -575,6 +1314,11 @@ export function emptyTestSnapshot(partial?: Partial<WorldSnapshot>): WorldSnapsh
     notifications: [],
     fieldPlots: [],
     urgentEvents: [],
+    manuals: [],
+    treasures: [],
+    forgeQueue: [],
+    relationEdges: [],
+    heirs: [],
     ...partial,
   }
 }

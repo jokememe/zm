@@ -1,31 +1,33 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import Icon from '@/components/ui/Icon.vue'
-import { relationEdges } from '@/data/mock'
 import { useModal } from '@/composables/useModal'
 import { useTianji } from '@/composables/useTianji'
 import { useGameState } from '@/composables/useGameState'
 
 const { open } = useModal()
 const { injectContext } = useTianji()
-const { focusTianji, disciples, masterName } = useGameState()
+const { focusTianji, disciples, masterName, relationEdges } = useGameState()
 
 const discIds = computed(() => new Set(disciples.value.map((d) => d.id)))
+const discNames = computed(() => new Set(disciples.value.map((d) => d.name)))
 
-/** 仅展示双方仍在册（或涉及掌门）的关系 */
+/** 仅展示双方仍在册（或涉及掌门）的关系；from/to 可为 id 或姓名 */
 const edges = computed(() => {
   const ids = discIds.value
+  const names = discNames.value
   const master = masterName.value
-  return relationEdges.filter((e) => {
-    const fromOk = e.from === '沈青岚' || e.from === master || ids.has(e.from)
-    const toOk = e.to === '沈青岚' || e.to === master || ids.has(e.to)
+  return relationEdges.value.filter((e) => {
+    const fromOk =
+      e.from === '沈青岚' || e.from === master || ids.has(e.from) || names.has(e.from)
+    const toOk = e.to === '沈青岚' || e.to === master || ids.has(e.to) || names.has(e.to)
     return fromOk && toOk
   })
 })
 
 function nameOf(id: string) {
   if (id === '沈青岚' || id === masterName.value) return masterName.value
-  return disciples.value.find((d) => d.id === id)?.name ?? id
+  return disciples.value.find((d) => d.id === id || d.name === id)?.name ?? id
 }
 
 const typeClass: Record<string, string> = {

@@ -78,6 +78,13 @@ describe('buildSettleMessages (NL contract, no API json_schema)', () => {
     expect(msgs[1].content).toContain('"patch"')
     expect(msgs[1].content).toContain('灵石')
     expect(msgs[1].content).toContain('disciple.add')
+    // 活世界：新势力 / 新城池必须能入库
+    expect(msgs[1].content).toContain('faction.add')
+    expect(msgs[1].content).toContain('city.add')
+    expect(msgs[1].content).toContain('manual.add')
+    expect(msgs[1].content).toContain('treasure.add')
+    expect(msgs[1].content).toContain('relation.add')
+    expect(msgs[0].content).toMatch(/faction\.add|新势力|新实体/)
     // 明确不依赖 API structured output 字段名
     expect(JSON.stringify(msgs)).not.toMatch(/response_format|json_schema/)
   })

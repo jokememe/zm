@@ -271,4 +271,176 @@ describe('applyWorldDeltaToSnapshot', () => {
     expect(next.cities[0].attitude).toBe('犹豫')
     expect(next.cities[0].influence).toBe(40)
   })
+
+  it('adds new faction and city from story (living world)', () => {
+    const snap = emptyTestSnapshot({
+      factions: [baseFaction()],
+      cities: [baseCity()],
+    })
+    const { snap: next, result } = applyWorldDeltaToSnapshot(
+      {
+        ops: [
+          {
+            op: 'faction.add',
+            name: '霜刃盟',
+            power: '边陲小盟',
+            relation: -10,
+            stance: '中立',
+            recent: '派人联络本宗',
+          },
+          {
+            op: 'city.add',
+            name: '落雁城',
+            distance: '东路两日',
+            influence: 22,
+            attitude: '中立',
+            governor: '城主未详',
+            notes: '新通商路',
+          },
+        ],
+      },
+      snap,
+    )
+    expect(next.factions).toHaveLength(2)
+    expect(next.factions[1].name).toBe('霜刃盟')
+    expect(next.factions[1].stance).toBe('中立')
+    expect(next.factions[1].relation).toBe(-10)
+    expect(next.cities).toHaveLength(2)
+    expect(next.cities[1].name).toBe('落雁城')
+    expect(next.cities[1].influence).toBe(22)
+    expect(result.changed).toBe(true)
+    expect(result.lines.some((l) => l.includes('霜刃盟'))).toBe(true)
+  })
+
+  it('does not duplicate faction.add same name', () => {
+    const snap = emptyTestSnapshot({ factions: [baseFaction()] })
+    const { snap: next } = applyWorldDeltaToSnapshot(
+      { ops: [{ op: 'faction.add', name: '赤焰谷', stance: '敌对' }] },
+      snap,
+    )
+    expect(next.factions).toHaveLength(1)
+  })
+})
+
+describe('validateWorldDelta living entities', () => {
+  it('accepts faction.add and city.add', () => {
+    const snap = emptyTestSnapshot()
+    const v = validateWorldDelta(
+      {
+        ops: [
+          { op: 'faction.add', name: '霜刃盟', stance: '敌对', relation: -30 },
+          { op: 'city.add', name: '落雁城', attitude: '犹豫', influence: 15 },
+        ],
+      },
+      snap,
+    )
+    expect(v.ok).toBe(true)
+    expect(v.delta?.ops).toHaveLength(2)
+    expect(v.delta?.ops?.[0]).toMatchObject({ op: 'faction.add', name: '霜刃盟' })
+    expect(v.delta?.ops?.[1]).toMatchObject({ op: 'city.add', name: '落雁城' })
+  })
+
+  it('promotes unknown faction.update to faction.add', () => {
+    const snap = emptyTestSnapshot({ factions: [baseFaction()] })
+    const v = validateWorldDelta(
+      {
+        ops: [
+          {
+            op: 'faction.update',
+            name: '霜刃盟',
+            patch: { relation: -20, stance: '敌对', recent: '截杀商队' },
+          },
+        ],
+      },
+      snap,
+    )
+    expect(v.ok).toBe(true)
+    expect(v.delta?.ops?.[0]).toMatchObject({
+      op: 'faction.add',
+      name: '霜刃盟',
+      relation: -20,
+      stance: '敌对',
+      recent: '截杀商队',
+    })
+    expect(v.warnings.some((w) => w.includes('提升为 add'))).toBe(true)
+
+    const { snap: next } = applyWorldDeltaToSnapshot(v.delta!, snap)
+    expect(next.factions.map((f) => f.name)).toContain('霜刃盟')
+  })
+
+  it('promotes unknown city.update to city.add', () => {
+    const snap = emptyTestSnapshot({ cities: [baseCity()] })
+    const v = validateWorldDelta(
+      {
+        ops: [
+          {
+            op: 'city.update',
+            name: '落雁城',
+            patch: { attitude: '中立', influence: 18, notes: '新码头' },
+          },
+        ],
+      },
+      snap,
+    )
+    expect(v.delta?.ops?.[0]).toMatchObject({ op: 'city.add', name: '落雁城', influence: 18 })
+    const { snap: next } = applyWorldDeltaToSnapshot(v.delta!, snap)
+    expect(next.cities.map((c) => c.name)).toContain('落雁城')
+  })
+
+  it('skips faction.add when name already on roster', () => {
+    const snap = emptyTestSnapshot({ factions: [baseFaction()] })
+    const v = validateWorldDelta(
+      { ops: [{ op: 'faction.add', name: '赤焰谷', stance: '敌对' }] },
+      snap,
+    )
+    expect(v.delta?.ops).toEqual([])
+    expect(v.warnings.some((w) => w.includes('已在册'))).toBe(true)
+  })
+
+  it('sanitizes faction.add name aliases', () => {
+    const d = sanitizeWorldDelta({
+      ops: [{ op: 'faction.add', 势力名: '霜刃盟', stance: '中立' } as never],
+    })
+    expect(d.ops?.[0]).toMatchObject({ op: 'faction.add', name: '霜刃盟' })
+  })
+
+  it('adds manual treasure forge relation heir', () => {
+    const snap = emptyTestSnapshot({
+      disciples: [baseDisciple()],
+    })
+    const { snap: next } = applyWorldDeltaToSnapshot(
+      {
+        ops: [
+          { op: 'manual.add', name: '霜刃心法', sealed: false },
+          { op: 'treasure.add', name: '玄铁令', owner: null },
+          { op: 'forge.add', name: '霜刃', type: '飞剑', progress: 5 },
+          { op: 'relation.add', from: 'd1', to: '掌门', type: '师徒', intensity: 80 },
+          { op: 'heir.add', name: '陆承渊', score: 70, support: 30 },
+        ],
+      },
+      snap,
+    )
+    expect(next.manuals?.some((m) => m.name === '霜刃心法')).toBe(true)
+    expect(next.treasures?.some((t) => t.name === '玄铁令')).toBe(true)
+    expect(next.forgeQueue?.some((g) => g.name === '霜刃')).toBe(true)
+    expect(next.relationEdges?.some((e) => e.type === '师徒')).toBe(true)
+    expect(next.heirs?.some((h) => h.name === '陆承渊')).toBe(true)
+  })
+
+  it('promotes unknown manual.update to add', () => {
+    const snap = emptyTestSnapshot()
+    const v = validateWorldDelta(
+      {
+        ops: [
+          {
+            op: 'manual.update',
+            name: '无名残卷',
+            patch: { sealed: true, insight: '难辨' },
+          },
+        ],
+      },
+      snap,
+    )
+    expect(v.delta?.ops?.[0]).toMatchObject({ op: 'manual.add', name: '无名残卷', sealed: true })
+  })
 })

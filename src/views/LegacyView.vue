@@ -1,18 +1,20 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import Icon from '@/components/ui/Icon.vue'
-import { heirs } from '@/data/mock'
 import { useModal } from '@/composables/useModal'
 import { useGameState } from '@/composables/useGameState'
 import { useTianji } from '@/composables/useTianji'
 
 const { open } = useModal()
-const { designatedHeirId, focusTianji, disciples } = useGameState()
+const { designatedHeirId, focusTianji, disciples, heirs } = useGameState()
 const { injectContext } = useTianji()
 
 const visibleHeirs = computed(() => {
   const ids = new Set(disciples.value.map((d) => d.id))
-  return heirs.filter((h) => ids.has(h.discipleId))
+  const names = new Set(disciples.value.map((d) => d.name))
+  return heirs.value.filter(
+    (h) => ids.has(h.discipleId) || names.has(h.discipleId) || names.has(h.name),
+  )
 })
 
 function isDesignated(id: string) {

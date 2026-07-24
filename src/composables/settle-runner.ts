@@ -77,11 +77,36 @@ export function formatSnapshotForSettle(snap: WorldSnapshot): string {
   const city = snap.cities
     .map((c) => `${c.id}:${c.name}|${c.attitude}|${c.influence}`)
     .join('；')
+  const manuals = (snap.manuals || [])
+    .slice(0, 8)
+    .map((m) => `${m.id}:${m.name}|${m.sealed ? '封' : '开'}`)
+    .join('；')
+  const treasures = (snap.treasures || [])
+    .slice(0, 8)
+    .map((t) => `${t.id}:${t.name}|${t.owner || '库藏'}`)
+    .join('；')
+  const forge = (snap.forgeQueue || [])
+    .slice(0, 6)
+    .map((g) => `${g.id}:${g.name}|${g.progress}%`)
+    .join('；')
+  const rel = (snap.relationEdges || [])
+    .slice(0, 8)
+    .map((e) => `${e.id}:${e.from}→${e.to}|${e.type}|${e.intensity}`)
+    .join('；')
+  const heirs = (snap.heirs || [])
+    .slice(0, 6)
+    .map((h) => `${h.id}:${h.name}|分${h.score}|${h.designated ? '储' : '候'}`)
+    .join('；')
   return [
     `资源 灵石${res.spiritStone} 灵谷${res.spiritGrain} 丹材${res.herb} 矿铁${res.ore} 声望${res.prestige} 气运${res.destiny}`,
     `弟子 ${disc || '无'}`,
     `势力 ${fac || '无'}`,
     `城池 ${city || '无'}`,
+    `秘籍 ${manuals || '无'}`,
+    `宝物 ${treasures || '无'}`,
+    `锻器 ${forge || '无'}`,
+    `关系 ${rel || '无'}`,
+    `继位 ${heirs || '无'}`,
   ].join('\n')
 }
 
@@ -101,7 +126,8 @@ export const SETTLE_SYSTEM_PROMPT = [
   '你是宗门经营游戏的局面结算器，不是说书人。',
   '唯一任务：根据【当前局面】与本回【玩家/sum/剧情】，输出一个可被 JSON.parse 的对象，表示本回应写入存档的变更。',
   '禁止：故事正文、分析过程、markdown 代码围栏、前后缀说明、思考标签。',
-  '禁止：虚构正文未出现的收徒/交恶/纳贡；禁止编造快照中不存在的弟子 id。',
+  '禁止：虚构正文未出现的收徒/新势力/新城池/新秘籍/新宝物/新关系/交恶/纳贡；禁止编造快照中不存在的弟子 id。',
+  '正文若出现【当前局面】列表中没有的新实体，必须用对应 *.add 写入（faction/city/manual/treasure/forge/relation/heir），不可只写 notify。',
   '无任何局面变更时只输出：{"resources":{},"ops":[],"summary":"无"}',
 ].join('')
 
@@ -128,18 +154,37 @@ ops：数组，本回最多 12 条。op 只能是下列之一（字面量完全�
   错误示例（禁止）：{"op":"disciple.update","name":"陆承渊","loyalty":85}
 - disciple.remove：离宗/除名。id 或 name 二选一。
   例 {"op":"disciple.remove","name":"某某"}
-- faction.update：改势力。id 或 name + patch。
-  例 {"op":"faction.update","name":"赤焰谷","patch":{"relation":-40,"stance":"敌对","recent":"遣使"}}
+- faction.add：正文新出现、快照势力列表里没有的势力。必须有 name。
+  例 {"op":"faction.add","name":"霜刃盟","power":"边陲小盟","relation":-10,"stance":"中立","recent":"派人联络"}
   stance 只能是：同盟、友好、中立、敌对、觊觎
-- city.update：改城池。id 或 name + patch。
-  例 {"op":"city.update","name":"青石城","patch":{"attitude":"犹豫","influence":40}}
+- faction.update：改已有势力。id 或 name + patch。不要对未入册势力用 update。
+  例 {"op":"faction.update","name":"赤焰谷","patch":{"relation":-40,"stance":"敌对","recent":"遣使"}}
+- city.add：正文新出现、快照城池列表里没有的城坞。必须有 name。
+  例 {"op":"city.add","name":"落雁城","distance":"东路两日","influence":20,"attitude":"中立","governor":"城主未详","notes":"新通商路"}
   attitude 只能是：恭顺、中立、犹豫、敌视
+- city.update：改已有城池。id 或 name + patch。不要对未入册城池用 update。
+  例 {"op":"city.update","name":"青石城","patch":{"attitude":"犹豫","influence":40}}
+- manual.add / manual.update：藏经阁秘籍。add 须 name；update 须 id/name + patch（可改 sealed、readers、insight）。
+  例 {"op":"manual.add","name":"霜刃心法","school":"剑道","grade":"玄品","sealed":false,"insight":"锋芒内敛"}
+  例 {"op":"manual.update","name":"九重雾隐","patch":{"sealed":false,"insight":"已解一重"}}
+- treasure.add / treasure.update：宝库。add 须 name；owner 可为姓名或 null（库藏）。
+  例 {"op":"treasure.add","name":"玄铁令","type":"信物","grade":"玄品","owner":null,"desc":"霜刃盟信物"}
+  例 {"op":"treasure.update","name":"寒玉瓶","patch":{"owner":"陆承渊"}}
+- forge.add / forge.update：锻器队列。type 只能是：法宝、飞剑、护甲、法器。progress 0-100。
+  例 {"op":"forge.add","name":"霜刃","type":"飞剑","grade":"玄品","progress":10,"craftsman":"韩铁山"}
+  例 {"op":"forge.update","name":"青岚残剑·重修","patch":{"progress":80}}
+- relation.add / relation.update：关系网。type 只能是：师徒、道侣、结义、仇恨、竞争、血缘。from/to 用弟子 id 或掌门名。
+  例 {"op":"relation.add","from":"d1","to":"d3","type":"结义","intensity":50,"note":"共御外敌"}
+  例 {"op":"relation.update","from":"d1","to":"d2","type":"道侣","patch":{"intensity":85,"note":"已定终身"}}
+- heir.add / heir.update：继位观察名单。discipleId 或 name 指向在册弟子。
+  例 {"op":"heir.add","name":"陆承渊","score":75,"support":40,"strengths":["剑道"],"risks":["年浅"]}
+  例 {"op":"heir.update","name":"陆承渊","patch":{"designated":true,"support":55}}
 - notify.push：系统风闻。必须有 title。
   例 {"op":"notify.push","title":"山门来客","body":"……"}
 
 弟子 status 只能是：在宗、闭关、外勤、受伤、叛离风险。
-定位优先用【当前局面】里的 id:名；改已有角色用 update，不要对已在册者再 add。
-只记录正文已发生或明确承诺且应立即生效的变更。`
+定位优先用【当前局面】里的 id:名；改已有实体用 update，新实体用 add，不要对已在册者再 add。
+只记录正文已发生或明确承诺且应立即生效的变更。活世界：新实体必须 add 进列表，对应页面会立刻显示。`
 
 /** 组装 settle 的 messages（纯函数，便于单测；不依赖 API schema 能力）
  * 顺序：system 任务 →（可选）system 破限 → user 契约

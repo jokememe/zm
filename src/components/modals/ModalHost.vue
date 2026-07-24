@@ -10,14 +10,6 @@ import { getSettings } from '@/sillytavern'
 import { snapshotWorldState } from '@/composables/world-state'
 import { loadMemoryBank } from '@/composables/memory-lore'
 import { runSeasonUrgents } from '@/composables/season-urgent'
-import {
-  forgeQueue,
-  manuals,
-  treasures,
-  heirs,
-  relationEdges,
-} from '@/data/mock'
-
 const { stack, close } = useModal()
 const toast = useToast()
 const {
@@ -34,6 +26,12 @@ const {
   openUrgentEvents,
   fieldPlots,
   alchemyRecipes,
+  manuals,
+  treasures,
+  forgeQueue,
+  heirs,
+  relationEdges,
+  masterName,
   resolveUrgentEvent,
   appendUrgentEvents,
   calendar,
@@ -53,18 +51,18 @@ const event = computed(() =>
 )
 const disciple = computed(() => disciples.value.find((d) => d.id === p('discipleId')))
 const recipe = computed(() => alchemyRecipes.value.find((a) => a.id === p('recipeId')))
-const forge = computed(() => forgeQueue.find((g) => g.id === p('forgeId')))
-const manual = computed(() => manuals.find((m) => m.id === p('manualId')))
-const treasure = computed(() => treasures.find((t) => t.id === p('treasureId')))
+const forge = computed(() => forgeQueue.value.find((g) => g.id === p('forgeId')))
+const manual = computed(() => manuals.value.find((m) => m.id === p('manualId')))
+const treasure = computed(() => treasures.value.find((t) => t.id === p('treasureId')))
 const field = computed(() => fieldPlots.value.find((f) => f.id === p('fieldId')))
 const city = computed(() => cities.value.find((c) => c.id === p('cityId')))
 const faction = computed(() => factions.value.find((f) => f.id === p('factionId')))
-const heir = computed(() => heirs.find((h) => h.id === p('heirId')))
-const relation = computed(() => relationEdges.find((r) => r.id === p('relationId')))
+const heir = computed(() => heirs.value.find((h) => h.id === p('heirId')))
+const relation = computed(() => relationEdges.value.find((r) => r.id === p('relationId')))
 
 function resolveName(id: string) {
-  if (id === '沈青岚') return id
-  return disciples.value.find((d) => d.id === id)?.name ?? id
+  if (id === '沈青岚' || id === masterName.value) return masterName.value
+  return disciples.value.find((d) => d.id === id || d.name === id)?.name ?? id
 }
 
 function onEventChoice(choiceId: string) {

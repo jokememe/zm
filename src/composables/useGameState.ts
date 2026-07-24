@@ -9,6 +9,11 @@ import type {
   UrgentEvent,
   FieldPlot,
   AlchemyRecipe,
+  Manual,
+  Treasure,
+  ForgeItem,
+  RelationEdge,
+  HeirCandidate,
 } from '@/types/game'
 import {
   resources as initialResources,
@@ -18,6 +23,10 @@ import {
   factions as initialFactions,
   cities as initialCities,
   alchemyRecipes as seedAlchemyRecipes,
+  manuals as seedManuals,
+  treasures as seedTreasures,
+  forgeQueue as seedForgeQueue,
+  relationEdges as seedRelationEdges,
   CALENDAR,
   SECT_NAME as DEFAULT_SECT,
   MASTER_NAME as DEFAULT_MASTER,
@@ -135,6 +144,17 @@ const disciples = ref<Disciple[]>(
 )
 const factions = ref<Faction[]>(initialFactions.map((f) => ({ ...f })))
 const cities = ref<CityState[]>(initialCities.map((c) => ({ ...c })))
+const manuals = ref<Manual[]>(seedManuals.map((m) => ({ ...m })))
+const treasures = ref<Treasure[]>(seedTreasures.map((t) => ({ ...t })))
+const forgeQueue = ref<ForgeItem[]>(seedForgeQueue.map((g) => ({ ...g })))
+const relationEdges = ref<RelationEdge[]>(seedRelationEdges.map((r) => ({ ...r })))
+const heirs = ref<HeirCandidate[]>(
+  initialHeirs.map((h) => ({
+    ...h,
+    strengths: [...h.strengths],
+    risks: [...h.risks],
+  })),
+)
 const designatedHeirId = ref(initialHeirs.find((h) => h.designated)?.id ?? 'h2')
 
 const calendar = reactive({
@@ -171,6 +191,11 @@ function capturePayload() {
     urgentEvents: urgentEvents.value,
     designatedHeirId: designatedHeirId.value,
     alchemyStocks: stocksFromRecipes(alchemyRecipes.value),
+    manuals: manuals.value,
+    treasures: treasures.value,
+    forgeQueue: forgeQueue.value,
+    relationEdges: relationEdges.value,
+    heirs: heirs.value,
   }
 }
 
@@ -212,6 +237,25 @@ function applySaveBlob(save: GameSaveV1, opts?: { mergeSparse?: boolean }) {
     designatedHeirId.value = save.designatedHeirId
   }
   alchemyRecipes.value = applyStocksToRecipes(cloneAlchemySeed(), save.alchemyStocks)
+  if (!mergeSparse || (save.manuals?.length ?? 0) > 0) {
+    manuals.value = (save.manuals || []).map((m) => ({ ...m }))
+  }
+  if (!mergeSparse || (save.treasures?.length ?? 0) > 0) {
+    treasures.value = (save.treasures || []).map((t) => ({ ...t }))
+  }
+  if (!mergeSparse || (save.forgeQueue?.length ?? 0) > 0) {
+    forgeQueue.value = (save.forgeQueue || []).map((g) => ({ ...g }))
+  }
+  if (!mergeSparse || (save.relationEdges?.length ?? 0) > 0) {
+    relationEdges.value = (save.relationEdges || []).map((r) => ({ ...r }))
+  }
+  if (!mergeSparse || (save.heirs?.length ?? 0) > 0) {
+    heirs.value = (save.heirs || []).map((h) => ({
+      ...h,
+      strengths: [...(h.strengths || [])],
+      risks: [...(h.risks || [])],
+    }))
+  }
 }
 
 /** 启动时若有存档且已开局过，恢复经营态（含弟子名册等） */
@@ -473,6 +517,12 @@ export function useGameState() {
 
   function setDesignatedHeir(id: string) {
     designatedHeirId.value = id
+    heirs.value = heirs.value.map((h) => ({
+      ...h,
+      designated: h.id === id,
+      strengths: [...h.strengths],
+      risks: [...h.risks],
+    }))
     schedulePersist()
   }
 
@@ -669,6 +719,22 @@ export function useGameState() {
     disciples.value = pickDisciplesForDifficulty(diff)
     factions.value = initialFactions.map((f) => ({ ...f }))
     cities.value = initialCities.map((c) => ({ ...c }))
+    manuals.value = seedManuals.map((m) => ({ ...m }))
+    treasures.value = seedTreasures.map((t) => ({
+      ...t,
+      owner: t.owner === DEFAULT_MASTER || t.owner === '沈青岚' ? master : t.owner,
+    }))
+    forgeQueue.value = seedForgeQueue.map((g) => ({ ...g }))
+    relationEdges.value = seedRelationEdges.map((r) => ({
+      ...r,
+      from: r.from === DEFAULT_MASTER || r.from === '沈青岚' ? master : r.from,
+      to: r.to === DEFAULT_MASTER || r.to === '沈青岚' ? master : r.to,
+    }))
+    heirs.value = initialHeirs.map((h) => ({
+      ...h,
+      strengths: [...h.strengths],
+      risks: [...h.risks],
+    }))
     notifications.value = buildOpeningNotifications(master, name) as NotificationItem[]
     urgentEvents.value = cloneUrgentEventsSeed()
     fieldPlots.value = cloneFieldPlotsSeed()
@@ -677,12 +743,18 @@ export function useGameState() {
 
     // 困难/硬核：继承人须在现有弟子中
     const discIds = new Set(disciples.value.map((d) => d.id))
-    const heirOk = initialHeirs.find((h) => discIds.has(h.discipleId) && h.designated)
+    const heirOk = heirs.value.find((h) => discIds.has(h.discipleId) && h.designated)
     if (heirOk) designatedHeirId.value = heirOk.id
     else {
-      const any = initialHeirs.find((h) => discIds.has(h.discipleId))
+      const any = heirs.value.find((h) => discIds.has(h.discipleId))
       if (any) designatedHeirId.value = any.id
     }
+    heirs.value = heirs.value.map((h) => ({
+      ...h,
+      designated: h.id === designatedHeirId.value,
+      strengths: [...h.strengths],
+      risks: [...h.risks],
+    }))
 
     // 弟子 master 字段同步掌门名
     disciples.value = disciples.value.map((d) =>
@@ -735,6 +807,15 @@ export function useGameState() {
     disciples.value = pickDisciplesForDifficulty('standard')
     factions.value = initialFactions.map((f) => ({ ...f }))
     cities.value = initialCities.map((c) => ({ ...c }))
+    manuals.value = seedManuals.map((m) => ({ ...m }))
+    treasures.value = seedTreasures.map((t) => ({ ...t }))
+    forgeQueue.value = seedForgeQueue.map((g) => ({ ...g }))
+    relationEdges.value = seedRelationEdges.map((r) => ({ ...r }))
+    heirs.value = initialHeirs.map((h) => ({
+      ...h,
+      strengths: [...h.strengths],
+      risks: [...h.risks],
+    }))
     designatedHeirId.value = initialHeirs.find((h) => h.designated)?.id ?? 'h2'
     currentView.value = 'hall'
     tianjiCollapsed.value = isCompact.value
@@ -771,6 +852,11 @@ export function useGameState() {
     disciples,
     factions,
     cities,
+    manuals,
+    treasures,
+    forgeQueue,
+    relationEdges,
+    heirs,
     designatedHeirId,
     calendar,
     unreadCount,

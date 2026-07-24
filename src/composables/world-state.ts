@@ -42,6 +42,11 @@ export function snapshotWorldState(): WorldSnapshot {
     notifications: clone(unrefVal(gs.notifications) || []),
     fieldPlots: clone(unrefVal(gs.fieldPlots) || []),
     urgentEvents: clone(unrefVal(gs.urgentEvents) || []),
+    manuals: clone(unrefVal(gs.manuals) || []),
+    treasures: clone(unrefVal(gs.treasures) || []),
+    forgeQueue: clone(unrefVal(gs.forgeQueue) || []),
+    relationEdges: clone(unrefVal(gs.relationEdges) || []),
+    heirs: clone(unrefVal(gs.heirs) || []),
   }
 }
 
@@ -72,6 +77,28 @@ export function restoreWorldState(snap: WorldSnapshot): void {
   }
   if (Array.isArray(snap.urgentEvents)) {
     setRef(gs.urgentEvents as Ref<typeof snap.urgentEvents>, clone(snap.urgentEvents))
+  }
+  if (Array.isArray(snap.manuals)) {
+    setRef(gs.manuals as Ref<NonNullable<typeof snap.manuals>>, clone(snap.manuals))
+  }
+  if (Array.isArray(snap.treasures)) {
+    setRef(gs.treasures as Ref<NonNullable<typeof snap.treasures>>, clone(snap.treasures))
+  }
+  if (Array.isArray(snap.forgeQueue)) {
+    setRef(gs.forgeQueue as Ref<NonNullable<typeof snap.forgeQueue>>, clone(snap.forgeQueue))
+  }
+  if (Array.isArray(snap.relationEdges)) {
+    setRef(
+      gs.relationEdges as Ref<NonNullable<typeof snap.relationEdges>>,
+      clone(snap.relationEdges),
+    )
+  }
+  if (Array.isArray(snap.heirs)) {
+    setRef(gs.heirs as Ref<NonNullable<typeof snap.heirs>>, clone(snap.heirs))
+    const des = snap.heirs.find((h) => h.designated)
+    if (des) {
+      setRef(gs.designatedHeirId as Ref<string>, des.id)
+    }
   }
   // 删楼回滚 / disciple.add 等 apply 后立即同步最小存档（勿仅 debounce）
   try {

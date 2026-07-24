@@ -270,6 +270,31 @@ export function buildLiveLoreContent(extra?: {
           .map((c) => `${c.name}(${c.attitude}·影响${c.influence})`)
           .join('、')
 
+  const manuals = unrefList<{ name: string; sealed: boolean }>(gs.manuals)
+  const treasures = unrefList<{ name: string; owner: string | null }>(gs.treasures)
+  const forgeQueue = unrefList<{ name: string; progress: number }>(gs.forgeQueue)
+  const manualLine =
+    manuals.length === 0
+      ? '（无）'
+      : manuals
+          .slice(0, 6)
+          .map((m) => `${m.name}${m.sealed ? '·封' : ''}`)
+          .join('、')
+  const treasureLine =
+    treasures.length === 0
+      ? '（无）'
+      : treasures
+          .slice(0, 6)
+          .map((t) => `${t.name}(${t.owner || '库藏'})`)
+          .join('、')
+  const forgeLine =
+    forgeQueue.length === 0
+      ? '（无）'
+      : forgeQueue
+          .slice(0, 4)
+          .map((g) => `${g.name} ${g.progress}%`)
+          .join('、')
+
   const lines = [
     '【宗门当前实况 · 系统自动更新，请据此推演；与记忆条目一并常驻】',
     `宗门：${snap['宗门']}　掌门：${snap['掌门']}　难度：${snap['难度']}`,
@@ -279,6 +304,9 @@ export function buildLiveLoreContent(extra?: {
     `在册弟子（${disciples.length}）：${discLine}`,
     `势力：${factionLine}`,
     `城池：${cityLine}`,
+    `秘籍：${manualLine}`,
+    `宝物：${treasureLine}`,
+    `锻器：${forgeLine}`,
   ]
   if (extra?.contextLabel) {
     lines.push(
@@ -288,7 +316,7 @@ export function buildLiveLoreContent(extra?: {
     )
   }
   lines.push(
-    '结算约定：本回结束后系统会自动分析玩家发言与正文，改写资源/名册/势力/城池。勿依赖 <vars>。',
+    '结算约定：本回结束后系统会自动分析玩家发言与正文，改写资源/名册/势力/城池/秘籍/宝物/锻器/关系/继位。勿依赖 <vars>。',
     '记忆约定：须输出 <sum> 一句话总结；系统将写入短期记忆，并择要入中长期。',
     '表格记忆：系统已注入【当前世界状态参考】（角色档案/物品/世界设定）。人物·物品·设定有变时请输出 <Memory><!-- #表名\\n[主键]|字段：值 --></Memory> 增量更新（只写变更字段）。',
   )

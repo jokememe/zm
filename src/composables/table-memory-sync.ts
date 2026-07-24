@@ -3,7 +3,6 @@
  */
 import { useGameState } from '@/composables/useGameState'
 import { getDifficulty } from '@/data/opening'
-import { treasures, forgeQueue } from '@/data/mock'
 import {
   loadTableMemory,
   saveTableMemory,
@@ -13,13 +12,14 @@ import {
   type TableMemoryState,
 } from '@/composables/table-memory'
 
-/** 从当前游戏状态构建同步快照（宝物/锻器目前来自 mock 演示库） */
+/** 从当前游戏状态构建同步快照（宝物/锻器/秘籍等均读 live） */
 export function buildGameMemorySnapshot() {
   const gs = useGameState()
   const diff = getDifficulty(gs.difficulty.value)
+  const master = String(gs.masterName.value || '掌门')
   return {
     sectName: String(gs.sectName.value || '本宗'),
-    masterName: String(gs.masterName.value || '掌门'),
+    masterName: master,
     difficultyLabel: diff.label,
     year: gs.calendar.year,
     season: String(gs.calendar.season || ''),
@@ -36,15 +36,15 @@ export function buildGameMemorySnapshot() {
       master: d.master,
       spouse: d.spouse,
     })),
-    treasures: treasures.map((t) => ({
+    treasures: (gs.treasures.value || []).map((t) => ({
       name: t.name,
       type: t.type,
       grade: t.grade,
-      owner: t.owner === '沈青岚' ? String(gs.masterName.value || t.owner) : t.owner,
+      owner: t.owner === '沈青岚' ? master : t.owner,
       desc: t.desc,
       bound: t.bound,
     })),
-    forgeQueue: forgeQueue.map((g) => ({
+    forgeQueue: (gs.forgeQueue.value || []).map((g) => ({
       name: g.name,
       type: g.type,
       grade: g.grade,

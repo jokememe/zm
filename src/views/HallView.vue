@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import Icon from '@/components/ui/Icon.vue'
-import { heirs } from '@/data/mock'
 import { useModal } from '@/composables/useModal'
 import { useGameState } from '@/composables/useGameState'
 import { useTianji } from '@/composables/useTianji'
@@ -28,6 +27,7 @@ const {
   fieldPlots,
   alchemyRecipes,
   designatedHeirId,
+  heirs,
   calendar,
   resources,
 } = useGameState()
@@ -37,8 +37,10 @@ const discipleCount = computed(() => disciples.value.length)
 const pendingEvents = openUrgentEvents
 
 const overviewInput = computed(() => {
-  const heir = heirs.find((h) => h.id === designatedHeirId.value)
-  const heirDisc = heir ? disciples.value.find((d) => d.id === heir.discipleId) : null
+  const heir = heirs.value.find((h) => h.id === designatedHeirId.value)
+  const heirDisc = heir
+    ? disciples.value.find((d) => d.id === heir.discipleId || d.name === heir.name)
+    : null
   return {
     era: calendar.era,
     year: calendar.year,

@@ -90,6 +90,11 @@ const basePayload: GameSavePayload = {
   urgentEvents: [],
   designatedHeirId: '',
   alchemyStocks: {},
+  manuals: [],
+  treasures: [],
+  forgeQueue: [],
+  relationEdges: [],
+  heirs: [],
 }
 
 describe('full-backup · 导出必须能用', () => {

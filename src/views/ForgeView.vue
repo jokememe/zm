@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import Icon from '@/components/ui/Icon.vue'
-import { forgeQueue } from '@/data/mock'
 import { useModal } from '@/composables/useModal'
 import { useTianji } from '@/composables/useTianji'
 import { useGameState } from '@/composables/useGameState'
 
 const { open } = useModal()
 const { injectContext } = useTianji()
-const { focusTianji } = useGameState()
+const { focusTianji, forgeQueue } = useGameState()
 </script>
 
 <template>
@@ -15,7 +14,7 @@ const { focusTianji } = useGameState()
     <div class="section-head">
       <div>
         <h2><span class="ornament" />锻器坊</h2>
-        <p class="section-desc">韩铁山独撑炉火。飞剑重修过半，掌门令残片尚待秘银。</p>
+        <p class="section-desc">炉火与队列皆随局面变动。正文新开锻件会入列。</p>
       </div>
       <button
         id="btn-forge-tianji"
@@ -27,7 +26,8 @@ const { focusTianji } = useGameState()
       </button>
     </div>
 
-    <div class="grid-2 stagger">
+    <div v-if="!forgeQueue.length" class="empty muted">暂无在锻件。</div>
+    <div v-else class="grid-2 stagger">
       <article
         v-for="g in forgeQueue"
         :id="`forge-card-${g.id}`"
@@ -78,46 +78,51 @@ const { focusTianji } = useGameState()
 }
 
 .type-icon {
-  width: 42px;
-  height: 42px;
+  width: 40px;
+  height: 40px;
   border-radius: 12px;
   display: grid;
   place-items: center;
-  background: linear-gradient(145deg, rgba(196, 149, 74, 0.18), rgba(255, 255, 255, 0.6));
+  background: var(--amber-soft);
   color: var(--amber);
-  border: 1px solid rgba(196, 149, 74, 0.22);
+  flex-shrink: 0;
 }
 
 .meta h3 {
-  font-size: 1rem;
-  margin-bottom: 0.35rem;
+  font-size: 1.02rem;
 }
 
 .tags {
   display: flex;
   gap: 0.35rem;
+  margin-top: 0.25rem;
 }
 
-.forge-card dl {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
+dl {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.84rem;
 }
 
-.forge-card dt {
-  font-size: 0.7rem;
+dl > div {
+  display: grid;
+  grid-template-columns: 3.2rem 1fr;
+  gap: 0.5rem;
+}
+
+dt {
   color: var(--ink-muted);
 }
 
-.forge-card dd {
-  font-size: 0.88rem;
+dd {
+  color: var(--ink-secondary);
 }
 
 .prog__label {
   display: flex;
   justify-content: space-between;
-  font-size: 0.75rem;
+  font-size: 0.78rem;
   color: var(--ink-muted);
-  margin-bottom: 0.3rem;
+  margin-bottom: 0.35rem;
 }
 </style>

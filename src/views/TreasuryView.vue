@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import Icon from '@/components/ui/Icon.vue'
-import { treasures } from '@/data/mock'
 import { useModal } from '@/composables/useModal'
 import { useTianji } from '@/composables/useTianji'
 import { useGameState } from '@/composables/useGameState'
 
 const { open } = useModal()
 const { injectContext } = useTianji()
-const { focusTianji } = useGameState()
+const { focusTianji, treasures } = useGameState()
 </script>
 
 <template>
@@ -15,7 +14,7 @@ const { focusTianji } = useGameState()
     <div class="section-head">
       <div>
         <h2><span class="ornament" />宝库</h2>
-        <p class="section-desc">法宝、信物与残阵盘。绑定之物不可轻授，库藏可择缘分转交。</p>
+        <p class="section-desc">法宝、信物与残阵盘。绑定之物不可轻授；正文新获之物会入库。</p>
       </div>
       <button
         id="btn-treasury-tianji"
@@ -27,7 +26,8 @@ const { focusTianji } = useGameState()
       </button>
     </div>
 
-    <div class="grid-3 stagger">
+    <div v-if="!treasures.length" class="empty muted">库藏为空。</div>
+    <div v-else class="grid-3 stagger">
       <article
         v-for="t in treasures"
         :id="`treasure-card-${t.id}`"
@@ -81,23 +81,21 @@ const { focusTianji } = useGameState()
 .tags {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.3rem;
+  gap: 0.35rem;
 }
 
 .treasure p {
-  font-size: 0.84rem;
+  font-size: 0.86rem;
   color: var(--ink-secondary);
-  line-height: 1.55;
+  line-height: 1.5;
   flex: 1;
 }
 
 .treasure footer {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  justify-content: space-between;
   font-size: 0.78rem;
   color: var(--ink-muted);
-  padding-top: 0.35rem;
-  border-top: 1px solid var(--border-subtle);
 }
 </style>

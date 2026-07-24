@@ -91,12 +91,18 @@ describe('game-save pure', () => {
       ],
       designatedHeirId: 'h1',
       alchemyStocks: stocksFromRecipes(recipes),
+      manuals: [],
+      treasures: [],
+      forgeQueue: [],
+      relationEdges: [],
+      heirs: [],
     })
     const again = parseGameSave(JSON.parse(JSON.stringify(save)))
     expect(again?.calendar.year).toBe(3900)
     expect(again?.calendar.season).toBe('孟秋')
     expect(again?.fieldPlots[0].assigned).toBe('乙')
     expect(again?.alchemyStocks.a1).toBe(3)
+    expect(again?.manuals).toEqual([])
     const applied = applyStocksToRecipes(recipes, again!.alchemyStocks)
     expect(applied[0].stock).toBe(3)
   })
@@ -165,6 +171,11 @@ describe('game-save pure', () => {
       urgentEvents: [],
       designatedHeirId: '',
       alchemyStocks: { a1: 9 },
+      manuals: [],
+      treasures: [],
+      forgeQueue: [],
+      relationEdges: [],
+      heirs: [],
     })
     expect(writeGameSaveToStorage(save, s)).toBe(true)
     expect(s.getItem(GAME_SAVE_KEY)).toBeTruthy()
@@ -307,5 +318,80 @@ describe('restoreWorldState persists disciple.add', () => {
     expect(gs.disciples.value.map((d) => d.name)).toEqual(
       expect.arrayContaining(['新人甲', '新人乙']),
     )
+  })
+
+  it('applyValidatedDelta faction.add / city.add then hydrate keeps living world', async () => {
+    const { applyValidatedDelta } = await import('./world-state')
+    const gs = useGameState()
+    const facBefore = gs.factions.value.length
+    const cityBefore = gs.cities.value.length
+    const r = applyValidatedDelta({
+      resources: {},
+      ops: [
+        {
+          op: 'faction.add',
+          name: '霜刃盟',
+          power: '边陲小盟',
+          relation: -12,
+          stance: '敌对',
+          recent: '正文新现',
+        },
+        {
+          op: 'city.add',
+          name: '落雁城',
+          influence: 19,
+          attitude: '中立',
+          notes: '新码头',
+        },
+      ],
+    })
+    expect(r.changed).toBe(true)
+    expect(gs.factions.value.length).toBe(facBefore + 1)
+    expect(gs.cities.value.length).toBe(cityBefore + 1)
+    expect(gs.factions.value.some((f) => f.name === '霜刃盟')).toBe(true)
+    expect(gs.cities.value.some((c) => c.name === '落雁城')).toBe(true)
+
+    gs.factions.value = []
+    gs.cities.value = []
+    expect(gs.hydrateFromSave()).toBe(true)
+    expect(gs.factions.value.map((f) => f.name)).toEqual(expect.arrayContaining(['霜刃盟']))
+    expect(gs.cities.value.map((c) => c.name)).toEqual(expect.arrayContaining(['落雁城']))
+  })
+
+  it('applyValidatedDelta manual/treasure/relation then hydrate', async () => {
+    const { applyValidatedDelta } = await import('./world-state')
+    const gs = useGameState()
+    const r = applyValidatedDelta({
+      resources: {},
+      ops: [
+        { op: 'manual.add', name: '霜刃心法', school: '剑道', grade: '玄品', sealed: false },
+        { op: 'treasure.add', name: '玄铁令', type: '信物', grade: '玄品', owner: null },
+        {
+          op: 'relation.add',
+          from: 'd1',
+          to: 'd3',
+          type: '结义',
+          intensity: 55,
+          note: '共御外敌',
+        },
+        { op: 'forge.add', name: '霜刃', type: '飞剑', grade: '玄品', progress: 12 },
+        { op: 'heir.add', name: '陆承渊', score: 72, support: 35 },
+      ],
+    })
+    expect(r.changed).toBe(true)
+    expect(gs.manuals.value.some((m) => m.name === '霜刃心法')).toBe(true)
+    expect(gs.treasures.value.some((t) => t.name === '玄铁令')).toBe(true)
+    expect(gs.relationEdges.value.some((e) => e.type === '结义' && e.note === '共御外敌')).toBe(
+      true,
+    )
+    expect(gs.forgeQueue.value.some((g) => g.name === '霜刃')).toBe(true)
+    // 陆承渊若在种子继承人中则 heir.add 会被跳过或已有
+    expect(gs.heirs.value.some((h) => h.name === '陆承渊')).toBe(true)
+
+    gs.manuals.value = []
+    gs.treasures.value = []
+    expect(gs.hydrateFromSave()).toBe(true)
+    expect(gs.manuals.value.map((m) => m.name)).toEqual(expect.arrayContaining(['霜刃心法']))
+    expect(gs.treasures.value.map((t) => t.name)).toEqual(expect.arrayContaining(['玄铁令']))
   })
 })
