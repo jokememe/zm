@@ -55,6 +55,7 @@ import {
   hasMemoryTag,
   loadTableMemory,
 } from '@/composables/table-memory'
+import { syncTableMemoryFromGame } from '@/composables/table-memory-sync'
 import { runSettle, textFromSettleCompletion } from '@/composables/settle-runner'
 import { snapshotWorldState, restoreWorldState } from '@/composables/world-state'
 import {
@@ -106,6 +107,7 @@ const showSettings = ref(false)
 const showLorebooks = ref(false)
 const showPresets = ref(false)
 const showVariables = ref(false)
+const showMemory = ref(false)
 
 let seq = 100
 let bootPromise: Promise<void> | null = null
@@ -481,6 +483,12 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
   const session = chatSession.value
   if (!s || !session) throw new Error('天机未就绪')
 
+  // 推演前：用经营名册/势力/宝物填表格记忆底表，再刷系统世界书
+  try {
+    syncTableMemoryFromGame()
+  } catch (e) {
+    console.warn('[天机] 表格记忆同步失败', e)
+  }
   await syncSystemLore(s)
 
   const preset =
@@ -1129,6 +1137,11 @@ export function useTianji() {
 
     loadMemoryBank()
     loadTableMemory()
+    try {
+      syncTableMemoryFromGame()
+    } catch (e) {
+      console.warn('[天机] 开局表格记忆同步失败', e)
+    }
 
     const gs = useGameState()
     const seed = buildOpeningTianjiMessages(
@@ -1236,6 +1249,7 @@ export function useTianji() {
     showLorebooks,
     showPresets,
     showVariables,
+    showMemory,
     injectContext,
     sendPlayer,
     chooseQuick,

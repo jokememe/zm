@@ -5,6 +5,7 @@ import SettingsModal from './SettingsModal.vue'
 import LorebookModal from './LorebookModal.vue'
 import PresetModal from './PresetModal.vue'
 import VariablePanel from './VariablePanel.vue'
+import MemoryModal from './MemoryModal.vue'
 import './st-shared.css'
 
 const {
@@ -36,6 +37,7 @@ const {
   showLorebooks,
   showPresets,
   showVariables,
+  showMemory,
   updateSettings,
   reloadStMeta,
 } = useTianji()
@@ -139,6 +141,9 @@ async function onSettingsClose() {
         </button>
         <button type="button" class="btn btn-ghost btn-sm" @click="showVariables = true">
           全表
+        </button>
+        <button type="button" class="btn btn-ghost btn-sm" @click="showMemory = true">
+          记忆
         </button>
         <button type="button" class="btn btn-ghost btn-sm" @click="showLorebooks = true">
           典籍
@@ -341,6 +346,7 @@ async function onSettingsClose() {
     <LorebookModal v-if="showLorebooks" @close="((showLorebooks = false), reloadStMeta())" />
     <PresetModal v-if="showPresets" @close="((showPresets = false), reloadStMeta())" />
     <VariablePanel v-if="showVariables" @close="showVariables = false" />
+    <MemoryModal v-if="showMemory" @close="showMemory = false" />
   </div>
 </template>
 

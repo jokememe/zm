@@ -488,7 +488,251 @@ export function applyAssistantMemoryTags(text: string): {
   return { success: result.success, count: result.count }
 }
 
-/** 开局种子：清空表格记忆（与 seedOpeningMemory 对齐） */
+/** 按主键写入/合并一行（游戏同步与手改共用） */
+export function upsertTableRow(
+  tableNameOrId: string,
+  primaryValue: string,
+  values: Record<string, string>,
+  s: TableMemoryState = state,
+): boolean {
+  return applyMemoryRow(s, {
+    table: tableNameOrId,
+    primaryValue,
+    values,
+  })
+}
+
+export function countAllRecords(s: TableMemoryState = state): number {
+  return Object.values(s.records || {}).reduce(
+    (n, list) => n + (Array.isArray(list) ? list.length : 0),
+    0,
+  )
+}
+
+export function getTableRecordCount(
+  tableId: string,
+  s: TableMemoryState = state,
+): number {
+  const list = s.records?.[tableId]
+  return Array.isArray(list) ? list.length : 0
+}
+
+/** 删除某表全部行（保留表结构） */
+export function clearTableRecords(tableId: string, s: TableMemoryState = state): void {
+  if (!s.records) s.records = {}
+  s.records[tableId] = []
+}
+
+/**
+ * 用游戏侧快照覆盖式同步「系统底表」行（弟子/宝物/势力城池等）。
+ * 仅更新本函数写入的字段；LLM 额外字段在同主键上保留（非空字段合并）。
+ */
+export function syncRowsFromGameSnapshot(
+  snap: {
+    sectName: string
+    masterName: string
+    difficultyLabel: string
+    year: number | string
+    season: string
+    disciples: Array<{
+      name: string
+      age?: number | string
+      gender?: string
+      role?: string
+      realm?: string
+      status?: string
+      mood?: string
+      loyalty?: number | string
+      talent?: string[]
+      master?: string
+      spouse?: string
+    }>
+    treasures?: Array<{
+      name: string
+      type?: string
+      grade?: string
+      owner?: string | null
+      desc?: string
+      bound?: boolean
+    }>
+    forgeQueue?: Array<{
+      name: string
+      type?: string
+      grade?: string
+      craftsman?: string | null
+      progress?: number
+      power?: string
+    }>
+    factions?: Array<{
+      name: string
+      stance?: string
+      relation?: number
+      power?: string
+      recent?: string
+      demand?: string
+    }>
+    cities?: Array<{
+      name: string
+      attitude?: string
+      influence?: number
+      governor?: string
+      notes?: string
+      distance?: string
+    }>
+  },
+  s: TableMemoryState = state,
+): { characters: number; items: number; world: number } {
+  let characters = 0
+  let items = 0
+  let world = 0
+
+  // 掌门
+  if (snap.masterName?.trim()) {
+    if (
+      upsertTableRow(
+        '角色档案',
+        snap.masterName.trim(),
+        {
+          身份: `${snap.sectName || '本宗'}掌门`,
+          性格: '主视角',
+          当前位置: '山门/宗务',
+          人际关系: '掌门',
+        },
+        s,
+      )
+    ) {
+      characters += 1
+    }
+  }
+
+  for (const d of snap.disciples || []) {
+    const name = String(d.name || '').trim()
+    if (!name) continue
+    const rel: string[] = []
+    if (d.master) rel.push(`师：${d.master}`)
+    if (d.spouse) rel.push(`道侣倾向：${d.spouse}`)
+    if (d.loyalty != null) rel.push(`忠心${d.loyalty}`)
+    const ok = upsertTableRow(
+      '角色档案',
+      name,
+      {
+        年龄: d.age != null ? String(d.age) : '',
+        性别: d.gender ? String(d.gender) : '',
+        身份: [d.role, d.realm].filter(Boolean).join(' · '),
+        性格: d.mood ? String(d.mood) : '',
+        当前位置: d.status ? String(d.status) : '在宗',
+        人际关系: rel.join('；'),
+        生理: Array.isArray(d.talent) && d.talent.length ? d.talent.join('、') : '',
+      },
+      s,
+    )
+    if (ok) characters += 1
+  }
+
+  for (const t of snap.treasures || []) {
+    const name = String(t.name || '').trim()
+    if (!name) continue
+    const ok = upsertTableRow(
+      '物品追踪',
+      name,
+      {
+        物品描述: [t.grade, t.type, t.desc].filter(Boolean).join(' · '),
+        物品位置: t.bound ? '已认主' : '库藏/待分配',
+        持有者: t.owner ? String(t.owner) : '无主',
+        状态: t.bound ? '绑定' : '未绑定',
+        备注: t.type ? String(t.type) : '',
+      },
+      s,
+    )
+    if (ok) items += 1
+  }
+
+  for (const g of snap.forgeQueue || []) {
+    const name = String(g.name || '').trim()
+    if (!name) continue
+    const ok = upsertTableRow(
+      '物品追踪',
+      name,
+      {
+        物品描述: [g.grade, g.type, g.power].filter(Boolean).join(' · '),
+        物品位置: '锻器房',
+        持有者: g.craftsman ? String(g.craftsman) : '未指派',
+        状态: `锻造进度 ${g.progress ?? 0}%`,
+        备注: '锻器队列',
+      },
+      s,
+    )
+    if (ok) items += 1
+  }
+
+  // 宗门本体
+  if (snap.sectName?.trim()) {
+    if (
+      upsertTableRow(
+        '世界设定',
+        snap.sectName.trim(),
+        {
+          类型: '本宗',
+          详细说明: `掌门${snap.masterName || '？'}；难度${snap.difficultyLabel || '—'}；历法天元${snap.year}年${snap.season}`,
+          影响范围: '山门内外政务与气运',
+        },
+        s,
+      )
+    ) {
+      world += 1
+    }
+  }
+
+  for (const f of snap.factions || []) {
+    const name = String(f.name || '').trim()
+    if (!name) continue
+    const ok = upsertTableRow(
+      '世界设定',
+      name,
+      {
+        类型: `势力·${f.stance || '中立'}`,
+        详细说明: [
+          f.power,
+          f.relation != null ? `关系${f.relation}` : '',
+          f.recent,
+          f.demand ? `诉求：${f.demand}` : '',
+        ]
+          .filter(Boolean)
+          .join('；'),
+        影响范围: '外交/战事',
+      },
+      s,
+    )
+    if (ok) world += 1
+  }
+
+  for (const c of snap.cities || []) {
+    const name = String(c.name || '').trim()
+    if (!name) continue
+    const ok = upsertTableRow(
+      '世界设定',
+      name,
+      {
+        类型: `城池·${c.attitude || '中立'}`,
+        详细说明: [
+          c.distance,
+          c.governor ? `主事${c.governor}` : '',
+          c.influence != null ? `影响${c.influence}` : '',
+          c.notes,
+        ]
+          .filter(Boolean)
+          .join('；'),
+        影响范围: '纳贡/声望',
+      },
+      s,
+    )
+    if (ok) world += 1
+  }
+
+  return { characters, items, world }
+}
+
+/** 开局种子：清空后由 syncTableMemoryFromGame 填入（见 table-memory-sync） */
 export function seedOpeningTableMemory(): void {
   clearTableMemory()
 }

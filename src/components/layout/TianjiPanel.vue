@@ -8,6 +8,7 @@ import SettingsModal from '@/components/SillyTavern/SettingsModal.vue'
 import LorebookModal from '@/components/SillyTavern/LorebookModal.vue'
 import PresetModal from '@/components/SillyTavern/PresetModal.vue'
 import VariablePanel from '@/components/SillyTavern/VariablePanel.vue'
+import MemoryModal from '@/components/SillyTavern/MemoryModal.vue'
 
 const { tianjiCollapsed, toggleTianji, tianjiFocus, isCompact, closeTianjiSheet } =
   useGameState()
@@ -33,6 +34,7 @@ const {
   showLorebooks,
   showPresets,
   showVariables,
+  showMemory,
   updateSettings,
   reloadStMeta,
 } = useTianji()
@@ -190,11 +192,20 @@ async function onPresetClose() {
           <button
             type="button"
             class="btn btn-icon btn-ghost"
+            title="记忆锦囊"
+            aria-label="记忆锦囊"
+            @click="showMemory = true"
+          >
+            <Icon name="library" :size="16" />
+          </button>
+          <button
+            type="button"
+            class="btn btn-icon btn-ghost"
             title="秘闻典籍"
             aria-label="秘闻典籍"
             @click="showLorebooks = true"
           >
-            <Icon name="library" :size="16" />
+            <Icon name="scroll" :size="16" />
           </button>
           <button
             type="button"
@@ -424,6 +435,7 @@ async function onPresetClose() {
     <LorebookModal v-if="showLorebooks" @close="onLoreClose" />
     <PresetModal v-if="showPresets" @close="onPresetClose" />
     <VariablePanel v-if="showVariables" @close="showVariables = false" />
+    <MemoryModal v-if="showMemory" @close="showMemory = false" />
   </aside>
 </template>
 

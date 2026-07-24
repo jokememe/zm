@@ -58,6 +58,7 @@ import {
   clearTableMemory,
   seedOpeningTableMemory,
 } from '@/composables/table-memory'
+import { syncTableMemoryFromGame } from '@/composables/table-memory-sync'
 
 const currentView = ref<ViewId>('hall')
 const navCollapsed = ref(false)
@@ -584,6 +585,7 @@ export function useGameState() {
         difficultyLabel: opt.label,
       })
       seedOpeningTableMemory()
+      syncTableMemoryFromGame()
     } catch (e) {
       console.warn('[开局] 记忆初始化失败', e)
     }

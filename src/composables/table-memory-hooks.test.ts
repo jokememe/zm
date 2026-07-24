@@ -37,6 +37,8 @@ describe('Tianji + system lore hooks (shipped sources)', () => {
     expect(src).toMatch(/hasMemoryTag/)
     expect(src).toMatch(/recordTurnSum/)
     expect(src).toMatch(/ensureAndRefreshSystemLorebook/)
+    expect(src).toMatch(/syncTableMemoryFromGame/)
+    expect(src).toMatch(/showMemory/)
     // 调用点顺序（非 import）：先表格 apply，再 sum
     const callApply = src.indexOf('applyAssistantMemoryTags(raw)')
     const callSum = src.indexOf('recordTurnSum(parsed.sum')
@@ -63,6 +65,24 @@ describe('Tianji + system lore hooks (shipped sources)', () => {
     expect(src).toMatch(/clearTableMemory/)
     expect(src).toMatch(/clearMemoryBank/)
     expect(src).toMatch(/seedOpeningMemory/)
+    expect(src).toMatch(/syncTableMemoryFromGame/)
+  })
+
+  it('MemoryModal exists and TianjiPanel mounts it', () => {
+    const panel = readFileSync(
+      join(here, '../components/layout/TianjiPanel.vue'),
+      'utf8',
+    )
+    expect(panel).toMatch(/MemoryModal/)
+    expect(panel).toMatch(/showMemory/)
+    expect(panel).toMatch(/记忆锦囊/)
+    const modal = readFileSync(
+      join(here, '../components/SillyTavern/MemoryModal.vue'),
+      'utf8',
+    )
+    expect(modal).toMatch(/从经营同步/)
+    expect(modal).toMatch(/formatWorldStateInjection/)
+    expect(modal).toMatch(/syncTableMemoryFromGame/)
   })
 
   it('format prompt hints model may emit Memory without dropping sum/maintext', () => {
