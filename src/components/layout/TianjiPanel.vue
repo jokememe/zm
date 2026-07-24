@@ -20,9 +20,11 @@ const {
   sendPlayer,
   chooseQuick,
   regenerateLast,
+  regenerateSettleLast,
   deleteMessagesFrom,
   editAndResend,
   canRegenerate,
+  canRerollSettle,
   clearContext,
   llmReady,
   statusLabel,
@@ -115,6 +117,12 @@ async function onReroll() {
   toast.info('重推演', '已回滚上一轮并重新请示天机')
 }
 
+async function onRerollSettle() {
+  if (busy.value || !canRerollSettle.value) return
+  await regenerateSettleLast()
+  toast.info('重 roll 局面', '保留剧情，已重跑次 API 变量结算')
+}
+
 async function onDeleteFrom(id: string) {
   if (busy.value) return
   if (!confirm('删除此条及之后全部推演？气数将回滚到此条之前。')) return
@@ -176,7 +184,7 @@ async function onPresetClose() {
           <button
             type="button"
             class="btn btn-icon btn-ghost"
-            title="重 roll 上一轮"
+            title="重 roll 上一轮（剧情+局面）"
             aria-label="重 roll"
              :disabled="busy || !canRegenerate"
             @click="onReroll"
@@ -353,6 +361,16 @@ async function onPresetClose() {
               ↻ 重 roll
             </button>
             <button
+              v-if="m.id === lastOracleId"
+              type="button"
+              class="hint"
+              title="保留剧情，只重跑次 API 局面变量"
+               :disabled="busy || !canRerollSettle"
+              @click="onRerollSettle"
+            >
+              ↻ 局面
+            </button>
+            <button
               type="button"
               class="hint hint--danger"
                :disabled="busy"
@@ -407,6 +425,15 @@ async function onPresetClose() {
             @click="onReroll"
           >
             ↻ 重 roll
+          </button>
+          <button
+            type="button"
+            class="hint"
+             :disabled="busy || !canRerollSettle"
+            title="保留剧情，回滚气数后只重跑次 API 局面分析"
+            @click="onRerollSettle"
+          >
+            ↻ 局面
           </button>
           <button
             id="hint-ask-envoy"

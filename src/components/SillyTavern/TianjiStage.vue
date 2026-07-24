@@ -29,9 +29,11 @@ const {
   sendPlayer,
   chooseQuick,
   regenerateLast,
+  regenerateSettleLast,
   deleteMessagesFrom,
   editAndResend,
   canRegenerate,
+  canRerollSettle,
   clearContext,
   showSettings,
   showLorebooks,
@@ -95,6 +97,11 @@ async function onReroll() {
   await regenerateLast()
 }
 
+async function onRerollSettle() {
+  if (busy.value || !canRerollSettle.value) return
+  await regenerateSettleLast()
+}
+
 async function onDeleteFrom(id: string) {
   if (busy.value) return
   if (!confirm('删除此条及之后全部推演？气数将回滚到此条之前。')) return
@@ -135,6 +142,15 @@ async function onSettingsClose() {
           @click="onReroll"
         >
           ↻ 重 roll
+        </button>
+        <button
+          type="button"
+          class="btn btn-soft btn-sm"
+          :disabled="busy || !canRerollSettle"
+          title="保留剧情，只重跑次 API 局面变量"
+          @click="onRerollSettle"
+        >
+          ↻ 局面
         </button>
         <button type="button" class="btn btn-ghost btn-sm" @click="showQiEmbed = !showQiEmbed">
           气数簿
@@ -217,6 +233,15 @@ async function onSettingsClose() {
             ↻ 重 roll 本回合
           </button>
           <button
+            type="button"
+            class="btn btn-soft btn-sm"
+            :disabled="typing || settling || !canRerollSettle"
+            title="保留剧情，只重跑次 API 局面变量"
+            @click="onRerollSettle"
+          >
+            ↻ 重 roll 局面
+          </button>
+          <button
             v-if="lastOracleId"
             type="button"
             class="btn btn-ghost btn-sm"
@@ -280,6 +305,16 @@ async function onSettingsClose() {
                 @click="onReroll"
               >
                 重 roll
+              </button>
+              <button
+                v-if="m.id === lastOracleId"
+                type="button"
+                class="stage__msg-btn"
+                :disabled="typing || settling || !canRerollSettle"
+                title="只重跑局面变量"
+                @click="onRerollSettle"
+              >
+                局面
               </button>
               <button
                 type="button"

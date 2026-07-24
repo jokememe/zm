@@ -439,6 +439,88 @@ function restoreVarsFromKept(
   return snapshotGameVariables()
 }
 
+/**
+ * 主/次/记忆 API 侧调用（settle 与表格记忆共用）。
+ * 依赖当前 settings.value。
+ */
+async function postChatForSide({
+  target,
+  body,
+}: {
+  target: 'primary' | 'secondary' | 'memory'
+  body: Record<string, unknown>
+}): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+  const api = settings.value?.api
+  if (!api) return { ok: false, error: '设置未就绪' }
+  let ep: { baseUrl: string; apiKey: string; model: string }
+  if (target === 'memory' && api.memory?.enabled) {
+    ep = {
+      baseUrl: normalizeBaseUrl(api.memory.baseUrl || ''),
+      apiKey: String(api.memory.apiKey || ''),
+      model: String(api.memory.model || '').trim(),
+    }
+  } else if (target === 'secondary' && api.secondary?.enabled) {
+    ep = {
+      baseUrl: normalizeBaseUrl(api.secondary.baseUrl || ''),
+      apiKey: String(api.secondary.apiKey || ''),
+      model: String(api.secondary.model || '').trim(),
+    }
+  } else {
+    ep = {
+      baseUrl: normalizeBaseUrl(api.baseUrl || ''),
+      apiKey: String(api.apiKey || ''),
+      model: String(api.model || '').trim() || String(body.model || ''),
+    }
+  }
+  const model = ep.model || String(body.model || '')
+  const completion = await postChatCompletion({
+    baseUrl: ep.baseUrl,
+    apiKey: ep.apiKey,
+    body: { ...body, model, stream: false },
+  })
+  if (!completion.ok) {
+    return { ok: false as const, error: completion.error || '请求失败' }
+  }
+  return textFromSettleCompletion(completion.data)
+}
+
+/** 去掉末尾本回合产生的「局面更新」系统条，避免重 roll settle 后叠多条 */
+function stripTrailingSettleSystemNotes(asstId: string) {
+  if (!chatSession.value) return
+  const msgs = chatSession.value.messages
+  const asstIdx = msgs.findIndex((m) => m.id === asstId)
+  if (asstIdx < 0) return
+  let end = msgs.length
+  while (end > asstIdx + 1) {
+    const m = msgs[end - 1]
+    if (m.role === 'system' && m.content.startsWith('【局面更新】')) {
+      end -= 1
+      continue
+    }
+    break
+  }
+  if (end < msgs.length) {
+    chatSession.value = {
+      ...chatSession.value,
+      messages: msgs.slice(0, end),
+      updatedAt: Date.now(),
+    }
+  }
+  // 本地展示同步裁掉末尾局面更新条
+  let localEnd = messages.value.length
+  while (localEnd > 0) {
+    const m = messages.value[localEnd - 1]
+    if (m.role === 'system' && m.content.startsWith('【局面更新】')) {
+      localEnd -= 1
+      continue
+    }
+    break
+  }
+  if (localEnd < messages.value.length) {
+    messages.value = messages.value.slice(0, localEnd)
+  }
+}
+
 function refreshLastParsedFromSession(session: ChatSession) {
   const lastAsst = [...session.messages].reverse().find((m) => m.role === 'assistant')
   lastParsed.value = lastAsst?.parsed ?? null
@@ -811,7 +893,9 @@ export function useTianji() {
 
       // ★ 先落盘剧情，再后台局面分析（避免分析超时拖死整回合）
       const sessionVars = mergeSessionWithGame({})
-      let stateAfter = snapshotWorldState()
+      /** 结算前快照：重 roll 次 API 时回滚到此 */
+      const stateBeforeSettle = snapshotWorldState()
+      let stateAfter = stateBeforeSettle
       if (chatSession.value) {
         const stMsg: ChatMessage = {
           id: local.id,
@@ -821,6 +905,7 @@ export function useTianji() {
           parsed: result.parsed ?? undefined,
           variablesAfter: sessionVars,
           variables: sessionVars,
+          stateBeforeSettle,
           stateAfter,
         }
         const next: ChatSession = {
@@ -836,46 +921,6 @@ export function useTianji() {
       typing.value = false
 
       if (settings.value) {
-        const postChatForSide = async ({
-          target,
-          body,
-        }: {
-          target: 'primary' | 'secondary' | 'memory'
-          body: Record<string, unknown>
-        }) => {
-          const api = settings.value!.api
-          let ep: { baseUrl: string; apiKey: string; model: string }
-          if (target === 'memory' && api.memory?.enabled) {
-            ep = {
-              baseUrl: normalizeBaseUrl(api.memory.baseUrl || ''),
-              apiKey: String(api.memory.apiKey || ''),
-              model: String(api.memory.model || '').trim(),
-            }
-          } else if (target === 'secondary' && api.secondary?.enabled) {
-            ep = {
-              baseUrl: normalizeBaseUrl(api.secondary.baseUrl || ''),
-              apiKey: String(api.secondary.apiKey || ''),
-              model: String(api.secondary.model || '').trim(),
-            }
-          } else {
-            ep = {
-              baseUrl: normalizeBaseUrl(api.baseUrl || ''),
-              apiKey: String(api.apiKey || ''),
-              model: String(api.model || '').trim() || String(body.model || ''),
-            }
-          }
-          const model = ep.model || String(body.model || '')
-          const completion = await postChatCompletion({
-            baseUrl: ep.baseUrl,
-            apiKey: ep.apiKey,
-            body: { ...body, model, stream: false },
-          })
-          if (!completion.ok) {
-            return { ok: false as const, error: completion.error || '请求失败' }
-          }
-          return textFromSettleCompletion(completion.data)
-        }
-
         settling.value = true
         lastSettlementKind.value = 'info'
         lastSettlement.value = '局面分析中…'
@@ -992,6 +1037,7 @@ export function useTianji() {
               m.id === local.id
                 ? {
                     ...m,
+                    stateBeforeSettle: m.stateBeforeSettle ?? stateBeforeSettle,
                     stateAfter,
                     variablesAfter: mergeSessionWithGame({}),
                     variables: mergeSessionWithGame({}),
@@ -1030,10 +1076,43 @@ export function useTianji() {
   })
 
   /**
+   * 可否只重 roll 次 API 局面：保留剧情，回滚到结算前快照再跑 runSettle。
+   * 需存在末条 assistant，且能定位其前的 user；旧档无 stateBeforeSettle 时
+   * 回退为「上一条 assistant 的 stateAfter / 上一条 user 前局面」。
+   */
+  const canRerollSettle = computed(() => {
+    if (typing.value || settling.value || !chatSession.value || !settings.value) return false
+    if ((settings.value.settlementMode || 'secondary_then_primary') === 'off') return false
+    const msgs = chatSession.value.messages
+    let lastAsstIdx = -1
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === 'assistant') {
+        lastAsstIdx = i
+        break
+      }
+    }
+    if (lastAsstIdx < 0) return false
+    // 必须是会话末轮 assistant（其后仅允许 system 局面条）
+    for (let i = lastAsstIdx + 1; i < msgs.length; i++) {
+      const m = msgs[i]
+      if (m.role === 'user') return false
+      if (m.role === 'assistant') return false
+    }
+    let lastUserIdx = -1
+    for (let i = lastAsstIdx - 1; i >= 0; i--) {
+      if (msgs[i].role === 'user') {
+        lastUserIdx = i
+        break
+      }
+    }
+    return lastUserIdx >= 0
+  })
+
+  /**
    * 重 roll：删掉最后一轮 user 及其后回复，气数回滚，再用原文重发。
    */
   async function regenerateLast() {
-    if (typing.value) return
+    if (typing.value || settling.value) return
     await boot()
     if (!chatSession.value) return
 
@@ -1067,6 +1146,175 @@ export function useTianji() {
     if (settings.value) await syncSystemLore(settings.value)
 
     await sendPlayer(content)
+  }
+
+  /**
+   * 只重 roll 局面分析（次/主 settle API），不重讲故事。
+   * 1) 回滚世界到本回合结算前 2) 去掉旧【局面更新】条 3) 再跑 runSettle
+   */
+  async function regenerateSettleLast() {
+    if (typing.value || settling.value) return
+    await boot()
+    if (!chatSession.value || !settings.value) {
+      lastError.value = '天机未就绪'
+      return
+    }
+    if ((settings.value.settlementMode || 'secondary_then_primary') === 'off') {
+      lastError.value = '局面分析已关闭，无法重 roll 变量'
+      return
+    }
+
+    const msgs = chatSession.value.messages
+    let lastAsstIdx = -1
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === 'assistant') {
+        lastAsstIdx = i
+        break
+      }
+    }
+    if (lastAsstIdx < 0) {
+      lastError.value = '没有可重分析的天机答复'
+      return
+    }
+    for (let i = lastAsstIdx + 1; i < msgs.length; i++) {
+      if (msgs[i].role === 'user' || msgs[i].role === 'assistant') {
+        lastError.value = '仅可对最近一轮重 roll 局面'
+        return
+      }
+    }
+
+    let lastUserIdx = -1
+    for (let i = lastAsstIdx - 1; i >= 0; i--) {
+      if (msgs[i].role === 'user') {
+        lastUserIdx = i
+        break
+      }
+    }
+    if (lastUserIdx < 0) {
+      lastError.value = '找不到本回合掌门发言'
+      return
+    }
+
+    const asst = msgs[lastAsstIdx]
+    const user = msgs[lastUserIdx]
+    const pre =
+      asst.stateBeforeSettle ||
+      // 旧档：回退到上一轮 assistant 结算后
+      (() => {
+        for (let i = lastAsstIdx - 1; i >= 0; i--) {
+          if (msgs[i].role === 'assistant' && msgs[i].stateAfter) {
+            return msgs[i].stateAfter!
+          }
+        }
+        return null
+      })()
+
+    if (pre) {
+      restoreWorldState(pre)
+    } else {
+      // 首轮且无快照：用 user 前保留消息回滚（通常为空局面）
+      restoreVarsFromKept(msgs.slice(0, lastUserIdx))
+    }
+
+    // 裁掉 assistant 后的局面系统条，保留剧情
+    stripTrailingSettleSystemNotes(asst.id)
+    // 确保 stateBeforeSettle 写回（旧档补上）
+    if (chatSession.value) {
+      const snapPre = snapshotWorldState()
+      const patched = chatSession.value.messages.map((m) =>
+        m.id === asst.id
+          ? {
+              ...m,
+              stateBeforeSettle: m.stateBeforeSettle ?? snapPre,
+              // 暂时回到结算前，分析成功后再写 stateAfter
+              stateAfter: snapPre,
+              variablesAfter: mergeSessionWithGame({}),
+              variables: mergeSessionWithGame({}),
+            }
+          : m,
+      )
+      await persistSession({
+        ...chatSession.value,
+        messages: patched,
+        variables: mergeSessionWithGame({}),
+        updatedAt: Date.now(),
+      })
+    }
+
+    lastError.value = null
+    settling.value = true
+    lastSettlementKind.value = 'info'
+    lastSettlement.value = '重 roll 局面分析中…'
+
+    try {
+      const maintext =
+        asst.parsed?.maintext ||
+        sanitizeAssistantForDisplay(asst.content) ||
+        asst.content
+      const sum = asst.parsed?.sum || ''
+      const settle = await runSettle({
+        userText: user.content,
+        maintext,
+        sum,
+        settings: settings.value,
+        postChat: postChatForSide,
+      })
+
+      let stateAfter = snapshotWorldState()
+      if (settle.status === 'skipped') {
+        lastSettlementKind.value = 'info'
+        lastSettlement.value =
+          settle.reason === 'off' ? '局面分析已关闭' : '未配次 API，已跳过'
+      } else if (settle.status === 'failed') {
+        stateAfter = settle.stateAfter
+        lastSettlementKind.value = 'fail'
+        const raw = settle.error || '未知错误'
+        lastSettlement.value = raw.length > 60 ? raw.slice(0, 60) + '…' : raw
+      } else if (settle.status === 'applied') {
+        stateAfter = settle.stateAfter
+        const lines = settle.lines.join('；')
+        lastSettlementKind.value = 'ok'
+        lastSettlement.value = lines
+        appendLocal('system', `【局面更新】${lines}`)
+        void appendToSt('system', `【局面更新】${lines}`)
+        if (settings.value) {
+          await syncSystemLore(settings.value)
+          lorebooks.value = await getLorebooks()
+        }
+      } else {
+        stateAfter = settle.stateAfter
+        lastSettlementKind.value = 'info'
+        lastSettlement.value = settle.summary
+          ? `本回无变更：${settle.summary}`
+          : '本回无变更'
+      }
+
+      if (chatSession.value) {
+        const nextMsgs = chatSession.value.messages.map((m) =>
+          m.id === asst.id
+            ? {
+                ...m,
+                stateAfter,
+                variablesAfter: mergeSessionWithGame({}),
+                variables: mergeSessionWithGame({}),
+              }
+            : m,
+        )
+        await persistSession({
+          ...chatSession.value,
+          messages: nextMsgs,
+          variables: mergeSessionWithGame({}),
+          updatedAt: Date.now(),
+        })
+      }
+    } catch (e) {
+      const msg = String((e as Error).message || e)
+      lastSettlementKind.value = 'fail'
+      lastSettlement.value = msg.length > 60 ? msg.slice(0, 60) + '…' : msg
+      lastError.value = msg
+    } finally {
+      settling.value = false
+    }
   }
 
   /**
@@ -1548,10 +1796,12 @@ export function useTianji() {
     sendPlayer,
     chooseQuick,
     regenerateLast,
+    regenerateSettleLast,
     deleteMessagesFrom,
     editAndResend,
     truncateAfter,
     canRegenerate,
+    canRerollSettle,
     pushEvent,
     clearContext,
     updateSettings,

@@ -343,6 +343,8 @@ export interface ChatMessage {
   };
   parsed?: ParsedTags;
   variablesAfter?: Record<string, any>;
+  /** World snapshot when settle was about to run (pre-delta; for re-roll settle). */
+  stateBeforeSettle?: import('@/types/world').WorldSnapshot;
   /** World snapshot after settle pipeline applied (optional; Task settle). */
   stateAfter?: import('@/types/world').WorldSnapshot;
   apiUsed?: ApiTarget;
