@@ -208,16 +208,6 @@ export async function importAllData(
     finishBackupImportSideEffects,
   } = await import('@/composables/full-backup');
 
-  const emptyResult = (): ImportAllResult => ({
-    idbRestored: false,
-    gameHydrated: false,
-    tianjiRebooted: false,
-    hasGameSave: false,
-    discipleCount: 0,
-    chatCount: 0,
-    errors: [],
-  });
-
   // 纯经营档 JSON（只有 resources/calendar，无 lorebooks 数组）→ 只恢复 local，不抹 IDB
   const looksLikeIdbBackup =
     Array.isArray(backup.lorebooks) ||
