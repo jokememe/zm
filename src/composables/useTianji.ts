@@ -57,8 +57,13 @@ import {
 } from '@/composables/table-memory'
 import { syncTableMemoryFromGame } from '@/composables/table-memory-sync'
 import { runSettle, textFromSettleCompletion } from '@/composables/settle-runner'
-import { runMemoryTrace } from '@/composables/table-memory-trace'
+import {
+  runTableMemoryPipeline,
+  getSchedulerStatus,
+} from '@/composables/table-memory-pipeline'
 import { buildMainFormatMemoryHint } from '@/composables/table-memory-prompts'
+// 注册索引 Top-K 注入
+import '@/composables/table-memory-recall'
 import { snapshotWorldState, restoreWorldState } from '@/composables/world-state'
 import {
   isApiConfigured,
@@ -879,41 +884,66 @@ export function useTianji() {
             lastSettlement.value = '本回无变更'
           }
 
-          // ★ yuzuki 式独立记忆追溯：总开关开启时，用二次任务强制抽表
+          // ★ shujuku 完整流水线：楼层调度 → 填表 → 纪要合并 → retain 清理
+          // （次 API settle 已在上面完成，与本流水线分离）
           if (settings.value.tableMemoryEnabled !== false) {
             memoryTracing.value = true
             lastMemoryTraceKind.value = 'info'
-            lastMemoryTrace.value = '记忆追溯中…'
+            lastMemoryTrace.value = '表格记忆流水线…'
             try {
-              const mem = await runMemoryTrace({
+              const pipe = await runTableMemoryPipeline({
+                messages: chatSession.value?.messages || [],
                 userText: text,
                 maintext: result.parsed?.maintext || result.content,
                 sum: result.parsed?.sum || '',
                 settings: settings.value,
                 postChat: postChatForSide,
               })
-              if (mem.status === 'applied') {
-                lastMemoryTraceKind.value = 'ok'
-                lastMemoryTrace.value = `表格已更新 ${mem.count} 行`
-                if (settings.value) {
-                  await syncSystemLore(settings.value)
-                  lorebooks.value = await getLorebooks()
-                }
-              } else if (mem.status === 'empty') {
-                lastMemoryTraceKind.value = 'info'
-                lastMemoryTrace.value = '记忆追溯无新增'
-              } else if (mem.status === 'skipped') {
-                lastMemoryTraceKind.value = 'info'
-                lastMemoryTrace.value =
-                  mem.reason === 'memory_api_not_ready'
-                    ? '记忆追溯跳过（记忆 API 未配齐）'
-                    : mem.reason === 'api_not_ready'
-                      ? '记忆追溯跳过（未通灵）'
-                      : '记忆追溯跳过'
-              } else {
-                lastMemoryTraceKind.value = 'fail'
-                const raw = mem.error || '失败'
-                lastMemoryTrace.value = raw.length > 48 ? raw.slice(0, 48) + '…' : raw
+              const parts: string[] = []
+              if (!pipe.scheduled) {
+                parts.push(
+                  pipe.scheduleReason === 'not_ready'
+                    ? `调度未触发(下一触 ${pipe.nextTriggerFloor} 层)`
+                    : `调度跳过(${pipe.scheduleReason})`,
+                )
+              } else if (pipe.fill?.status === 'applied') {
+                parts.push(`填表+${pipe.fill.count}`)
+              } else if (pipe.fill?.status === 'empty') {
+                parts.push('填表无新增')
+              } else if (pipe.fill?.status === 'skipped') {
+                parts.push(
+                  pipe.fill.reason === 'memory_api_not_ready'
+                    ? '记忆API未配齐'
+                    : pipe.fill.reason === 'api_not_ready'
+                      ? '未通灵'
+                      : '填表跳过',
+                )
+              } else if (pipe.fill?.status === 'failed') {
+                parts.push(`填表失败`)
+              }
+              if (pipe.merge?.status === 'merged') {
+                parts.push(
+                  `纪要合并 -${pipe.merge.removed || 0}/+${pipe.merge.added || 0}`,
+                )
+              } else if (pipe.merge?.status === 'failed') {
+                parts.push('合并失败')
+              }
+              parts.push(`楼${pipe.lastUpdatedAiFloor}/${pipe.totalAiFloors}`)
+              lastMemoryTrace.value = parts.join(' · ')
+              lastMemoryTraceKind.value =
+                pipe.fill?.status === 'failed' || pipe.merge?.status === 'failed'
+                  ? 'fail'
+                  : pipe.fill?.status === 'applied' || pipe.merge?.status === 'merged'
+                    ? 'ok'
+                    : 'info'
+              if (settings.value) {
+                await ensureAndRefreshSystemLorebook({
+                  contextLabel: contextInjected.value,
+                  contextDetail: contextDetail.value,
+                  tableMemoryEnabled: true,
+                  recallQuery: text,
+                })
+                lorebooks.value = await getLorebooks()
               }
             } catch (memErr) {
               lastMemoryTraceKind.value = 'fail'
@@ -1235,7 +1265,7 @@ export function useTianji() {
    * 不抛错阻断开局：DB 失败时仍写入本地卷首消息。
    */
   /**
-   * 记忆锦囊手动触发：对最近一轮剧情跑 yuzuki 式追溯填表。
+   * 记忆锦囊手动触发：强制跑完整流水线（忽略 frequency 门闩）。
    */
   async function runManualMemoryTrace(): Promise<{ ok: boolean; message: string }> {
     await boot()
@@ -1261,72 +1291,80 @@ export function useTianji() {
 
     memoryTracing.value = true
     lastMemoryTraceKind.value = 'info'
-    lastMemoryTrace.value = '手动追溯中…'
+    lastMemoryTrace.value = '手动流水线…'
     try {
-      const mem = await runMemoryTrace({
+      const postChat = async ({
+        target,
+        body,
+      }: {
+        target: 'memory' | 'secondary' | 'primary'
+        body: Record<string, unknown>
+      }) => {
+        const api = settings.value!.api
+        let ep: { baseUrl: string; apiKey: string; model: string }
+        if (target === 'memory' && api.memory?.enabled) {
+          ep = {
+            baseUrl: normalizeBaseUrl(api.memory.baseUrl || ''),
+            apiKey: String(api.memory.apiKey || ''),
+            model: String(api.memory.model || '').trim(),
+          }
+        } else if (target === 'secondary' && api.secondary?.enabled) {
+          ep = {
+            baseUrl: normalizeBaseUrl(api.secondary.baseUrl || ''),
+            apiKey: String(api.secondary.apiKey || ''),
+            model: String(api.secondary.model || '').trim(),
+          }
+        } else {
+          ep = {
+            baseUrl: normalizeBaseUrl(api.baseUrl || ''),
+            apiKey: String(api.apiKey || ''),
+            model: String(api.model || '').trim() || String(body.model || ''),
+          }
+        }
+        const model = ep.model || String(body.model || '')
+        const completion = await postChatCompletion({
+          baseUrl: ep.baseUrl,
+          apiKey: ep.apiKey,
+          body: { ...body, model, stream: false },
+        })
+        if (!completion.ok) {
+          return { ok: false as const, error: completion.error || '请求失败' }
+        }
+        return textFromSettleCompletion(completion.data)
+      }
+
+      const pipe = await runTableMemoryPipeline({
+        messages: session.messages,
         userText: lastUser,
         maintext: lastAsst,
         sum: lastParsed.value?.sum || '',
         settings: settings.value,
-        postChat: async ({ target, body }) => {
-          const api = settings.value!.api
-          let ep: { baseUrl: string; apiKey: string; model: string }
-          if (target === 'memory' && api.memory?.enabled) {
-            ep = {
-              baseUrl: normalizeBaseUrl(api.memory.baseUrl || ''),
-              apiKey: String(api.memory.apiKey || ''),
-              model: String(api.memory.model || '').trim(),
-            }
-          } else if (target === 'secondary' && api.secondary?.enabled) {
-            ep = {
-              baseUrl: normalizeBaseUrl(api.secondary.baseUrl || ''),
-              apiKey: String(api.secondary.apiKey || ''),
-              model: String(api.secondary.model || '').trim(),
-            }
-          } else {
-            ep = {
-              baseUrl: normalizeBaseUrl(api.baseUrl || ''),
-              apiKey: String(api.apiKey || ''),
-              model: String(api.model || '').trim() || String(body.model || ''),
-            }
-          }
-          const model = ep.model || String(body.model || '')
-          const completion = await postChatCompletion({
-            baseUrl: ep.baseUrl,
-            apiKey: ep.apiKey,
-            body: { ...body, model, stream: false },
-          })
-          if (!completion.ok) {
-            return { ok: false as const, error: completion.error || '请求失败' }
-          }
-          return textFromSettleCompletion(completion.data)
-        },
+        force: true,
+        postChat,
       })
-      if (mem.status === 'applied') {
-        lastMemoryTraceKind.value = 'ok'
-        lastMemoryTrace.value = `手动追溯：更新 ${mem.count} 行`
-        await syncSystemLore(settings.value)
-        lorebooks.value = await getLorebooks()
-        return { ok: true, message: lastMemoryTrace.value }
+      const parts: string[] = ['手动']
+      if (pipe.fill?.status === 'applied') parts.push(`填表+${pipe.fill.count}`)
+      else if (pipe.fill?.status === 'empty') parts.push('填表无新增')
+      else if (pipe.fill?.status === 'failed') parts.push(`填表失败:${pipe.fill.error}`)
+      else if (pipe.fill?.status === 'skipped') parts.push(`填表跳过:${pipe.fill.reason}`)
+      if (pipe.merge?.status === 'merged') {
+        parts.push(`合并-${pipe.merge.removed}/+${pipe.merge.added}`)
       }
-      if (mem.status === 'empty') {
-        lastMemoryTraceKind.value = 'info'
-        lastMemoryTrace.value = '手动追溯无新增'
-        return { ok: true, message: lastMemoryTrace.value }
+      parts.push(`楼${pipe.lastUpdatedAiFloor}/${pipe.totalAiFloors}`)
+      lastMemoryTrace.value = parts.join(' · ')
+      lastMemoryTraceKind.value =
+        pipe.fill?.status === 'failed' ? 'fail' : pipe.fill?.status === 'applied' ? 'ok' : 'info'
+      await ensureAndRefreshSystemLorebook({
+        contextLabel: contextInjected.value,
+        contextDetail: contextDetail.value,
+        tableMemoryEnabled: true,
+        recallQuery: lastUser,
+      })
+      lorebooks.value = await getLorebooks()
+      return {
+        ok: pipe.fill?.status !== 'failed',
+        message: lastMemoryTrace.value,
       }
-      if (mem.status === 'skipped') {
-        lastMemoryTraceKind.value = 'info'
-        lastMemoryTrace.value =
-          mem.reason === 'memory_api_not_ready'
-            ? '手动追溯跳过（记忆 API 未配齐）'
-            : mem.reason === 'api_not_ready'
-              ? '手动追溯跳过（未通灵）'
-              : '手动追溯已跳过'
-        return { ok: false, message: lastMemoryTrace.value }
-      }
-      lastMemoryTraceKind.value = 'fail'
-      lastMemoryTrace.value = mem.error || '失败'
-      return { ok: false, message: lastMemoryTrace.value }
     } catch (e) {
       const msg = String((e as Error).message || e)
       lastMemoryTraceKind.value = 'fail'
@@ -1486,5 +1524,7 @@ export function useTianji() {
     setSessionVariables,
     startOpeningRun,
     runManualMemoryTrace,
+    getTableMemorySchedulerStatus: () =>
+      getSchedulerStatus(settings.value || ({} as AppSettings), chatSession.value?.messages || []),
   }
 }

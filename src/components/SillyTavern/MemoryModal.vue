@@ -4,7 +4,6 @@ import ModalFrame from '@/components/ui/ModalFrame.vue'
 import {
   loadTableMemory,
   saveTableMemory,
-  formatWorldStateInjection,
   clearTableMemory,
   clearTableRecords,
   countAllRecords,
@@ -22,15 +21,32 @@ import {
   loadMemoryBank,
 } from '@/composables/memory-lore'
 import { buildTableDefinitionsText, buildTraceRealtimePrompt } from '@/composables/table-memory-prompts'
+import {
+  buildJournalIndexText,
+  formatTableMemoryInjection,
+} from '@/composables/table-memory-recall'
+import {
+  countFineJournalRows,
+  listJournalRows,
+  checkAutoMergeTrigger,
+  localCollapseMerge,
+} from '@/composables/table-memory-merge'
+import { resolveTableMemoryScheduler } from '@/composables/table-memory-settings'
 import { useTianji } from '@/composables/useTianji'
 import './st-shared.css'
 
 const emit = defineEmits<{ close: [] }>()
-const { runManualMemoryTrace, memoryTracing, lastMemoryTrace, lastMemoryTraceKind } =
-  useTianji()
+const {
+  runManualMemoryTrace,
+  memoryTracing,
+  lastMemoryTrace,
+  lastMemoryTraceKind,
+  getTableMemorySchedulerStatus,
+  settings: tianjiSettings,
+} = useTianji()
 
 const state = ref<TableMemoryState>(loadTableMemory())
-const tab = ref<'tables' | 'sum' | 'inject' | 'scheme'>('tables')
+const tab = ref<'tables' | 'sum' | 'inject' | 'scheme' | 'sched'>('tables')
 const activeTableId = ref('character_profile')
 const status = ref('')
 const selectedRecordId = ref<string | null>(null)
@@ -77,10 +93,48 @@ const columnNames = computed(() =>
 
 const total = computed(() => countAllRecords(state.value))
 
-const injectionPreview = computed(() => formatWorldStateInjection(state.value))
+const injectionPreview = computed(() =>
+  formatTableMemoryInjection({
+    state: state.value,
+    scheduler: resolveTableMemoryScheduler(tianjiSettings.value),
+  }),
+)
+const indexPreview = computed(() =>
+  buildJournalIndexText(state.value, {
+    maxEntries: resolveTableMemoryScheduler(tianjiSettings.value).recallIndexTop,
+  }),
+)
 const schemaPreview = computed(() => buildTableDefinitionsText(state.value))
 const tracePromptPreview = computed(() => buildTraceRealtimePrompt(state.value))
 const tracing = computed(() => memoryTracing.value)
+const schedStatus = computed(() => {
+  try {
+    return getTableMemorySchedulerStatus()
+  } catch {
+    return null
+  }
+})
+const journalFine = computed(() => countFineJournalRows(state.value))
+const journalTotal = computed(() => listJournalRows(state.value).length)
+
+function onLocalMerge() {
+  const sch = resolveTableMemoryScheduler(tianjiSettings.value)
+  const trigger = checkAutoMergeTrigger(state.value, sch)
+  if (!trigger.shouldMerge && journalFine.value < 2) {
+    status.value = '细纪要不足，无需合并'
+    return
+  }
+  const mergeCount = trigger.shouldMerge
+    ? trigger.mergeCount
+    : Math.max(2, Math.floor(journalFine.value / 2))
+  const r = localCollapseMerge(state.value, {
+    startFineIndex: 0,
+    endFineIndex: mergeCount,
+  })
+  saveTableMemory(state.value)
+  refresh()
+  status.value = `本地合并：删细行 ${r.removed}，加粗行 ${r.added}`
+}
 
 const sumShort = computed(() => {
   loadMemoryBank()
@@ -203,6 +257,15 @@ function rowBrief(rec: MemoryRecord): string {
         >
           追溯契约
         </button>
+        <button
+          type="button"
+          class="mem__tab"
+          :class="{ active: tab === 'sched' }"
+          @click="tab = 'sched'"
+        >
+          调度/纪要
+          <small>{{ journalFine }}/{{ journalTotal }}</small>
+        </button>
       </div>
 
       <p v-if="status" class="mem__status">{{ status }}</p>
@@ -228,7 +291,10 @@ function rowBrief(rec: MemoryRecord): string {
             :disabled="tracing"
             @click="onTraceNow"
           >
-            {{ tracing ? '追溯中…' : '追溯填表（yuzuki）' }}
+            {{ tracing ? '流水线…' : '跑完整流水线' }}
+          </button>
+          <button type="button" class="btn btn-ghost btn-sm" @click="onLocalMerge">
+            本地合并纪要
           </button>
           <button type="button" class="btn btn-ghost btn-sm" @click="onClearTable">
             清空本表
@@ -237,7 +303,7 @@ function rowBrief(rec: MemoryRecord): string {
             清空全部表
           </button>
           <span class="mem__hint">
-            对标 yuzuki-Memory：主推演可写 &lt;Memory&gt;；每回合后另跑独立追溯任务抽表；也可手动点「追溯填表」。
+            对齐 shujuku：楼层调度 → 填表 → 纪要合并(auto_merged) → 索引 Top-K 注入。次 API 只做 settle。
           </span>
         </div>
 
@@ -312,15 +378,54 @@ function rowBrief(rec: MemoryRecord): string {
 
       <template v-else-if="tab === 'inject'">
         <p class="mem__hint">
-          下列内容会作为系统世界书「表格世界状态」常驻注入天机推演（与局面快照、sum
-          记忆并列）——对应 yuzuki 的【当前世界状态参考】。
+          注入 = 实体表 + 纪要索引 + Top-K 召回全文（对齐 shujuku，非整表硬截断）。
         </p>
+        <h4 class="mem__h4">完整注入预览</h4>
         <pre class="mem__inject">{{ injectionPreview }}</pre>
+        <h4 class="mem__h4">纪要索引（轻量）</h4>
+        <pre class="mem__inject">{{ indexPreview }}</pre>
+      </template>
+
+      <template v-else-if="tab === 'sched'">
+        <p class="mem__hint">
+          调度参数在密匣「显示」页可改。此处展示当前楼层进度与纪要细/粗行。
+        </p>
+        <div class="mem__sum" v-if="schedStatus">
+          <section>
+            <h4>楼层调度</h4>
+            <pre>AI 楼层：{{ schedStatus.totalAiFloors }}
+上次填表：{{ schedStatus.lastUpdatedAiFloor }}
+下次触发：{{ schedStatus.nextTriggerFloor }}
+有效未记录：{{ schedStatus.effectiveUnrecorded }}
+应更新：{{ schedStatus.shouldUpdate ? '是' : '否' }} ({{ schedStatus.reason }})
+读深={{ schedStatus.autoUpdateThreshold }} 频率={{ schedStatus.autoUpdateFrequency }}
+批={{ schedStatus.updateBatchSize }} 跳过={{ schedStatus.skipUpdateFloors }}
+保留标记={{ schedStatus.retainRecentLayers }}</pre>
+          </section>
+          <section>
+            <h4>纪要表</h4>
+            <pre>细行：{{ journalFine }}
+总行：{{ journalTotal }}
+合并阈值：{{ schedStatus.autoMergeThreshold }}
+保留细行：{{ schedStatus.autoMergeReserve }}
+召回 Top-K：{{ schedStatus.recallTopK }} / 索引 {{ schedStatus.recallIndexTop }}</pre>
+          </section>
+        </div>
+        <p v-else class="mem__empty">调度状态不可用</p>
+        <h4 class="mem__h4">纪要行一览</h4>
+        <pre class="mem__inject">{{
+          listJournalRows(state)
+            .map(
+              (r) =>
+                `${r.isAutoMerged ? '[AM]' : '[J]'} ${r.indexCode} | ${r.summary || r.body.slice(0, 40)}`,
+            )
+            .join('\n') || '(空)'
+        }}</pre>
       </template>
 
       <template v-else>
         <p class="mem__hint">
-          移植自 yuzuki-Memory 的 TABLE_DEFINITIONS + traceRealtime 守则；独立追溯任务与主推演格式提示共用此契约。
+          移植自 yuzuki-Memory 的 TABLE_DEFINITIONS + traceRealtime 守则；含纪要表结构。
         </p>
         <h4 class="mem__h4">数据库结构定义</h4>
         <pre class="mem__inject">{{ schemaPreview }}</pre>
@@ -337,7 +442,7 @@ function rowBrief(rec: MemoryRecord): string {
         :disabled="tracing"
         @click="onTraceNow"
       >
-        {{ tracing ? '追溯中…' : '追溯填表' }}
+        {{ tracing ? '流水线…' : '跑完整流水线' }}
       </button>
     </template>
   </ModalFrame>

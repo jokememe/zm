@@ -277,14 +277,14 @@ describe('runMemoryTrace (shipped entry)', () => {
   })
 })
 
-describe('tianji wires yuzuki trace', () => {
-  it('useTianji sources call runMemoryTrace', async () => {
+describe('tianji wires full table-memory pipeline', () => {
+  it('useTianji sources call runTableMemoryPipeline', async () => {
     const { readFileSync } = await import('node:fs')
     const { fileURLToPath } = await import('node:url')
     const { dirname, join } = await import('node:path')
     const here = dirname(fileURLToPath(import.meta.url))
     const src = readFileSync(join(here, 'useTianji.ts'), 'utf8')
-    expect(src).toMatch(/runMemoryTrace/)
+    expect(src).toMatch(/runTableMemoryPipeline/)
     expect(src).toMatch(/buildMainFormatMemoryHint/)
     expect(src).toMatch(/runManualMemoryTrace/)
   })

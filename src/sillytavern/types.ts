@@ -202,6 +202,27 @@ export interface AppSettings {
    * 默认 12000。
    */
   historyMaxTokens?: number;
+  /**
+   * 表格记忆调度 / 合并 / 召回 — 对齐 shujuku AutoCardUpdater。
+   * threshold=读深, frequency=每N层, batch, concurrent, skip, retain, merge, Top-K。
+   */
+  tableMemoryScheduler?: {
+    autoUpdateThreshold?: number;
+    autoUpdateFrequency?: number;
+    updateBatchSize?: number;
+    maxConcurrentGroups?: number;
+    skipUpdateFloors?: number;
+    retainRecentLayers?: number;
+    autoMergeEnabled?: boolean;
+    autoMergeThreshold?: number;
+    autoMergeReserve?: number;
+    mergeBatchSize?: number;
+    recallEnabled?: boolean;
+    recallIndexTop?: number;
+    recallTopK?: number;
+    entityInjectMaxChars?: number;
+    journalInjectMaxChars?: number;
+  };
 }
 
 export const DEFAULT_FORMAT_PROMPT = `你必须严格按照以下 XML 标签格式输出回复，不要使用 Markdown 包裹：
@@ -268,6 +289,23 @@ export const DEFAULT_SETTINGS: AppSettings = {
   tableMemoryEnabled: true,
   historyCompress: true,
   historyMaxTokens: 12000,
+  tableMemoryScheduler: {
+    autoUpdateThreshold: 3,
+    autoUpdateFrequency: 1,
+    updateBatchSize: 3,
+    maxConcurrentGroups: 1,
+    skipUpdateFloors: 0,
+    retainRecentLayers: 100,
+    autoMergeEnabled: true,
+    autoMergeThreshold: 20,
+    autoMergeReserve: 0,
+    mergeBatchSize: 5,
+    recallEnabled: true,
+    recallIndexTop: 50,
+    recallTopK: 20,
+    entityInjectMaxChars: 2800,
+    journalInjectMaxChars: 3200,
+  },
 };
 
 // ========== Chat Types ==========

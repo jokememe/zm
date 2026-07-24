@@ -81,8 +81,9 @@ describe('Tianji + system lore hooks (shipped sources)', () => {
       'utf8',
     )
     expect(modal).toMatch(/从经营同步/)
-    expect(modal).toMatch(/formatWorldStateInjection/)
+    expect(modal).toMatch(/formatTableMemoryInjection/)
     expect(modal).toMatch(/syncTableMemoryFromGame/)
+    expect(modal).toMatch(/runTableMemoryPipeline|跑完整流水线|调度/)
   })
 
   it('format prompt hints model may emit Memory without dropping sum/maintext', () => {
@@ -106,9 +107,10 @@ describe('ensure path functions still produce sum + table text', () => {
     expect(formatShortMemory()).toContain('短期记忆')
     expect(formatMidMemory()).toContain('中期记忆')
     expect(formatLongMemory()).toContain('长期记忆')
-    expect(formatWorldStateInjection(createDefaultTableMemoryState())).toContain(
-      '当前世界状态参考',
-    )
+    // 注入走实体表+纪要索引+Top-K（或未绑定时 legacy 文案）
+    const inj = formatWorldStateInjection(createDefaultTableMemoryState())
+    expect(inj.length).toBeGreaterThan(10)
+    expect(inj).toMatch(/世界状态|实体表|纪要|暂无/)
   })
 
   it('recordTurnSum still mutates short layer (shipped function)', () => {
@@ -127,12 +129,14 @@ describe('ensure path functions still produce sum + table text', () => {
     expect(formatShortMemory()).toMatch(/结盟|纳贡/)
   })
 
-  it('table apply + injection is pure and callable without Vue', () => {
+  it('table apply + injection is pure and callable without Vue', async () => {
     const s = createDefaultTableMemoryState()
     applyMemoryTextToState(
       s,
       `<Memory>#世界设定\n[青岚宗]|类型：宗门|详细说明：残峰再起</Memory>`,
     )
+    // 确保 injector 已注册
+    await import('./table-memory-recall')
     const inj = formatWorldStateInjection(s)
     expect(inj).toContain('青岚宗')
     expect(inj).toContain('残峰再起')

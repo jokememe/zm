@@ -13,6 +13,10 @@ import {
   findLegacySharedDatabases,
   type AppSettings,
 } from '@/sillytavern'
+import {
+  resolveTableMemoryScheduler,
+  type TableMemorySchedulerSettings,
+} from '@/composables/table-memory-settings'
 import './st-shared.css'
 
 const props = defineProps<{
@@ -163,6 +167,26 @@ function patchHistoryKeep(raw: string | number) {
 function patchHistoryMaxTokens(raw: string | number) {
   const n = clampInt(Number(raw), 0, 500_000)
   patch({ historyMaxTokens: n })
+}
+
+const sched = computed(() => resolveTableMemoryScheduler(props.settings))
+
+function patchSched(
+  key: keyof TableMemorySchedulerSettings,
+  raw: string | number | boolean,
+) {
+  const cur = resolveTableMemoryScheduler(props.settings)
+  let val: number | boolean = raw as boolean
+  if (typeof raw !== 'boolean') {
+    const n = Number(raw)
+    val = Number.isFinite(n) ? Math.round(n) : (cur[key] as number)
+  }
+  patch({
+    tableMemoryScheduler: {
+      ...cur,
+      [key]: val,
+    },
+  })
 }
 
 const KEEP_PRESETS = [0, 4, 8, 12, 16, 24, 32, 48, 64] as const
@@ -1184,8 +1208,8 @@ function onTagsInput(value: string) {
           </label>
         </div>
         <p class="tj-hint" style="margin-top: 0.5rem">
-          召回方式：不写 SQL。隐藏楼层后靠「表格世界状态 + 短/中/长期小结」常驻世界书召回，
-          与 yuzuki 思路一致（表里有事实，楼层只留近端正文）。
+          召回方式：不写 SQL。注入 = 实体表 + 纪要索引(~50) + Top-K 全文(~20)，
+          对齐 shujuku 索引召回；隐藏楼层后靠表与小结，不靠整段 raw。
         </p>
       </div>
 
@@ -1289,6 +1313,227 @@ function onTagsInput(value: string) {
           0 = 不设硬上限（大上下文易回到数万 token）。系统世界书不计入此预算。可手填如 15000、24000。
         </p>
       </div>
+
+      <div class="api-panel" style="margin-top: 1rem">
+        <div class="secondary-head">
+          <div>
+            <h3 class="api-panel__title">表格记忆 · 调度（shujuku 对齐）</h3>
+            <p class="tj-hint" style="margin: 0">
+              读深 / 每N层 / 批大小 / 跳过 / 保留 · 与 AutoCardUpdater 同语义。
+              次API 结算与填表无关；填表走记忆API（或回退）。
+            </p>
+          </div>
+        </div>
+        <div class="sched-grid">
+          <label class="tj-field">
+            <span>读深 threshold</span>
+            <input
+              class="tj-input limit-input"
+              type="number"
+              min="1"
+              max="50"
+              :value="sched.autoUpdateThreshold"
+              @change="patchSched('autoUpdateThreshold', ($event.target as HTMLInputElement).value)"
+            />
+          </label>
+          <label class="tj-field">
+            <span>每 N 层 frequency</span>
+            <input
+              class="tj-input limit-input"
+              type="number"
+              min="0"
+              max="100"
+              :value="sched.autoUpdateFrequency"
+              @change="patchSched('autoUpdateFrequency', ($event.target as HTMLInputElement).value)"
+            />
+          </label>
+          <label class="tj-field">
+            <span>批大小 batch</span>
+            <input
+              class="tj-input limit-input"
+              type="number"
+              min="1"
+              max="20"
+              :value="sched.updateBatchSize"
+              @change="patchSched('updateBatchSize', ($event.target as HTMLInputElement).value)"
+            />
+          </label>
+          <label class="tj-field">
+            <span>并发组 concurrent</span>
+            <input
+              class="tj-input limit-input"
+              type="number"
+              min="1"
+              max="8"
+              :value="sched.maxConcurrentGroups"
+              @change="patchSched('maxConcurrentGroups', ($event.target as HTMLInputElement).value)"
+            />
+          </label>
+          <label class="tj-field">
+            <span>跳过最近 skip</span>
+            <input
+              class="tj-input limit-input"
+              type="number"
+              min="0"
+              max="100"
+              :value="sched.skipUpdateFloors"
+              @change="patchSched('skipUpdateFloors', ($event.target as HTMLInputElement).value)"
+            />
+          </label>
+          <label class="tj-field">
+            <span>保留标记 retain</span>
+            <input
+              class="tj-input limit-input"
+              type="number"
+              min="0"
+              max="2000"
+              :value="sched.retainRecentLayers"
+              @change="patchSched('retainRecentLayers', ($event.target as HTMLInputElement).value)"
+            />
+          </label>
+        </div>
+        <p class="tj-hint">
+          frequency=0 关闭自动填表；retain=0 不清理填表标记。默认 threshold=3, freq=1, batch=3, skip=0, retain=100。
+        </p>
+      </div>
+
+      <div class="api-panel" style="margin-top: 0.85rem">
+        <div class="secondary-head">
+          <div>
+            <h3 class="api-panel__title">纪要合并 · 清理</h3>
+            <p class="tj-hint" style="margin: 0">
+              细行过多时合并为 auto_merged 粗行（不是单纯删除）。对齐 performAutoMergeSummary。
+            </p>
+          </div>
+          <label class="switch">
+            <input
+              type="checkbox"
+              :checked="sched.autoMergeEnabled"
+              @change="
+                patchSched(
+                  'autoMergeEnabled',
+                  ($event.target as HTMLInputElement).checked,
+                )
+              "
+            />
+            <span class="switch__ui" />
+            <span class="switch__label">{{
+              sched.autoMergeEnabled ? '已开启' : '已关闭'
+            }}</span>
+          </label>
+        </div>
+        <div class="sched-grid">
+          <label class="tj-field">
+            <span>合并阈值</span>
+            <input
+              class="tj-input limit-input"
+              type="number"
+              min="2"
+              max="200"
+              :value="sched.autoMergeThreshold"
+              @change="patchSched('autoMergeThreshold', ($event.target as HTMLInputElement).value)"
+            />
+          </label>
+          <label class="tj-field">
+            <span>保留细行 reserve</span>
+            <input
+              class="tj-input limit-input"
+              type="number"
+              min="0"
+              max="100"
+              :value="sched.autoMergeReserve"
+              @change="patchSched('autoMergeReserve', ($event.target as HTMLInputElement).value)"
+            />
+          </label>
+          <label class="tj-field">
+            <span>合并批大小</span>
+            <input
+              class="tj-input limit-input"
+              type="number"
+              min="1"
+              max="30"
+              :value="sched.mergeBatchSize"
+              @change="patchSched('mergeBatchSize', ($event.target as HTMLInputElement).value)"
+            />
+          </label>
+        </div>
+      </div>
+
+      <div class="api-panel" style="margin-top: 0.85rem">
+        <div class="secondary-head">
+          <div>
+            <h3 class="api-panel__title">索引召回 Top-K</h3>
+            <p class="tj-hint" style="margin: 0">
+              注入=实体表 + 纪要索引(~50) + 召回全文 Top-K(~20)。不是整表硬截断。
+            </p>
+          </div>
+          <label class="switch">
+            <input
+              type="checkbox"
+              :checked="sched.recallEnabled"
+              @change="
+                patchSched(
+                  'recallEnabled',
+                  ($event.target as HTMLInputElement).checked,
+                )
+              "
+            />
+            <span class="switch__ui" />
+            <span class="switch__label">{{
+              sched.recallEnabled ? '已开启' : '已关闭'
+            }}</span>
+          </label>
+        </div>
+        <div class="sched-grid">
+          <label class="tj-field">
+            <span>索引条数</span>
+            <input
+              class="tj-input limit-input"
+              type="number"
+              min="5"
+              max="200"
+              :value="sched.recallIndexTop"
+              @change="patchSched('recallIndexTop', ($event.target as HTMLInputElement).value)"
+            />
+          </label>
+          <label class="tj-field">
+            <span>召回 Top-K</span>
+            <input
+              class="tj-input limit-input"
+              type="number"
+              min="1"
+              max="80"
+              :value="sched.recallTopK"
+              @change="patchSched('recallTopK', ($event.target as HTMLInputElement).value)"
+            />
+          </label>
+          <label class="tj-field">
+            <span>实体表字数</span>
+            <input
+              class="tj-input limit-input"
+              type="number"
+              min="500"
+              max="20000"
+              step="100"
+              :value="sched.entityInjectMaxChars"
+              @change="patchSched('entityInjectMaxChars', ($event.target as HTMLInputElement).value)"
+            />
+          </label>
+          <label class="tj-field">
+            <span>纪要全文字数</span>
+            <input
+              class="tj-input limit-input"
+              type="number"
+              min="500"
+              max="20000"
+              step="100"
+              :value="sched.journalInjectMaxChars"
+              @change="patchSched('journalInjectMaxChars', ($event.target as HTMLInputElement).value)"
+            />
+          </label>
+        </div>
+      </div>
+
       <p class="tj-hint">库标识：{{ storageInfo.dbName }}（与其它项目隔离）</p>
     </template>
 
@@ -1603,6 +1848,25 @@ function onTagsInput(value: string) {
   flex-wrap: wrap;
   gap: 0.3rem;
   margin-bottom: 0.35rem;
+}
+
+.sched-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+  gap: 0.55rem 0.75rem;
+  margin-top: 0.65rem;
+}
+
+.sched-grid .tj-field span {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--ink-muted);
+  margin-bottom: 0.2rem;
+}
+
+.sched-grid .limit-input {
+  width: 100%;
+  max-width: none;
 }
 
 .model-fetch-err {

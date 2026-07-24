@@ -270,6 +270,43 @@ export async function getSettings(): Promise<AppSettings | undefined> {
   } else {
     s.historyMaxTokens = Math.max(0, Math.min(500_000, Math.round(Number(s.historyMaxTokens))));
   }
+  // 表格记忆调度参数：缺省补全，与 shujuku 默认对齐
+  if (!s.tableMemoryScheduler || typeof s.tableMemoryScheduler !== 'object') {
+    s.tableMemoryScheduler = {
+      autoUpdateThreshold: 3,
+      autoUpdateFrequency: 1,
+      updateBatchSize: 3,
+      maxConcurrentGroups: 1,
+      skipUpdateFloors: 0,
+      retainRecentLayers: 100,
+      autoMergeEnabled: true,
+      autoMergeThreshold: 20,
+      autoMergeReserve: 0,
+      mergeBatchSize: 5,
+      recallEnabled: true,
+      recallIndexTop: 50,
+      recallTopK: 20,
+      entityInjectMaxChars: 2800,
+      journalInjectMaxChars: 3200,
+    };
+  } else {
+    const t = s.tableMemoryScheduler;
+    if (t.autoUpdateThreshold === undefined) t.autoUpdateThreshold = 3;
+    if (t.autoUpdateFrequency === undefined) t.autoUpdateFrequency = 1;
+    if (t.updateBatchSize === undefined) t.updateBatchSize = 3;
+    if (t.maxConcurrentGroups === undefined) t.maxConcurrentGroups = 1;
+    if (t.skipUpdateFloors === undefined) t.skipUpdateFloors = 0;
+    if (t.retainRecentLayers === undefined) t.retainRecentLayers = 100;
+    if (t.autoMergeEnabled === undefined) t.autoMergeEnabled = true;
+    if (t.autoMergeThreshold === undefined) t.autoMergeThreshold = 20;
+    if (t.autoMergeReserve === undefined) t.autoMergeReserve = 0;
+    if (t.mergeBatchSize === undefined) t.mergeBatchSize = 5;
+    if (t.recallEnabled === undefined) t.recallEnabled = true;
+    if (t.recallIndexTop === undefined) t.recallIndexTop = 50;
+    if (t.recallTopK === undefined) t.recallTopK = 20;
+    if (t.entityInjectMaxChars === undefined) t.entityInjectMaxChars = 2800;
+    if (t.journalInjectMaxChars === undefined) t.journalInjectMaxChars = 3200;
+  }
   return s;
 }
 

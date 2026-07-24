@@ -5,6 +5,25 @@
  */
 import { TABLE_MEMORY_STORAGE_KEY } from '@/data/opening'
 
+// 召回注入在 formatWorldStateInjection 运行时再取，避免与 recall 模块循环初始化
+let _formatTableMemoryInjection:
+  | ((input: {
+      state?: TableMemoryState
+      query?: string
+      recallCodes?: string[]
+    }) => string)
+  | null = null
+
+export function bindTableMemoryInjector(
+  fn: (input: {
+    state?: TableMemoryState
+    query?: string
+    recallCodes?: string[]
+  }) => string,
+): void {
+  _formatTableMemoryInjection = fn
+}
+
 export interface MemoryTableDef {
   id: string
   name: string
@@ -17,9 +36,24 @@ export interface MemoryRecord {
   values: Record<string, string>
 }
 
+/** 调度/编码进度（对齐 ACU lastUpdated + 索引序号） */
+export interface TableMemoryMeta {
+  /** 上次填表完成时的 AI 楼层号（1-based） */
+  lastUpdatedAiFloor: number
+  /** 已填表的 AI 楼层号列表（供 retain 清理） */
+  filledFloors: number[]
+  /** 下一个编码序号（J/AM 共用递增） */
+  nextIndexCode: number
+  /** 最近一次召回编码 */
+  lastRecallCodes?: string[]
+  /** 最近一次调度原因 */
+  lastScheduleReason?: string
+}
+
 export interface TableMemoryState {
   tables: MemoryTableDef[]
   records: Record<string, MemoryRecord[]>
+  meta?: TableMemoryMeta
 }
 
 export interface ParsedMemoryRow {
@@ -67,11 +101,28 @@ export const DEFAULT_MEMORY_TABLES: MemoryTableDef[] = [
     name: '剧情摘要',
     columns: ['#主线', '#支线'],
   },
+  /**
+   * 纪要表 — 对齐 shujuku「纪要表/总结表」：
+   * 每回合可追加细行；超阈值后合并为 auto_merged 粗行；索引召回只读概要+编码。
+   */
+  {
+    id: 'plot_journal',
+    name: '纪要表',
+    columns: ['编码索引', '概要', '时间跨度', '地点', '纪要', '标记'],
+  },
 ]
 
 export const TABLE_WORLD_STATE_ENTRY_ID = 'table-world-state'
 
 const INJECT_MAX_CHARS = 3500
+
+export function createDefaultMeta(): TableMemoryMeta {
+  return {
+    lastUpdatedAiFloor: 0,
+    filledFloors: [],
+    nextIndexCode: 1,
+  }
+}
 
 export function createDefaultTableMemoryState(): TableMemoryState {
   return {
@@ -81,6 +132,7 @@ export function createDefaultTableMemoryState(): TableMemoryState {
       columns: [...t.columns],
     })),
     records: {},
+    meta: createDefaultMeta(),
   }
 }
 
@@ -295,6 +347,51 @@ export function applyMemoryRow(
     return true
   }
 
+  // 纪要表：每条细行独立插入（主键=编码索引）；同编码则合并字段
+  if (table.id === 'plot_journal') {
+    const primaryName = getPrimaryColumnName(table)
+    let primaryValue = String(row.primaryValue || '').trim()
+    if (!primaryValue) {
+      // 无主键时自动分配 Jxxxx
+      if (!s.meta) s.meta = createDefaultMeta()
+      const n = Math.max(1, s.meta.nextIndexCode || 1)
+      primaryValue = `J${String(n).padStart(4, '0')}`
+      s.meta.nextIndexCode = n + 1
+    }
+    const validUpdates = Object.entries(row.values || {})
+      .map(([field, value]) => {
+        const column = findColumn(table, field)
+        if (!column) return null
+        const nextValue = String(value || '').trim()
+        if (!nextValue) return null
+        return { column, value: nextValue }
+      })
+      .filter((x): x is { column: string; value: string } => !!x)
+
+    // 允许仅主键+概要/纪要
+    let record = records.find(
+      (entry) =>
+        String(entry?.values?.[primaryName] || '').trim() === primaryValue,
+    )
+    if (!record) {
+      record = createRecord(table, { [primaryName]: primaryValue })
+      records.push(record)
+    }
+    record.values = record.values || {}
+    record.values[primaryName] = primaryValue
+    record.values['编码索引'] = primaryValue
+    for (const { column, value } of validUpdates) {
+      const columnName = cleanColumnName(column)
+      record.values[columnName] = value
+    }
+    // 从正文生成默认概要
+    if (!String(record.values['概要'] || '').trim()) {
+      const body = String(record.values['纪要'] || '').trim()
+      if (body) record.values['概要'] = body.slice(0, 48)
+    }
+    return true
+  }
+
   const primaryName = getPrimaryColumnName(table)
   const primaryValue = String(row.primaryValue || '').trim()
   if (!primaryValue) return false
@@ -382,13 +479,29 @@ export function buildTableText(
 }
 
 /**
- * 生成注入块：【当前世界状态参考】+ 各表内容。
- * 空库返回明确占位，不抛错。
+ * 生成注入块。
+ * 默认走「实体表 + 纪要索引 + Top-K 召回全文」（对齐 shujuku，非整表硬截断）。
+ * 传入 maxChars 且 forceLegacy 时保留旧版全表截断（兼容旧测试）。
  */
 export function formatWorldStateInjection(
   s: TableMemoryState = state,
-  opts?: { maxChars?: number },
+  opts?: {
+    maxChars?: number
+    /** 强制旧版全表截断 */
+    forceLegacy?: boolean
+    /** 召回 query（用户本回输入） */
+    query?: string
+    recallCodes?: string[]
+  },
 ): string {
+  if (!opts?.forceLegacy && _formatTableMemoryInjection) {
+    return _formatTableMemoryInjection({
+      state: s,
+      query: opts?.query,
+      recallCodes: opts?.recallCodes,
+    })
+  }
+
   const maxChars = opts?.maxChars ?? INJECT_MAX_CHARS
   const tables = s.tables || []
   const blocks = tables.map((table) => buildTableText(s, table)).filter(Boolean)
@@ -410,6 +523,21 @@ export function formatWorldStateInjection(
   )
 }
 
+/** 确保默认表（含纪要表）存在，旧存档自动补表结构 */
+function ensureDefaultTables(tables: MemoryTableDef[]): MemoryTableDef[] {
+  const byId = new Map(tables.map((t) => [t.id, t]))
+  for (const def of DEFAULT_MEMORY_TABLES) {
+    if (!byId.has(def.id)) {
+      tables.push({
+        id: def.id,
+        name: def.name,
+        columns: [...def.columns],
+      })
+    }
+  }
+  return tables
+}
+
 export function loadTableMemory(): TableMemoryState {
   try {
     const raw = localStorage.getItem(TABLE_MEMORY_STORAGE_KEY)
@@ -419,7 +547,7 @@ export function loadTableMemory(): TableMemoryState {
     }
     const o = JSON.parse(raw) as Partial<TableMemoryState>
     const base = createDefaultTableMemoryState()
-    const tables =
+    let tables =
       Array.isArray(o.tables) && o.tables.length
         ? o.tables.map((t) => ({
             id: String(t.id || ''),
@@ -429,6 +557,7 @@ export function loadTableMemory(): TableMemoryState {
               : [],
           }))
         : base.tables
+    tables = ensureDefaultTables(tables)
     const records: Record<string, MemoryRecord[]> = {}
     if (o.records && typeof o.records === 'object') {
       for (const [id, list] of Object.entries(o.records)) {
@@ -444,7 +573,19 @@ export function loadTableMemory(): TableMemoryState {
         }))
       }
     }
-    state = { tables, records }
+    const meta: TableMemoryMeta = {
+      ...createDefaultMeta(),
+      ...(o.meta && typeof o.meta === 'object' ? o.meta : {}),
+      lastUpdatedAiFloor: Math.max(
+        0,
+        Math.floor(Number(o.meta?.lastUpdatedAiFloor) || 0),
+      ),
+      filledFloors: Array.isArray(o.meta?.filledFloors)
+        ? o.meta!.filledFloors.map((n) => Math.floor(Number(n) || 0)).filter((n) => n > 0)
+        : [],
+      nextIndexCode: Math.max(1, Math.floor(Number(o.meta?.nextIndexCode) || 1)),
+    }
+    state = { tables, records, meta }
     return state
   } catch {
     state = createDefaultTableMemoryState()
