@@ -145,7 +145,6 @@ function onTianjiBackdrop() {
   flex-direction: column;
   position: relative;
   overflow: hidden;
-  padding-bottom: env(safe-area-inset-bottom, 0);
 }
 
 .app-body {
@@ -160,6 +159,9 @@ function onTianjiBackdrop() {
   flex: 1;
   min-width: 0;
   position: relative;
+  /* iOS 惯性滚动 */
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
 }
 
 .main-stage__inner {
@@ -201,6 +203,8 @@ function onTianjiBackdrop() {
   background: rgba(26, 36, 51, 0.35);
   backdrop-filter: blur(2px);
   animation: fade-in 0.2s ease;
+  /* 点按抽屉遮罩时避免误触主内容滚动 */
+  touch-action: none;
 }
 
 .drawer-backdrop--tianji {
@@ -221,12 +225,16 @@ function onTianjiBackdrop() {
   display: flex;
   align-items: stretch;
   justify-content: space-around;
-  gap: 0.25rem;
-  padding: 0.35rem 0.5rem calc(0.35rem + env(safe-area-inset-bottom, 0));
-  background: rgba(255, 255, 255, 0.88);
-  backdrop-filter: blur(16px) saturate(1.15);
+  gap: 0.15rem;
+  /* safe-area 只由底栏承担，不在 app-root 再叠一层 */
+  padding: 0.3rem 0.4rem calc(0.3rem + env(safe-area-inset-bottom, 0px));
+  min-height: calc(var(--mobile-dock-height) + env(safe-area-inset-bottom, 0px));
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
   border-top: 1px solid var(--border-subtle);
   z-index: var(--z-top);
+  box-shadow: 0 -4px 20px rgba(40, 60, 100, 0.06);
 }
 
 .mobile-dock__btn {
@@ -235,13 +243,18 @@ function onTianjiBackdrop() {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.15rem;
-  padding: 0.4rem 0.25rem;
+  gap: 0.12rem;
+  min-height: var(--touch-min);
+  padding: 0.35rem 0.2rem;
   border-radius: var(--radius-sm);
   color: var(--ink-muted);
-  font-size: 0.68rem;
+  font-size: 0.7rem;
   font-weight: 500;
+  letter-spacing: 0.02em;
   transition: background 0.15s, color 0.15s;
+  /* 避免双击缩放 */
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .mobile-dock__btn.is-on {
@@ -249,12 +262,19 @@ function onTianjiBackdrop() {
   background: var(--moon-glow);
 }
 
-/* 紧凑布局：主区全宽，给底栏留空 */
+/* 紧凑布局：主区全宽，底栏已占 flex 行，无需再给 app-root 加 safe padding */
 .app-root.is-compact .main-stage__inner {
-  padding: 0.85rem 0.85rem 1rem;
+  padding: 0.75rem 0.75rem 1.1rem;
 }
 
-.app-root.is-compact .app-body {
-  /* 底栏约 56px */
+/* 极窄：再收一点内边距 */
+@media (max-width: 380px) {
+  .app-root.is-compact .main-stage__inner {
+    padding: 0.65rem 0.6rem 1rem;
+  }
+
+  .mobile-dock__btn {
+    font-size: 0.65rem;
+  }
 }
 </style>

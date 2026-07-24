@@ -436,45 +436,139 @@ function toggleNotif(e: MouseEvent) {
 /* 竖屏 / 窄屏顶栏 */
 .top-bar.is-compact {
   height: auto;
-  min-height: var(--topbar-height);
+  min-height: unset;
   flex-wrap: wrap;
-  row-gap: 0.35rem;
-  padding: 0.45rem 0.65rem;
-  padding-top: calc(0.45rem + env(safe-area-inset-top, 0));
+  row-gap: 0.3rem;
+  column-gap: 0.4rem;
+  padding: 0.4rem 0.55rem 0.45rem;
+  padding-top: calc(0.4rem + env(safe-area-inset-top, 0px));
+  align-items: center;
+}
+
+.top-bar.is-compact .top-bar__left {
+  gap: 0.4rem;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.top-bar.is-compact .top-bar__right {
+  gap: 0.35rem;
+  flex-shrink: 0;
 }
 
 .top-bar.is-compact .top-bar__center {
   order: 3;
   flex: 1 1 100%;
   justify-content: flex-start;
-  gap: 0.35rem;
-  padding-bottom: 0.15rem;
-  mask-image: linear-gradient(90deg, #000 0%, #000 calc(100% - 24px), transparent);
+  gap: 0.3rem;
+  padding: 0.05rem 0 0.1rem;
+  /* 横向滑动看资源，边缘淡出提示可滑 */
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  mask-image: linear-gradient(90deg, #000 0%, #000 calc(100% - 28px), transparent);
+  scroll-snap-type: x proximity;
+}
+
+.top-bar.is-compact .top-bar__center::-webkit-scrollbar {
+  display: none;
 }
 
 .top-bar.is-compact .res-chip {
-  padding: 0.28rem 0.45rem;
-  gap: 0.3rem;
+  padding: 0.28rem 0.42rem;
+  gap: 0.28rem;
+  flex-shrink: 0;
+  scroll-snap-align: start;
 }
 
 .top-bar.is-compact .res-chip__value {
-  font-size: 0.82rem;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .top-bar.is-compact .calendar-chip {
-  max-width: 42vw;
+  max-width: min(38vw, 9.5rem);
+  padding: 0.28rem 0.45rem;
+  gap: 0.25rem;
 }
 
 .top-bar.is-compact .calendar-chip__short {
-  font-size: 0.78rem;
+  font-size: 0.74rem;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.top-bar.is-compact .master-chip {
+  padding: 0.2rem 0.35rem 0.2rem 0.2rem;
+  gap: 0.35rem;
 }
 
 .top-bar.is-compact .master-chip span {
   display: none;
 }
 
+.top-bar.is-compact .master-chip strong {
+  font-size: 0.78rem;
+  max-width: 4.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.top-bar.is-compact .master-chip__avatar {
+  width: 30px;
+  height: 30px;
+}
+
+.top-bar.is-compact .brand {
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.top-bar.is-compact .brand__mark {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+.top-bar.is-compact .brand__text {
+  min-width: 0;
+}
+
 .top-bar.is-compact .brand__text strong {
-  font-size: 0.92rem;
+  font-size: 0.9rem;
+  max-width: 36vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+}
+
+/* 通知面板：竖屏贴顶栏下、全宽更易点 */
+.top-bar.is-compact .notif-panel {
+  right: 0;
+  left: auto;
+  width: min(92vw, 340px);
+  max-height: min(60dvh, 420px);
+}
+
+@media (max-width: 380px) {
+  .top-bar.is-compact .master-chip {
+    /* 极窄：只留头像，省宽度给资源条 */
+    padding: 0;
+    background: transparent;
+    border: none;
+  }
+
+  .top-bar.is-compact .master-chip > div:last-child {
+    display: none;
+  }
+
+  .top-bar.is-compact .calendar-chip {
+    max-width: 32vw;
+  }
 }
 </style>

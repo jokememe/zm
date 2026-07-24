@@ -11,6 +11,7 @@ const {
   isCompact,
   navDrawerOpen,
   setView,
+  closeNavDrawer,
   disciples,
   openUrgentEvents,
   fieldPlots,
@@ -44,6 +45,8 @@ const showLabels = computed(() => isCompact.value || !navCollapsed.value)
 
 function go(id: ViewId) {
   setView(id)
+  // 竖屏：点选后收起抽屉，避免挡主内容
+  if (isCompact.value) closeNavDrawer()
 }
 </script>
 
@@ -151,19 +154,40 @@ function go(id: ViewId) {
   position: fixed;
   top: 0;
   left: 0;
-  bottom: 0;
-  width: min(82vw, 300px);
+  /* 底栏之上，避免盖住快捷入口 */
+  bottom: calc(var(--mobile-dock-height) + env(safe-area-inset-bottom, 0px));
+  width: min(86vw, 300px);
+  max-width: 320px;
   height: auto;
-  padding-top: env(safe-area-inset-top, 0);
-  padding-bottom: env(safe-area-inset-bottom, 0);
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: 0;
   transform: translateX(-105%);
   border-right: 1px solid var(--border-subtle);
   box-shadow: var(--shadow-lg);
   z-index: calc(var(--z-nav) + 5);
+  transition:
+    transform var(--dur-mid) var(--ease-out),
+    width var(--dur-mid) var(--ease-out);
 }
 
 .side-nav.is-compact.is-drawer-open {
   transform: translateX(0);
+}
+
+.side-nav.is-compact .nav-item {
+  min-height: var(--touch-min);
+  padding: 0.6rem 0.65rem;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.side-nav.is-compact .side-nav__inner {
+  padding: 0.65rem 0.55rem 0.85rem;
+}
+
+.side-nav.is-compact .side-nav__foot {
+  /* 抽屉内脚注更紧 */
+  padding: 0.55rem;
 }
 
 .side-nav__inner {

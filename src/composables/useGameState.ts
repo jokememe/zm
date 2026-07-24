@@ -350,6 +350,7 @@ export function useGameState() {
   }
 
   function setView(id: ViewId) {
+    // 竖屏切页时收起导航抽屉（从底栏/其它入口进入时也一致）
     currentView.value = id
     tianjiFocus.value = false
     if (isCompact.value) {

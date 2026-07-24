@@ -185,6 +185,21 @@ function resolveSpouse(id?: string) {
   min-width: 220px;
 }
 
+@media (max-width: 900px), ((orientation: portrait) and (max-width: 1100px)) {
+  .search {
+    min-width: 0;
+    width: 100%;
+    min-height: var(--touch-min);
+  }
+
+  .table-wrap {
+    /* 横向滑动看全表，纵向仍随主区 */
+    margin-left: -0.15rem;
+    margin-right: -0.15rem;
+    border-radius: var(--radius-md);
+  }
+}
+
 .search input {
   flex: 1;
   border: none;

@@ -283,6 +283,21 @@ function go(id: ViewId) {
 }
 
 @media (max-width: 900px), ((orientation: portrait) and (max-width: 1100px)) {
+  .hero {
+    padding: 1.15rem 1.05rem;
+    gap: 0.85rem;
+  }
+
+  .hero h1 {
+    font-size: 1.35rem;
+    letter-spacing: 0.04em;
+  }
+
+  .hero p {
+    font-size: 0.88rem;
+    margin-bottom: 0.85rem;
+  }
+
   .hero__actions .btn {
     flex: 1 1 auto;
     min-width: calc(50% - 0.4rem);
@@ -295,6 +310,22 @@ function go(id: ViewId) {
 
   .stats.grid-4 {
     grid-template-columns: repeat(2, 1fr);
+    gap: 0.65rem;
+  }
+
+  .stat-card {
+    padding: 0.85rem;
+    gap: 0.55rem;
+  }
+
+  .stat-card strong {
+    font-size: 1.1rem;
+  }
+}
+
+@media (max-width: 380px) {
+  .hero__actions .btn {
+    min-width: 100%;
   }
 }
 

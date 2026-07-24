@@ -512,22 +512,27 @@ async function onPresetClose() {
   flex-shrink: 0;
 }
 
-/* 竖屏：底部抽屉，盖住主区 */
+/* 竖屏：底部 sheet，落在底栏之上，不挡「事务/天机」 */
 .tianji.is-compact {
   position: fixed;
   left: 0;
   right: 0;
-  bottom: 0;
+  bottom: calc(var(--mobile-dock-height) + env(safe-area-inset-bottom, 0px));
   width: 100%;
-  height: min(78dvh, 640px);
-  max-height: calc(100dvh - 3.5rem - env(safe-area-inset-top, 0px));
+  height: min(72dvh, 620px);
+  max-height: calc(
+    100dvh - var(--mobile-dock-height) - env(safe-area-inset-bottom, 0px) - 3.25rem -
+      env(safe-area-inset-top, 0px)
+  );
   border-left: none;
   border-top: 1px solid var(--border-subtle);
   border-radius: var(--radius-xl) var(--radius-xl) 0 0;
   box-shadow: 0 -12px 40px rgba(40, 60, 100, 0.14);
-  transform: translateY(110%);
-  z-index: calc(var(--z-tianji) + 8);
-  padding-bottom: env(safe-area-inset-bottom, 0);
+  transform: translateY(calc(100% + 12px));
+  /* 低于底栏 z-top，保证「事务/天机」始终可点 */
+  z-index: calc(var(--z-tianji) + 2);
+  padding-bottom: 0;
+  transition: transform var(--dur-mid) var(--ease-out), box-shadow var(--dur-mid) var(--ease-out);
 }
 
 .tianji.is-compact.is-sheet-open {
@@ -540,7 +545,57 @@ async function onPresetClose() {
 }
 
 .tianji.is-compact.focus {
+  height: min(88dvh, 780px);
+  max-height: calc(
+    100dvh - var(--mobile-dock-height) - env(safe-area-inset-bottom, 0px) - 0.5rem -
+      env(safe-area-inset-top, 0px)
+  );
   box-shadow: 0 -16px 48px var(--moon-glow);
+}
+
+.tianji.is-compact .tianji__head {
+  padding: 0.55rem 0.75rem 0.55rem;
+  gap: 0.25rem;
+}
+
+.tianji.is-compact .tianji__compose {
+  /* 输入区触控友好，键盘弹起时仍可点发送 */
+  padding: 0.55rem 0.65rem 0.7rem;
+}
+
+.tianji.is-compact .compose-box textarea {
+  min-height: 48px;
+  font-size: 16px; /* 避免 iOS 聚焦时整页缩放 */
+}
+
+.tianji.is-compact .compose-hints {
+  gap: 0.35rem;
+}
+
+.tianji.is-compact .compose-hints .hint {
+  min-height: 2rem;
+  padding: 0.3rem 0.55rem;
+  font-size: 0.72rem;
+}
+
+.tianji.is-compact .tianji__list {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+@media (max-width: 480px) {
+  .tianji.is-compact {
+    height: min(68dvh, 560px);
+  }
+
+  .tianji.is-compact.focus {
+    height: min(84dvh, 720px);
+  }
+
+  .tianji.is-compact .tianji__actions .btn-icon {
+    width: 38px;
+    height: 38px;
+  }
 }
 
 .tianji-rail {
