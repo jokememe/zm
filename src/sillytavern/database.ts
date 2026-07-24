@@ -156,13 +156,26 @@ export async function exportAllData(): Promise<FullBackup> {
     db.chats.toArray(),
   ]);
 
-  // 强制把 live 经营态写入 localStorage，再打进备份
-  const { forceCaptureGameForExport } = await import('@/composables/full-backup');
+  // 强制 capture live 经营态；gameSave 必须是对象直接进 JSON
+  const { forceCaptureGameForExport, verifyGameSaveRoundtrip } = await import(
+    '@/composables/full-backup'
+  );
   const captured = await forceCaptureGameForExport();
-  const localState = captured.localState;
-  const gameSave = captured.gameSave;
+  let gameSave = captured.gameSave;
+  const localState = { ...captured.localState };
 
-  return {
+  if (gameSave) {
+    const check = verifyGameSaveRoundtrip(gameSave);
+    if (!check.ok) {
+      console.error('[备份导出] gameSave 自检失败', check.error, gameSave);
+      // 仍导出，但 UI 会看到 disciple 0 并警告
+    }
+    // 确保 localState 字符串与对象一致
+    localState['zongmen-game-v1'] = JSON.stringify(gameSave);
+    localState['zongmen-opening-v1'] = 'done';
+  }
+
+  const backup: FullBackup = {
     version: DB_VERSION,
     appId: identity.appId,
     dbName: identity.dbName,
@@ -171,9 +184,22 @@ export async function exportAllData(): Promise<FullBackup> {
     presets,
     settings,
     chats,
-    localState: Object.keys(localState).length ? { ...localState } : undefined,
+    localState: Object.keys(localState).length ? localState : undefined,
     gameSave: gameSave ?? undefined,
   };
+
+  // 最终断言：若 live 有弟子但 JSON 没有，抛错，禁止导出空经营档
+  if (
+    captured.liveDiscipleCount > 0 &&
+    (!gameSave || !Array.isArray((gameSave as { disciples?: unknown[] }).disciples) ||
+      (gameSave as { disciples: unknown[] }).disciples.length === 0)
+  ) {
+    throw new Error(
+      `导出失败：界面有 ${captured.liveDiscipleCount} 名弟子，但备份未能写入经营档。请刷新后再试。`,
+    );
+  }
+
+  return backup;
 }
 
 /** 导入结果：供 UI 显示是否真恢复了经营/会话 */
@@ -272,23 +298,27 @@ export async function importAllData(
   });
 
   // 始终跑 side effects：有 gameSave 则 hydrate；无论如何 reboot 天机读新 chats
+  // 优先用 extract 再喂一遍，防止 gameSave 字段类型怪异
+  const extracted = extractGameSaveFromBackup(
+    backup as { localState?: Record<string, string>; gameSave?: unknown },
+  );
   const side = await finishBackupImportSideEffects({
     localState: (backup.localState as Record<string, string> | undefined) || {},
-    gameSave: backup.gameSave,
+    gameSave: extracted ?? backup.gameSave,
   });
 
   const result: ImportAllResult = {
     idbRestored: true,
     gameHydrated: side.gameHydrated,
     tianjiRebooted: side.tianjiRebooted,
-    hasGameSave: side.hasGameSave,
+    hasGameSave: side.hasGameSave || !!extracted,
     discipleCount: side.discipleCount,
     chatCount,
     errors: side.errors,
   };
 
-  // 整包备份声称有 gameSave 却 hydrate 失败 → 硬失败，别假成功
-  if (side.hasGameSave && !side.gameHydrated) {
+  // 整包备份有 gameSave 却 hydrate 失败 → 硬失败
+  if ((side.hasGameSave || extracted) && !side.gameHydrated) {
     throw new Error(
       `天机数据已写入，但经营进度未能恢复（弟子 ${side.discipleCount}）。` +
         (side.errors.length ? ` ${side.errors.join('；')}` : ' 请刷新后重试。'),
@@ -296,7 +326,7 @@ export async function importAllData(
   }
 
   // 旧备份：无经营档 — 不抛错，但 result 标明
-  if (!side.hasGameSave) {
+  if (!side.hasGameSave && !extracted) {
     result.errors.push(
       '备份不含经营存档（gameSave / zongmen-game-v1）。弟子名册与资源不会恢复；请用新版密匣重新导出。',
     );

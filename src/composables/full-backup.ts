@@ -1,11 +1,9 @@
 /**
  * 整包备份：IndexedDB（天机）+ localStorage（经营/记忆）。
  *
- * 失败点教训：
- * - 旧导出只有 IDB → main→beta 无弟子/资源
- * - 导入后只 reload 预设，不 reboot 会话 → 卷宗仍是旧内存
- * - hydrate 失败仍 toast「成功」
- * - 导出时 openingDone=false 导致 persist 跳过 → gameSave 空
+ * 可靠契约：
+ * - 导出：forcePersistForBackup() 返回的对象 **直接** 写入 JSON.gameSave
+ * - 导入：先写 localStorage，再 hydrate，再整页刷新（避免内存半旧）
  */
 import {
   OPENING_STORAGE_KEY,
@@ -23,7 +21,7 @@ import {
 import { loadMemoryBank } from '@/composables/memory-lore'
 import { loadTableMemory } from '@/composables/table-memory'
 
-/** 会打进备份的 localStorage 键（值一律存原始字符串） */
+/** 会打进备份的 localStorage 键 */
 export const LOCAL_BACKUP_KEYS = [
   GAME_SAVE_KEY,
   OPENING_STORAGE_KEY,
@@ -34,7 +32,6 @@ export const LOCAL_BACKUP_KEYS = [
 ] as const
 
 export type LocalBackupKey = (typeof LOCAL_BACKUP_KEYS)[number]
-
 export type LocalBackupState = Partial<Record<LocalBackupKey, string>>
 
 export function collectLocalBackupState(
@@ -56,58 +53,65 @@ export function collectLocalBackupState(
 }
 
 /**
- * 导出前强制把 live 经营态写入 localStorage，并返回 gameSave 对象。
- * 即使 openingDone 为 false（界面卡在开场），只要有资源/弟子 live 态也会落盘。
+ * 导出前强制 capture live 经营态。
+ * gameSave 以 forcePersist 返回值为准（不依赖再读 storage）。
  */
 export async function forceCaptureGameForExport(): Promise<{
   gameSave: GameSaveV1 | null
   localState: LocalBackupState
   persisted: boolean
+  liveDiscipleCount: number
 }> {
   let gameSave: GameSaveV1 | null = null
   let persisted = false
+  let liveDiscipleCount = 0
   try {
     const { useGameState } = await import('@/composables/useGameState')
     const gs = useGameState()
-    // 强制落盘（无视 openingDone）
-    try {
-      persisted = gs.forcePersistForBackup()
-    } catch {
-      persisted = false
+    liveDiscipleCount = gs.liveDiscipleCount?.() ?? 0
+    // 直接拿返回值，禁止只信 storage 再读
+    const saved = gs.forcePersistForBackup()
+    if (saved) {
+      gameSave = saved
+      persisted = true
     }
+  } catch (e) {
+    console.warn('[备份] forceCaptureGameForExport', e)
+  }
+
+  // 兜底：内存 capture 失败时读已有 localStorage
+  if (!gameSave) {
     try {
       const { loadGameSaveFromStorage } = await import('@/composables/game-save')
       gameSave = loadGameSaveFromStorage()
     } catch {
       gameSave = null
     }
-  } catch (e) {
-    console.warn('[备份] forceCaptureGameForExport', e)
   }
 
   const localState = collectLocalBackupState()
-  if (!gameSave && localState[GAME_SAVE_KEY]) {
+  if (gameSave) {
+    // 保证 JSON 与 local 切片一致
+    localState[GAME_SAVE_KEY] = JSON.stringify(gameSave)
+    localState[OPENING_STORAGE_KEY] = 'done'
+  } else if (localState[GAME_SAVE_KEY]) {
     try {
       gameSave = parseGameSave(JSON.parse(localState[GAME_SAVE_KEY]!))
     } catch {
       /* ignore */
     }
   }
-  if (gameSave) {
-    localState[GAME_SAVE_KEY] = JSON.stringify(gameSave)
-    localState[OPENING_STORAGE_KEY] = 'done'
-  }
-  return { gameSave, localState, persisted }
+
+  return { gameSave, localState, persisted, liveDiscipleCount }
 }
 
-/** 从备份 localState 或顶层 gameSave 抽出可解析的经营档 */
+/** 从备份抽出可解析的经营档 */
 export function extractGameSaveFromBackup(backup: {
   localState?: LocalBackupState | Record<string, string> | null
   gameSave?: unknown
   [key: string]: unknown
 }): GameSaveV1 | null {
   if (backup.gameSave != null) {
-    // gameSave 可能是对象，也可能是 JSON 字符串
     if (typeof backup.gameSave === 'string') {
       try {
         const g = parseGameSave(JSON.parse(backup.gameSave))
@@ -132,22 +136,17 @@ export function extractGameSaveFromBackup(backup: {
       }
     }
   }
-  // 纯经营 JSON（用户只拷了 zongmen-game-v1）
-  const asSave = parseGameSave(backup)
-  if (asSave) return asSave
-  return null
+  return parseGameSave(backup)
 }
 
 export interface ApplyLocalBackupResult {
   keysWritten: string[]
   gameSave: GameSaveV1 | null
   openingMarked: boolean
-  hydrateOk: boolean
-  error?: string
 }
 
 /**
- * 把备份中的 local 切片写回 storage，并刷新内存中的记忆/表/经营态。
+ * 写回 localStorage 切片。返回解析到的 gameSave。
  */
 export function applyLocalBackupState(
   local: LocalBackupState | Record<string, string> | null | undefined,
@@ -177,27 +176,26 @@ export function applyLocalBackupState(
     }
   }
 
-  let gameSave = extractGameSaveFromBackup({
+  const gameSave = extractGameSaveFromBackup({
     localState: local,
     gameSave: opts?.gameSave,
   })
-  if (gameSave && storage) {
-    writeGameSaveToStorage(gameSave, storage)
-    if (!keysWritten.includes(GAME_SAVE_KEY)) keysWritten.push(GAME_SAVE_KEY)
-  } else if (gameSave) {
-    writeGameSaveToStorage(gameSave)
-  }
 
-  let openingMarked = false
-  if (gameSave && storage) {
-    try {
-      storage.setItem(OPENING_STORAGE_KEY, 'done')
-      openingMarked = true
-      if (!keysWritten.includes(OPENING_STORAGE_KEY)) {
-        keysWritten.push(OPENING_STORAGE_KEY)
+  // 顶层 gameSave 优先覆盖（可能比 localState 字符串更新）
+  if (gameSave) {
+    if (storage) {
+      writeGameSaveToStorage(gameSave, storage)
+      if (!keysWritten.includes(GAME_SAVE_KEY)) keysWritten.push(GAME_SAVE_KEY)
+      try {
+        storage.setItem(OPENING_STORAGE_KEY, 'done')
+        if (!keysWritten.includes(OPENING_STORAGE_KEY)) {
+          keysWritten.push(OPENING_STORAGE_KEY)
+        }
+      } catch {
+        /* ignore */
       }
-    } catch {
-      /* ignore */
+    } else {
+      writeGameSaveToStorage(gameSave)
     }
   }
 
@@ -215,33 +213,21 @@ export function applyLocalBackupState(
   return {
     keysWritten,
     gameSave,
-    openingMarked,
-    hydrateOk: false,
+    openingMarked: !!gameSave,
   }
 }
 
-/**
- * 导入后同步经营 live 状态（必须成功才算经营导入成功）。
- */
 export async function hydrateGameAfterBackupImport(): Promise<boolean> {
   try {
     const { useGameState } = await import('@/composables/useGameState')
     const gs = useGameState()
-    // 备份导入：以档为准，不 merge 种子（否则弟子册可能被旧 live 干扰体感）
-    const ok = gs.hydrateFromSave({ mergeSparse: false })
-    if (!ok) {
-      console.warn('[备份] hydrateFromSave 返回 false（localStorage 无有效经营档）')
-    }
-    return ok
+    return gs.hydrateFromSave({ mergeSparse: false })
   } catch (e) {
     console.warn('[备份] 经营态 hydrate 失败', e)
     return false
   }
 }
 
-/**
- * 导入后强制重载天机会话（reloadStMeta 不会换 chat 消息）。
- */
 export async function rebootTianjiAfterBackupImport(): Promise<boolean> {
   try {
     const { useTianji } = await import('@/composables/useTianji')
@@ -259,11 +245,12 @@ export interface FullImportLocalResult {
   tianjiRebooted: boolean
   hasGameSave: boolean
   discipleCount: number
+  spiritStone: number
   keysWritten: string[]
   errors: string[]
 }
 
-/** 应用 local 切片 + hydrate 经营 + reboot 天机 */
+/** 应用 local + hydrate 经营 + reboot 天机 */
 export async function finishBackupImportSideEffects(backup: {
   localState?: LocalBackupState | Record<string, string> | null
   gameSave?: unknown
@@ -276,7 +263,22 @@ export async function finishBackupImportSideEffects(backup: {
   let gameHydrated = false
   if (hasGameSave) {
     gameHydrated = await hydrateGameAfterBackupImport()
-    if (!gameHydrated) errors.push('经营档已写入存储，但界面 hydrate 失败')
+    if (!gameHydrated) {
+      errors.push('经营档已写入存储，但界面 hydrate 失败')
+    } else {
+      // 校验 live 弟子数
+      try {
+        const { useGameState } = await import('@/composables/useGameState')
+        const n = useGameState().liveDiscipleCount()
+        const expect = applied.gameSave?.disciples?.length ?? 0
+        if (expect > 0 && n !== expect) {
+          errors.push(`弟子数不一致：档内 ${expect}，界面 ${n}`)
+          gameHydrated = false
+        }
+      } catch {
+        /* ignore */
+      }
+    }
   }
   let tianjiRebooted = false
   try {
@@ -290,7 +292,41 @@ export async function finishBackupImportSideEffects(backup: {
     tianjiRebooted,
     hasGameSave,
     discipleCount: applied.gameSave?.disciples?.length ?? 0,
+    spiritStone: applied.gameSave?.resources?.spiritStone ?? 0,
     keysWritten: applied.keysWritten,
     errors,
+  }
+}
+
+/**
+ * 纯函数 roundtrip：build → JSON → extract → 校验弟子。
+ * 不依赖 Vue / IndexedDB，给测试和导出前自检用。
+ */
+export function verifyGameSaveRoundtrip(gameSave: unknown): {
+  ok: boolean
+  discipleCount: number
+  spiritStone: number
+  error?: string
+} {
+  const parsed = parseGameSave(gameSave)
+  if (!parsed) {
+    return { ok: false, discipleCount: 0, spiritStone: 0, error: 'parseGameSave 失败' }
+  }
+  const again = extractGameSaveFromBackup({ gameSave: parsed })
+  if (!again) {
+    return { ok: false, discipleCount: 0, spiritStone: 0, error: 'extract 失败' }
+  }
+  if (again.disciples.length !== parsed.disciples.length) {
+    return {
+      ok: false,
+      discipleCount: again.disciples.length,
+      spiritStone: again.resources.spiritStone,
+      error: '弟子数 roundtrip 不一致',
+    }
+  }
+  return {
+    ok: true,
+    discipleCount: again.disciples.length,
+    spiritStone: again.resources.spiritStone,
   }
 }

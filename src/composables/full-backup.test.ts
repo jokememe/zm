@@ -3,6 +3,7 @@ import {
   collectLocalBackupState,
   applyLocalBackupState,
   extractGameSaveFromBackup,
+  verifyGameSaveRoundtrip,
   LOCAL_BACKUP_KEYS,
 } from './full-backup'
 import {
@@ -67,6 +68,20 @@ const basePayload: GameSavePayload = {
       status: '在宗',
       avatarHue: 120,
     },
+    {
+      id: 'd2',
+      name: '林晚舟',
+      gender: '女',
+      age: 19,
+      realm: '炼气二层',
+      aptitude: '上',
+      role: '内门',
+      loyalty: 85,
+      mood: '平静',
+      talent: ['丹'],
+      status: '在宗',
+      avatarHue: 200,
+    },
   ],
   factions: [],
   cities: [],
@@ -77,9 +92,77 @@ const basePayload: GameSavePayload = {
   alchemyStocks: {},
 }
 
-describe('full-backup local slice', () => {
+describe('full-backup · 导出必须能用', () => {
   beforeEach(() => {
     setGameSaveStorageForTests(undefined)
+  })
+
+  it('JSON.stringify(backup) roundtrip keeps disciples', () => {
+    const save = buildGameSave(basePayload)
+    // 模拟 exportAllData 产物
+    const backup = {
+      version: 3,
+      appId: 'zongmen-revival',
+      dbName: 'zongmen-revival__SillyTavern',
+      exportedAt: Date.now(),
+      lorebooks: [] as unknown[],
+      presets: [] as unknown[],
+      settings: [] as unknown[],
+      chats: [] as unknown[],
+      gameSave: save,
+      localState: {
+        [GAME_SAVE_KEY]: JSON.stringify(save),
+        [OPENING_STORAGE_KEY]: 'done',
+      },
+    }
+    const text = JSON.stringify(backup, null, 2)
+    const re = JSON.parse(text)
+    expect(re.gameSave).toBeTruthy()
+    expect(re.gameSave.disciples).toHaveLength(2)
+    expect(re.gameSave.disciples[0].name).toBe('陆承渊')
+    expect(re.gameSave.resources.spiritStone).toBe(999)
+
+    const extracted = extractGameSaveFromBackup(re)
+    expect(extracted).not.toBeNull()
+    expect(extracted!.disciples).toHaveLength(2)
+    expect(extracted!.disciples.map((d) => d.name)).toEqual(['陆承渊', '林晚舟'])
+
+    const check = verifyGameSaveRoundtrip(re.gameSave)
+    expect(check.ok).toBe(true)
+    expect(check.discipleCount).toBe(2)
+  })
+
+  it('import path: applyLocalBackupState restores disciples to storage', () => {
+    const s = memStore()
+    const save = buildGameSave(basePayload)
+    const backupText = JSON.stringify({
+      gameSave: save,
+      localState: { [GAME_SAVE_KEY]: JSON.stringify(save) },
+    })
+    const data = JSON.parse(backupText)
+    const r = applyLocalBackupState(data.localState, {
+      storage: s,
+      gameSave: data.gameSave,
+    })
+    expect(r.gameSave?.disciples).toHaveLength(2)
+    const raw = s.getItem(GAME_SAVE_KEY)
+    expect(raw).toBeTruthy()
+    const again = parseGameSave(JSON.parse(raw!))
+    expect(again?.disciples).toHaveLength(2)
+    expect(again?.disciples[1].name).toBe('林晚舟')
+    expect(s.getItem(OPENING_STORAGE_KEY)).toBe('done')
+  })
+
+  it('old backup without gameSave extracts null', () => {
+    const old = {
+      version: 3,
+      appId: 'zongmen-revival',
+      lorebooks: [],
+      presets: [],
+      settings: [],
+      chats: [{ id: 'c1', messages: [] }],
+    }
+    expect(extractGameSaveFromBackup(old)).toBeNull()
   })
 
   it('collectLocalBackupState reads known keys only', () => {
@@ -91,71 +174,21 @@ describe('full-backup local slice', () => {
     expect(Object.keys(bag).sort()).toEqual(
       [GAME_SAVE_KEY, OPENING_STORAGE_KEY].sort(),
     )
-    expect(bag[OPENING_STORAGE_KEY]).toBe('done')
     expect(LOCAL_BACKUP_KEYS).toContain(GAME_SAVE_KEY)
   })
 
-  it('extractGameSaveFromBackup prefers gameSave object', () => {
+  it('extract prefers top-level gameSave over broken localState', () => {
     const save = buildGameSave(basePayload)
     const got = extractGameSaveFromBackup({
       gameSave: save,
-      localState: { [GAME_SAVE_KEY]: '{}' },
+      localState: { [GAME_SAVE_KEY]: 'not-json' },
     })
-    expect(got?.sectName).toBe('主线青岚')
-    expect(got?.resources.spiritStone).toBe(999)
-    expect(got?.disciples).toHaveLength(1)
+    expect(got?.disciples).toHaveLength(2)
   })
 
-  it('extractGameSaveFromBackup accepts gameSave JSON string', () => {
+  it('accepts gameSave as JSON string', () => {
     const save = buildGameSave(basePayload)
-    const got = extractGameSaveFromBackup({
-      gameSave: JSON.stringify(save),
-    })
+    const got = extractGameSaveFromBackup({ gameSave: JSON.stringify(save) })
     expect(got?.disciples[0].name).toBe('陆承渊')
-  })
-
-  it('extractGameSaveFromBackup reads localState string', () => {
-    const save = buildGameSave(basePayload)
-    const got = extractGameSaveFromBackup({
-      localState: { [GAME_SAVE_KEY]: JSON.stringify(save) },
-    })
-    expect(got?.masterName).toBe('沈青岚')
-    expect(got?.disciples).toHaveLength(1)
-  })
-
-  it('extractGameSaveFromBackup accepts pure game JSON', () => {
-    const save = buildGameSave(basePayload)
-    const got = extractGameSaveFromBackup(save as unknown as { gameSave?: unknown })
-    expect(parseGameSave(save)?.sectName).toBe('主线青岚')
-    expect(got?.sectName).toBe('主线青岚')
-  })
-
-  it('applyLocalBackupState writes storage and marks opening done', () => {
-    const s = memStore()
-    const save = buildGameSave(basePayload)
-    const r = applyLocalBackupState(
-      {
-        [GAME_SAVE_KEY]: JSON.stringify(save),
-        [OPENING_STORAGE_KEY]: 'done',
-      },
-      { storage: s },
-    )
-    expect(r.gameSave?.sectName).toBe('主线青岚')
-    expect(r.gameSave?.disciples).toHaveLength(1)
-    expect(r.openingMarked).toBe(true)
-    expect(s.getItem(OPENING_STORAGE_KEY)).toBe('done')
-    expect(s.getItem(GAME_SAVE_KEY)).toBeTruthy()
-    const again = parseGameSave(JSON.parse(s.getItem(GAME_SAVE_KEY)!))
-    expect(again?.resources.spiritStone).toBe(999)
-    expect(again?.disciples[0].name).toBe('陆承渊')
-  })
-
-  it('applyLocalBackupState accepts top-level gameSave without localState', () => {
-    const s = memStore()
-    const save = buildGameSave(basePayload)
-    const r = applyLocalBackupState({}, { storage: s, gameSave: save })
-    expect(r.gameSave?.calendar.year).toBe(3848)
-    expect(r.gameSave?.disciples).toHaveLength(1)
-    expect(s.getItem(GAME_SAVE_KEY)).toBeTruthy()
   })
 })

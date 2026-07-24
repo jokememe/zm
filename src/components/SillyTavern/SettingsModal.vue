@@ -485,22 +485,49 @@ async function handleTest(which: ApiWhich) {
 }
 
 async function handleExport() {
-  const data = await exportAllData()
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `zongmen-backup-${Date.now()}.json`
-  a.click()
-  URL.revokeObjectURL(url)
-  const gs = (data as { gameSave?: { disciples?: unknown[]; resources?: { spiritStone?: number } } })
-    .gameSave
-  const n = Array.isArray(gs?.disciples) ? gs!.disciples!.length : 0
-  const stone = gs?.resources?.spiritStone
-  if (gs) {
-    showToast(`整包已导出 · 弟子${n} · 灵石${stone ?? '?'}`)
-  } else {
-    showToast('备份已导出，但未含经营档（请确认本机有进度后再导）')
+  try {
+    const data = await exportAllData()
+    // 二次校验：序列化后再 parse，确保下载文件真有弟子
+    const text = JSON.stringify(data, null, 2)
+    let parsed: typeof data
+    try {
+      parsed = JSON.parse(text)
+    } catch {
+      throw new Error('导出序列化失败')
+    }
+    const gs = parsed.gameSave as
+      | { disciples?: unknown[]; resources?: { spiritStone?: number } }
+      | undefined
+    const n = Array.isArray(gs?.disciples) ? gs!.disciples!.length : 0
+    const stone = gs?.resources?.spiritStone
+    if (!gs) {
+      const go = confirm(
+        '当前导出不含经营存档（gameSave 为空）。\n' +
+          '可能原因：本机还没开局、或进度未写入。\n\n' +
+          '仍要下载这份「仅天机」备份吗？',
+      )
+      if (!go) return
+    } else if (n === 0) {
+      const go = confirm(
+        '经营档里弟子数为 0。若你界面上有弟子，说明导出仍有 bug，请取消并反馈。\n\n仍要下载吗？',
+      )
+      if (!go) return
+    }
+
+    const blob = new Blob([text], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `zongmen-backup-${Date.now()}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    if (gs) {
+      showToast(`整包已导出 · 弟子${n} · 灵石${stone ?? '?'}`)
+    } else {
+      showToast('已导出（仅天机，无经营档）')
+    }
+  } catch (e) {
+    alert(`导出失败: ${(e as Error).message}`)
   }
 }
 
@@ -514,20 +541,28 @@ function handleImport() {
     try {
       const text = await file.text()
       const data = JSON.parse(text)
-      // 先快速诊断：旧备份无 gameSave 时直接说清楚
       const hasGameField =
         data?.gameSave != null ||
         data?.localState?.['zongmen-game-v1'] ||
         (data?.resources && data?.calendar && !Array.isArray(data?.lorebooks))
       if (!hasGameField && Array.isArray(data?.chats)) {
         const go = confirm(
-          '此备份看起来是旧版：只有天机会话/预设，没有经营存档（弟子名册、资源）。\n' +
-            '导入后会话可恢复，但弟子名册不会变。\n\n' +
-            '建议：在 main/本机用最新版密匣重新「导出备份」，确认提示含弟子数后再导入。\n\n' +
-            '仍要导入天机数据吗？',
+          '此备份没有经营存档（无 gameSave）。\n' +
+            '导入后：会话/预设可恢复，弟子名册与资源不会变。\n\n' +
+            '要用「含弟子数」的新备份，请在导出站确认 toast 有「弟子N」。\n\n' +
+            '仍只导入天机数据吗？',
         )
         if (!go) return
       }
+      // 文件内弟子预检
+      const fileDisciples = Array.isArray(data?.gameSave?.disciples)
+        ? data.gameSave.disciples.length
+        : -1
+      if (fileDisciples === 0 && hasGameField) {
+        const go = confirm('备份里弟子数为 0。导入会清空当前名册。继续？')
+        if (!go) return
+      }
+
       let result
       if (data?.appId && data.appId !== storageInfo.appId && !allowCrossAppImport.value) {
         const ok = confirm(
@@ -538,7 +573,7 @@ function handleImport() {
       } else {
         result = await importAllData(data, { allowCrossApp: allowCrossAppImport.value })
       }
-      emit('reloaded')
+
       const parts: string[] = []
       if (result.gameHydrated) {
         parts.push(`经营已恢复·弟子${result.discipleCount}`)
@@ -547,20 +582,26 @@ function handleImport() {
       } else {
         parts.push('无经营档')
       }
-      if (result.idbRestored) parts.push(`会话${result.chatCount}楼包`)
+      if (result.idbRestored) parts.push(`会话包${result.chatCount}`)
       if (result.tianjiRebooted) parts.push('天机已重载')
-      showToast(parts.join(' · '))
+
       if (result.errors?.length) {
-        alert(`导入完成，但有问题：\n${result.errors.join('\n')}`)
+        alert(`${parts.join(' · ')}\n\n问题：\n${result.errors.join('\n')}`)
+      } else {
+        showToast(parts.join(' · '))
       }
-      // 硬刷新一次路由态：部分列表组件不跟单例
+
+      // 经营恢复成功：整页刷新，确保所有视图读到新 localStorage（最硬、最不骗）
       if (result.gameHydrated) {
-        try {
-          window.dispatchEvent(new Event('zongmen-save-hydrated'))
-        } catch {
-          /* ignore */
+        const reload = confirm(
+          `经营已写入（弟子 ${result.discipleCount}）。\n建议立即刷新页面以完整显示名册与资源。\n\n现在刷新？`,
+        )
+        if (reload) {
+          window.location.reload()
+          return
         }
       }
+      emit('reloaded')
     } catch (e) {
       alert(`导入失败: ${(e as Error).message}`)
     }

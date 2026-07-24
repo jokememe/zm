@@ -243,28 +243,27 @@ let persistTimer: ReturnType<typeof setTimeout> | null = null
 
 function persistGameSaveNow(): boolean {
   if (!openingDone.value) return false
-  return forcePersistGameSaveNow()
+  return forcePersistGameSaveNow() != null
 }
 
 /**
  * 无视 openingDone 落盘（备份导出专用）。
- * 开场中途导出也要把当前 live 资源/弟子写进 localStorage。
+ * 返回写入的存档对象；失败返回 null。
  */
-function forcePersistGameSaveNow(): boolean {
+function forcePersistGameSaveNow(): GameSaveV1 | null {
   try {
     const save = buildGameSave(capturePayload())
     const ok = writeGameSaveToStorage(save)
-    if (ok) {
-      try {
-        localStorage.setItem(OPENING_STORAGE_KEY, 'done')
-      } catch {
-        /* ignore */
-      }
+    if (!ok) return null
+    try {
+      localStorage.setItem(OPENING_STORAGE_KEY, 'done')
+    } catch {
+      /* ignore */
     }
-    return ok
+    return save
   } catch (e) {
     console.warn('[存档] 强制写入失败', e)
-    return false
+    return null
   }
 }
 
@@ -543,13 +542,21 @@ export function useGameState() {
     return persistGameSaveNow()
   }
 
-  /** 备份导出：无视是否已开局完成，强制把 live 态写入 localStorage */
-  function forcePersistForBackup(): boolean {
+  /**
+   * 备份导出：无视是否已开局完成，强制把 live 态写入 localStorage。
+   * 返回完整 GameSaveV1，供 exportAllData 直接塞进 JSON（不依赖再读 storage）。
+   */
+  function forcePersistForBackup(): GameSaveV1 | null {
     if (persistTimer) {
       clearTimeout(persistTimer)
       persistTimer = null
     }
     return forcePersistGameSaveNow()
+  }
+
+  /** 当前 live 弟子数（导出提示用） */
+  function liveDiscipleCount(): number {
+    return disciples.value.length
   }
 
   /**
@@ -789,6 +796,7 @@ export function useGameState() {
     craftAlchemy,
     persistGameSave,
     forcePersistForBackup,
+    liveDiscipleCount,
     hydrateFromSave,
     advanceSeason,
     markOpeningDone,
