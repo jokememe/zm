@@ -16,6 +16,11 @@ import {
   formatLongMemory,
   loadMemoryBank,
 } from '@/composables/memory-lore'
+import {
+  TABLE_WORLD_STATE_ENTRY_ID,
+  formatWorldStateInjection,
+  loadTableMemory,
+} from '@/composables/table-memory'
 import { saveLorebook, getLorebooks } from '@/sillytavern/database'
 
 const LIVE_ENTRY_ID = 'live-snapshot'
@@ -25,6 +30,7 @@ const SYSTEM_ENTRY_IDS = new Set([
   MEM_SHORT_ID,
   MEM_MID_ID,
   MEM_LONG_ID,
+  TABLE_WORLD_STATE_ENTRY_ID,
 ])
 
 function makeEntry(
@@ -55,11 +61,18 @@ function buildSystemEntries(extra?: {
   contextDetail?: string | null
 }): LorebookEntry[] {
   loadMemoryBank()
+  loadTableMemory()
   return [
     makeEntry(LIVE_ENTRY_ID, buildLiveLoreContent(extra), '系统自动 · 局面快照', 0),
     makeEntry(MEM_SHORT_ID, formatShortMemory(), '系统自动 · 短期记忆', 1),
     makeEntry(MEM_MID_ID, formatMidMemory(), '系统自动 · 中期记忆', 2),
     makeEntry(MEM_LONG_ID, formatLongMemory(), '系统自动 · 长期记忆', 3),
+    makeEntry(
+      TABLE_WORLD_STATE_ENTRY_ID,
+      formatWorldStateInjection(),
+      '系统自动 · 表格世界状态',
+      4,
+    ),
   ]
 }
 
@@ -77,7 +90,7 @@ export async function ensureAndRefreshSystemLorebook(extra?: {
       id: SYSTEM_LOREBOOK_ID,
       name: SYSTEM_LOREBOOK_NAME,
       description:
-        '由游戏状态自动生成：局面快照 + 短/中/长期记忆。常驻注入，请保持启用。',
+        '由游戏状态自动生成：局面快照 + 短/中/长期记忆 + 表格世界状态。常驻注入，请保持启用。',
       entries: systemEntries,
       recursiveScanning: false,
       caseSensitive: false,
@@ -94,7 +107,7 @@ export async function ensureAndRefreshSystemLorebook(extra?: {
     ...existing,
     name: SYSTEM_LOREBOOK_NAME,
     description:
-      '由游戏状态自动生成：局面快照 + 短/中/长期记忆。常驻注入，请保持启用。',
+      '由游戏状态自动生成：局面快照 + 短/中/长期记忆 + 表格世界状态。常驻注入，请保持启用。',
     entries: [...systemEntries, ...userEntries],
     updatedAt: now,
   }

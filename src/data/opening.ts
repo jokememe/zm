@@ -7,6 +7,8 @@ import { disciples as allDisciples } from '@/data/mock'
 export const OPENING_STORAGE_KEY = 'zongmen-opening-v1'
 export const IDENTITY_STORAGE_KEY = 'zongmen-identity-v1'
 export const MEMORY_STORAGE_KEY = 'zongmen-memory-v1'
+/** yuzuki 风格表格记忆（角色/物品/世界设定） */
+export const TABLE_MEMORY_STORAGE_KEY = 'zongmen-table-memory-v1'
 
 export const OPENING_CALENDAR = {
   era: '天元历',

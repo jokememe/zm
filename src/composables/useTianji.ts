@@ -50,6 +50,11 @@ import {
 } from '@/composables/game-bridge'
 import { ensureAndRefreshSystemLorebook } from '@/composables/system-lorebook'
 import { recordTurnSum, loadMemoryBank } from '@/composables/memory-lore'
+import {
+  applyAssistantMemoryTags,
+  hasMemoryTag,
+  loadTableMemory,
+} from '@/composables/table-memory'
 import { runSettle, textFromSettleCompletion } from '@/composables/settle-runner'
 import { snapshotWorldState, restoreWorldState } from '@/composables/world-state'
 import {
@@ -600,9 +605,18 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
   // 会话气数键与游戏资源对齐（只读同步），不应用 LLM vars 补丁
   const settled = mergeSessionWithGame({})
 
+  // ★ 表格记忆：助手文中 <Memory>/<GaigaiMemory>/<tableEdit> → 主键合并
+  const memoryTagged = hasMemoryTag(raw)
+  if (memoryTagged) {
+    applyAssistantMemoryTags(raw)
+  }
+
   // ★ 短/中/长期记忆：写入 <sum> → 系统世界书 constant 条目
-  if (parsed.sum?.trim()) {
-    recordTurnSum(parsed.sum, { context: contextInjected.value })
+  // 表格世界状态与 sum 层一并刷新进系统世界书（assemble 前也会 sync）
+  if (parsed.sum?.trim() || memoryTagged) {
+    if (parsed.sum?.trim()) {
+      recordTurnSum(parsed.sum, { context: contextInjected.value })
+    }
     await ensureAndRefreshSystemLorebook({
       contextLabel: contextInjected.value,
       contextDetail: contextDetail.value,
@@ -1114,6 +1128,7 @@ export function useTianji() {
     typing.value = false
 
     loadMemoryBank()
+    loadTableMemory()
 
     const gs = useGameState()
     const seed = buildOpeningTianjiMessages(

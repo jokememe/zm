@@ -54,6 +54,10 @@ import {
   type OpeningIdentity,
 } from '@/data/opening'
 import { clearMemoryBank, seedOpeningMemory } from '@/composables/memory-lore'
+import {
+  clearTableMemory,
+  seedOpeningTableMemory,
+} from '@/composables/table-memory'
 
 const currentView = ref<ViewId>('hall')
 const navCollapsed = ref(false)
@@ -579,6 +583,7 @@ export function useGameState() {
         difficulty: diff,
         difficultyLabel: opt.label,
       })
+      seedOpeningTableMemory()
     } catch (e) {
       console.warn('[开局] 记忆初始化失败', e)
     }
@@ -596,6 +601,7 @@ export function useGameState() {
    */
   function resetGameToOpening() {
     clearMemoryBank()
+    clearTableMemory()
     clearIdentity()
     clearGameSaveFromStorage()
     sectName.value = DEFAULT_SECT_NAME
