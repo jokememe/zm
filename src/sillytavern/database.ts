@@ -137,6 +137,13 @@ export interface FullBackup {
   presets: ChatPreset[];
   settings: AppSettings[];
   chats: ChatSession[];
+  /**
+   * localStorage 切片：经营存档 / 开局 / 表格记忆 / 短中长期记忆 / API 缓存。
+   * main→beta 跨域名必带；旧备份可能缺此字段。
+   */
+  localState?: Record<string, string>;
+  /** 经营整局对象（与 localState 中 zongmen-game-v1 冗余，便于校验） */
+  gameSave?: unknown;
 }
 
 export async function exportAllData(): Promise<FullBackup> {
@@ -148,6 +155,14 @@ export async function exportAllData(): Promise<FullBackup> {
     db.settings.toArray(),
     db.chats.toArray(),
   ]);
+
+  // 经营进度在 localStorage，与 IDB 一并导出
+  const { collectLocalBackupState, extractGameSaveFromBackup } = await import(
+    '@/composables/full-backup'
+  );
+  const localState = collectLocalBackupState();
+  const gameSave = extractGameSaveFromBackup({ localState });
+
   return {
     version: DB_VERSION,
     appId: identity.appId,
@@ -157,6 +172,8 @@ export async function exportAllData(): Promise<FullBackup> {
     presets,
     settings,
     chats,
+    localState: Object.keys(localState).length ? { ...localState } : undefined,
+    gameSave: gameSave ?? undefined,
   };
 }
 
@@ -174,6 +191,32 @@ export async function importAllData(
 ): Promise<void> {
   if (!backup || typeof backup !== 'object') {
     throw new Error('备份格式无效');
+  }
+
+  const {
+    applyLocalBackupState,
+    hydrateGameAfterBackupImport,
+    extractGameSaveFromBackup,
+  } = await import('@/composables/full-backup');
+
+  // 纯经营档 JSON（只有 resources/calendar，无 lorebooks 数组）→ 只恢复 local，不抹 IDB
+  const looksLikeIdbBackup =
+    Array.isArray(backup.lorebooks) ||
+    Array.isArray(backup.presets) ||
+    Array.isArray(backup.settings) ||
+    Array.isArray(backup.chats) ||
+    typeof backup.appId === 'string' ||
+    typeof backup.dbName === 'string';
+  const pureGame = extractGameSaveFromBackup(
+    backup as { localState?: Record<string, string>; gameSave?: unknown },
+  );
+  if (pureGame && !looksLikeIdbBackup) {
+    applyLocalBackupState({}, { gameSave: pureGame });
+    const ok = await hydrateGameAfterBackupImport();
+    if (!ok) {
+      throw new Error('经营存档已写入，但未能恢复到界面，请刷新页面');
+    }
+    return;
   }
 
   const sourceAppId =
@@ -208,6 +251,21 @@ export async function importAllData(
     if (Array.isArray(backup.settings)) await db.settings.bulkPut(backup.settings);
     if (Array.isArray(backup.chats)) await db.chats.bulkPut(backup.chats);
   });
+
+  // 经营/记忆 localStorage + 内存表；旧备份无 localState 时仅恢复 IDB
+  const hasLocal =
+    (backup.localState &&
+      typeof backup.localState === 'object' &&
+      Object.keys(backup.localState).length > 0) ||
+    backup.gameSave != null;
+
+  if (hasLocal) {
+    applyLocalBackupState(
+      (backup.localState as Record<string, string> | undefined) || {},
+      { gameSave: backup.gameSave },
+    );
+    await hydrateGameAfterBackupImport();
+  }
 }
 
 /**

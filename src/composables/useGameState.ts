@@ -533,6 +533,22 @@ export function useGameState() {
     applySaveBlob(save, { mergeSparse: true })
     openingDone.value = true
     showOpening.value = false
+    try {
+      localStorage.setItem(OPENING_STORAGE_KEY, 'done')
+    } catch {
+      /* ignore */
+    }
+    // 身份与存档对齐，避免刷新后仍显示旧掌门名
+    try {
+      saveIdentity({
+        sectName: sectName.value,
+        masterName: masterName.value,
+        difficulty: difficulty.value,
+      })
+    } catch {
+      /* ignore */
+    }
+    bindPersistFlush()
     return true
   }
 

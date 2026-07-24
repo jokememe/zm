@@ -485,6 +485,13 @@ async function handleTest(which: ApiWhich) {
 }
 
 async function handleExport() {
+  // 导出前尽量把经营档刷进 localStorage，避免只导出到半截进度
+  try {
+    const { useGameState } = await import('@/composables/useGameState')
+    useGameState().persistGameSave()
+  } catch {
+    /* ignore */
+  }
   const data = await exportAllData()
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
   const url = URL.createObjectURL(blob)
@@ -493,7 +500,9 @@ async function handleExport() {
   a.download = `zongmen-backup-${Date.now()}.json`
   a.click()
   URL.revokeObjectURL(url)
-  showToast('备份已导出')
+  const hasGame = !!(data as { gameSave?: unknown; localState?: Record<string, string> }).gameSave
+    || !!(data as { localState?: Record<string, string> }).localState?.['zongmen-game-v1']
+  showToast(hasGame ? '整包备份已导出（含经营存档）' : '备份已导出（当前无经营存档）')
 }
 
 function handleImport() {
@@ -516,7 +525,15 @@ function handleImport() {
         await importAllData(data, { allowCrossApp: allowCrossAppImport.value })
       }
       emit('reloaded')
-      showToast('备份已导入')
+      const hasGame =
+        !!(data as { gameSave?: unknown }).gameSave ||
+        !!(data as { localState?: Record<string, string> }).localState?.['zongmen-game-v1'] ||
+        (data?.resources && data?.calendar && !data?.lorebooks)
+      showToast(
+        hasGame
+          ? '备份已导入（含经营进度）'
+          : '备份已导入（仅天机数据；旧备份无经营档请见说明）',
+      )
     } catch (e) {
       alert(`导入失败: ${(e as Error).message}`)
     }
@@ -1772,7 +1789,15 @@ function onTagsInput(value: string) {
 
     <template v-else>
       <p class="tj-hint" style="margin-bottom: 0.75rem">
-        导出含预设、秘闻、会话与气数。跨应用导入需勾选下方许可。
+        导出含：预设、世界书、会话、密匣设置，以及
+        <strong>经营存档</strong>（资源/弟子/灵田）、开局标记、表格记忆与短中长期记忆。
+        main 与 beta 不同域名时务必用本页整包备份迁移。
+        跨应用导入需勾选下方许可。
+      </p>
+      <p class="tj-hint" style="margin-bottom: 0.75rem; color: var(--amber)">
+        若你手里的是<strong>旧版备份</strong>（无 localState / gameSave 字段），只会恢复天机数据，
+        经营进度需在 main 更新后再导出一次，或从浏览器 Application → Local Storage
+        拷贝 <code>zongmen-game-v1</code> 键。
       </p>
       <label class="tj-check" style="margin-bottom: 0.85rem">
         <input v-model="allowCrossAppImport" type="checkbox" />
