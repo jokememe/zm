@@ -35,18 +35,101 @@ function unrefStr(v: unknown): string {
   return String(v ?? '')
 }
 
-/** 解析绝对数或相对 "+10"/"-5" */
+/**
+ * 严格十进制：仅 ±整数/小数，拒绝 1e2、0x10、Infinity、空串。
+ * 全角减号 −–— 先归一成 ASCII `-`。
+ */
+export function parseStrictDecimal(raw: unknown): number | null {
+  if (typeof raw === 'number') {
+    return Number.isFinite(raw) ? raw : null
+  }
+  if (raw === undefined || raw === null) return null
+  const s = String(raw)
+    .trim()
+    .replace(/^[−–—]/, '-')
+  if (!s) return null
+  // 禁止科学计数 / hex / 尾随杂字
+  if (!/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(s)) return null
+  const n = Number(s)
+  return Number.isFinite(n) ? n : null
+}
+
+/** 是否为显式相对写法（以 + / - 开头的严格小数串） */
+export function isExplicitRelativeString(raw: unknown): boolean {
+  if (typeof raw !== 'string' && typeof raw !== 'number') return false
+  if (typeof raw === 'number') return raw < 0 // 负数当相对
+  const s = String(raw)
+    .trim()
+    .replace(/^[−–—]/, '-')
+  return /^[+-](?:\d+(?:\.\d+)?|\.\d+)$/.test(s)
+}
+
+/**
+ * 气数簿 / 会话变量写入用。
+ * - 负数（JSON number 或 "-10"）→ 相对变化（库存无负绝对值语义）
+ * - 非负裸数字 → 绝对值
+ * - 显式 "+10"/"-5" 字符串 → 相对
+ * - 1e2 / 0x10 / junk → 保持 current
+ */
 export function resolveNumericValue(current: number, incoming: string | number): number {
   if (typeof incoming === 'number' && Number.isFinite(incoming)) {
+    // 负库存无意义：负数一律按相对减（修 灵石:-10 → 夹成 0）
+    if (incoming < 0) return Math.max(0, Math.round(current + incoming))
     return Math.max(0, Math.round(incoming))
   }
-  const s = String(incoming).trim()
-  if (/^[+-]\d+(\.\d+)?$/.test(s)) {
+  const s = String(incoming ?? '')
+    .trim()
+    .replace(/^[−–—]/, '-')
+  if (s === '') return current
+  // 显式 ± 相对
+  if (/^[+-](?:\d+(?:\.\d+)?|\.\d+)$/.test(s)) {
     return Math.max(0, Math.round(current + Number(s)))
   }
-  const n = Number(s)
-  if (Number.isFinite(n)) return Math.max(0, Math.round(n))
-  return current
+  // 裸正数绝对值（拒绝 1e2 / 0x10）
+  const n = parseStrictDecimal(s)
+  if (n === null) return current
+  if (n < 0) return Math.max(0, Math.round(current + n))
+  return Math.max(0, Math.round(n))
+}
+
+/**
+ * 气数簿 UI 原始字符串 → 写入值。
+ * 空串 / 非法数字 → undefined（跳过，勿 Number('')→0）。
+ * ±N 保留相对串；裸十进制 → number。
+ */
+export function coerceEditorVarInput(
+  raw: unknown,
+): string | number | undefined {
+  if (raw === undefined || raw === null) return undefined
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw
+  const s = String(raw)
+    .trim()
+    .replace(/^[−–—]/, '-')
+  if (s === '') return undefined
+  // 显式相对：+10 / -5
+  if (/^[+-](?:\d+(?:\.\d+)?|\.\d+)$/.test(s)) return s
+  const n = parseStrictDecimal(s)
+  if (n !== null) return n
+  // junk：不写入（自定义键若需要明文，调用方另处理非白名单）
+  return undefined
+}
+
+/**
+ * 结算 resources 专用：一律按相对变化叠加。
+ * JSON 数字 -10 表示「减 10」，不是「设为 -10→夹成 0」。
+ * 裸字符串 "10"/"-10" 同样按相对量处理（与 SETTLE_CONTRACT 一致）。
+ * 拒绝 1e2 / 0x10 等非严格十进制，避免误加。
+ */
+export function resolveRelativeResourceValue(
+  current: number,
+  incoming: string | number,
+): number {
+  if (typeof incoming === 'number' && Number.isFinite(incoming)) {
+    return Math.max(0, Math.round(current + incoming))
+  }
+  const n = parseStrictDecimal(incoming)
+  if (n === null) return current
+  return Math.max(0, Math.round(current + n))
 }
 
 /** 从游戏状态快照气数（含只读） */

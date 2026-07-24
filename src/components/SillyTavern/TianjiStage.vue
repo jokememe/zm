@@ -179,8 +179,8 @@ async function onSettingsClose() {
           <p v-if="displayMain" class="stage__text">{{ displayMain }}</p>
           <p v-else-if="typing" class="stage__hint">推演中…</p>
           <p v-else class="stage__hint">
-            自经营页注入事务，或在此直接发问。通灵后正文与选项会出现在此；气数经
-            &lt;vars&gt; 结算。
+            自经营页注入事务，或在此直接发问。通灵后正文与选项会出现在此；气数由回合结束局面分析写入，勿依赖
+            &lt;vars&gt;。
           </p>
         </article>
 

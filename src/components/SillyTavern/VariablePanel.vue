@@ -6,6 +6,7 @@ import {
   WRITABLE_VAR_NAMES,
   READONLY_VAR_KEYS,
   snapshotGameVariables,
+  coerceEditorVarInput,
 } from '@/composables/game-bridge'
 import './st-shared.css'
 
@@ -69,16 +70,26 @@ async function save() {
   saving.value = true
   try {
     const updates: Record<string, string | number> = {}
+    const writable = new Set<string>(WRITABLE_VAR_NAMES)
+    const readonly = new Set<string>(READONLY_VAR_KEYS as readonly string[])
     for (const [k, v] of Object.entries(draft.value)) {
-      if (!k.trim()) continue
-      const num = Number(v)
-      updates[k.trim()] = Number.isNaN(num) ? v : num
-    }
-    // 相对写法保留字符串
-    for (const name of WRITABLE_VAR_NAMES) {
-      const raw = draft.value[name]
-      if (raw != null && /^[+-]\d+/.test(String(raw).trim())) {
-        updates[name] = String(raw).trim()
+      const key = k.trim()
+      if (!key) continue
+      // 只读历法键不提交改写
+      if (readonly.has(key) && !writable.has(key)) continue
+      // 空输入：不写（避免 Number('')===0 把灵石清空）
+      if (String(v ?? '').trim() === '') continue
+      if (writable.has(key)) {
+        // 白名单资源：严格 coerce（±相对 / 裸十进制；junk 跳过）
+        const coerced = coerceEditorVarInput(v)
+        if (coerced === undefined) continue
+        updates[key] = coerced
+      } else {
+        // 自定义会话键：保留原文（可非数字）
+        const num = Number(String(v).trim())
+        updates[key] = Number.isFinite(num) && String(v).trim() !== '' && !/^[+-]/.test(String(v).trim())
+          ? num
+          : String(v)
       }
     }
     await setSessionVariables(updates)

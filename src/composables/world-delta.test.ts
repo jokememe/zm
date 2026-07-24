@@ -202,6 +202,37 @@ describe('applyWorldDeltaToSnapshot', () => {
     expect(result.changed).toBe(true)
   })
 
+  it('treats numeric resources as relative delta (JSON -10 ≠ set to 0)', () => {
+    // 次 API 常输出 {"灵石":-10}；若当绝对值会 Math.max(0,-10)=0 把库存清空
+    const snap = emptyTestSnapshot({
+      resources: {
+        spiritStone: 260,
+        spiritGrain: 500,
+        herb: 50,
+        ore: 40,
+        prestige: 20,
+        destiny: 10,
+      },
+    })
+    const { snap: next, result } = applyWorldDeltaToSnapshot(
+      { resources: { 灵石: -10 } },
+      snap,
+    )
+    expect(next.resources.spiritStone).toBe(250)
+    expect(result.changed).toBe(true)
+    expect(result.lines.some((l) => l.includes('灵石') && l.includes('250'))).toBe(true)
+  })
+
+  it('treats bare numeric strings as relative too', () => {
+    const snap = emptyTestSnapshot()
+    const { snap: next } = applyWorldDeltaToSnapshot(
+      { resources: { 灵石: '10', 声望: '-2' } },
+      snap,
+    )
+    expect(next.resources.spiritStone).toBe(1010)
+    expect(next.resources.prestige).toBe(18)
+  })
+
   it('adds disciple', () => {
     const snap = emptyTestSnapshot()
     const { snap: next } = applyWorldDeltaToSnapshot(

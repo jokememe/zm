@@ -9,7 +9,11 @@ import type {
   ApplyResult,
 } from '@/types/world'
 import type { CityState, Disciple, Faction, NotificationItem, Resources } from '@/types/game'
-import { RESOURCE_VAR_MAP, resolveNumericValue, type ResourceVarName } from '@/composables/game-bridge'
+import {
+  RESOURCE_VAR_MAP,
+  resolveRelativeResourceValue,
+  type ResourceVarName,
+} from '@/composables/game-bridge'
 
 const RESOURCE_CN = new Set<string>(Object.keys(RESOURCE_VAR_MAP))
 
@@ -438,7 +442,8 @@ export function applyWorldDeltaToSnapshot(
       if (!(cn in RESOURCE_VAR_MAP)) continue
       const key = RESOURCE_VAR_MAP[cn as ResourceVarName]
       const cur = next.resources[key]
-      const val = resolveNumericValue(cur, raw as string | number)
+      // 结算契约：resources 值一律相对变化（JSON -10 = 减 10，不是设为 0）
+      const val = resolveRelativeResourceValue(cur, raw as string | number)
       if (val !== cur) {
         next.resources[key] = val
         lines.push(`${cn} ${cur} → ${val}`)

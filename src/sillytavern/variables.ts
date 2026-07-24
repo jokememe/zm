@@ -5,25 +5,57 @@
 import type { ChatSession, ParsedTags } from './types';
 import type { ParserEvent } from './stream-parser';
 import { parseVarsBlock, applyVarsPatch } from './vars-merger';
+import { parseStrictDecimal, resolveNumericValue } from '@/composables/game-bridge';
 
+/**
+ * 解析 &lt;var name="…" value="…" /&gt;。
+ * 保留 "+10"/"-5" 为字符串（相对变化）；裸严格十进制转 number；空/非法忽略。
+ */
 export function extractVariables(text: string): { cleanedText: string; updates: Record<string, string | number> } {
   const updates: Record<string, string | number> = {};
-  const regex = /<var\s+name="([^"]+)"\s+value="([^"]+)"\s*\/?>/g;
+  const regex = /<var\s+name="([^"]+)"\s+value="([^"]*)"\s*\/?>/g;
   let match;
   while ((match = regex.exec(text)) !== null) {
     const [, name, rawValue] = match;
-    const num = Number(rawValue);
-    updates[name] = Number.isNaN(num) ? rawValue : num;
+    const s = String(rawValue).trim().replace(/^[−–—]/, '-');
+    if (!name || s === '') continue;
+    // 显式相对写法必须保留字符串
+    if (/^[+-](?:\d+(?:\.\d+)?|\.\d+)$/.test(s)) {
+      updates[name] = s;
+      continue;
+    }
+    const num = parseStrictDecimal(s);
+    if (num !== null) {
+      updates[name] = num;
+      continue;
+    }
+    // 非白名单自定义键可保留原文；资源键 junk 由 merge 忽略
+    updates[name] = rawValue;
   }
   const cleanedText = text.replace(regex, '').replace(/\n{2,}/g, '\n').trim();
   return { cleanedText, updates };
 }
 
+/**
+ * 合并会话变量。对宗门白名单资源键走 resolveNumericValue（与气数簿一致）。
+ * junk / 1e2 / 0x10 不改库存。非白名单键浅覆盖。
+ */
 export function mergeVariables(
   base: Record<string, string | number> = {},
   updates: Record<string, string | number> = {}
 ): Record<string, string | number> {
-  return { ...base, ...updates };
+  const RESOURCE_KEYS = new Set(['灵石', '灵谷', '丹材', '矿铁', '声望', '气运']);
+  const out: Record<string, string | number> = { ...base };
+  for (const [k, v] of Object.entries(updates)) {
+    if (!RESOURCE_KEYS.has(k)) {
+      out[k] = v;
+      continue;
+    }
+    const cur = Number(base[k]);
+    const current = Number.isFinite(cur) ? cur : 0;
+    out[k] = resolveNumericValue(current, v as string | number);
+  }
+  return out;
 }
 
 export function formatVariablesForPrompt(variables: Record<string, string | number>): string {
