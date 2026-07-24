@@ -1,9 +1,11 @@
 /**
- * 整包备份里的 localStorage 切片。
+ * 整包备份：IndexedDB（天机）+ localStorage（经营/记忆）。
  *
- * 历史问题：密匣「导出备份」只含 IndexedDB（预设/会话/设置），
- * 经营进度、开局标记、表格记忆、短中长期记忆在 localStorage。
- * main 与 beta 不同域名时，只导 IDB → beta 导入后像「读不了存档」。
+ * 失败点教训：
+ * - 旧导出只有 IDB → main→beta 无弟子/资源
+ * - 导入后只 reload 预设，不 reboot 会话 → 卷宗仍是旧内存
+ * - hydrate 失败仍 toast「成功」
+ * - 导出时 openingDone=false 导致 persist 跳过 → gameSave 空
  */
 import {
   OPENING_STORAGE_KEY,
@@ -53,28 +55,85 @@ export function collectLocalBackupState(
   return out
 }
 
+/**
+ * 导出前强制把 live 经营态写入 localStorage，并返回 gameSave 对象。
+ * 即使 openingDone 为 false（界面卡在开场），只要有资源/弟子 live 态也会落盘。
+ */
+export async function forceCaptureGameForExport(): Promise<{
+  gameSave: GameSaveV1 | null
+  localState: LocalBackupState
+  persisted: boolean
+}> {
+  let gameSave: GameSaveV1 | null = null
+  let persisted = false
+  try {
+    const { useGameState } = await import('@/composables/useGameState')
+    const gs = useGameState()
+    // 强制落盘（无视 openingDone）
+    try {
+      persisted = gs.forcePersistForBackup()
+    } catch {
+      persisted = false
+    }
+    try {
+      const { loadGameSaveFromStorage } = await import('@/composables/game-save')
+      gameSave = loadGameSaveFromStorage()
+    } catch {
+      gameSave = null
+    }
+  } catch (e) {
+    console.warn('[备份] forceCaptureGameForExport', e)
+  }
+
+  const localState = collectLocalBackupState()
+  if (!gameSave && localState[GAME_SAVE_KEY]) {
+    try {
+      gameSave = parseGameSave(JSON.parse(localState[GAME_SAVE_KEY]!))
+    } catch {
+      /* ignore */
+    }
+  }
+  if (gameSave) {
+    localState[GAME_SAVE_KEY] = JSON.stringify(gameSave)
+    localState[OPENING_STORAGE_KEY] = 'done'
+  }
+  return { gameSave, localState, persisted }
+}
+
 /** 从备份 localState 或顶层 gameSave 抽出可解析的经营档 */
 export function extractGameSaveFromBackup(backup: {
   localState?: LocalBackupState | Record<string, string> | null
   gameSave?: unknown
+  [key: string]: unknown
 }): GameSaveV1 | null {
-  if (backup.gameSave) {
-    const g = parseGameSave(backup.gameSave)
-    if (g) return g
+  if (backup.gameSave != null) {
+    // gameSave 可能是对象，也可能是 JSON 字符串
+    if (typeof backup.gameSave === 'string') {
+      try {
+        const g = parseGameSave(JSON.parse(backup.gameSave))
+        if (g) return g
+      } catch {
+        /* fall through */
+      }
+    } else {
+      const g = parseGameSave(backup.gameSave)
+      if (g) return g
+    }
   }
   const ls = backup.localState
   if (ls && typeof ls === 'object') {
     const raw = (ls as Record<string, string>)[GAME_SAVE_KEY]
     if (raw) {
       try {
-        return parseGameSave(JSON.parse(raw))
+        const g = parseGameSave(typeof raw === 'string' ? JSON.parse(raw) : raw)
+        if (g) return g
       } catch {
         /* fall through */
       }
     }
   }
   // 纯经营 JSON（用户只拷了 zongmen-game-v1）
-  const asSave = parseGameSave(backup as unknown)
+  const asSave = parseGameSave(backup)
   if (asSave) return asSave
   return null
 }
@@ -82,19 +141,18 @@ export function extractGameSaveFromBackup(backup: {
 export interface ApplyLocalBackupResult {
   keysWritten: string[]
   gameSave: GameSaveV1 | null
-  /** 是否已写入开局完成标记 */
   openingMarked: boolean
+  hydrateOk: boolean
+  error?: string
 }
 
 /**
- * 把备份中的 local 切片写回 storage，并刷新内存中的记忆/表状态。
- * 不直接动 Vue 经营 ref —— 调用方再 hydrateFromSave。
+ * 把备份中的 local 切片写回 storage，并刷新内存中的记忆/表/经营态。
  */
 export function applyLocalBackupState(
   local: LocalBackupState | Record<string, string> | null | undefined,
   opts?: {
     storage?: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | null
-    /** 额外的经营对象（优先于 local 内字符串） */
     gameSave?: unknown
   },
 ): ApplyLocalBackupResult {
@@ -119,7 +177,6 @@ export function applyLocalBackupState(
     }
   }
 
-  // 顶层 gameSave 覆盖/补写经营档
   let gameSave = extractGameSaveFromBackup({
     localState: local,
     gameSave: opts?.gameSave,
@@ -131,7 +188,6 @@ export function applyLocalBackupState(
     writeGameSaveToStorage(gameSave)
   }
 
-  // 有经营档则保证开局标记为 done，否则 beta 启动不 hydrate
   let openingMarked = false
   if (gameSave && storage) {
     try {
@@ -145,7 +201,6 @@ export function applyLocalBackupState(
     }
   }
 
-  // 刷新模块内缓存
   try {
     loadMemoryBank()
   } catch {
@@ -157,19 +212,85 @@ export function applyLocalBackupState(
     /* ignore */
   }
 
-  return { keysWritten, gameSave, openingMarked }
+  return {
+    keysWritten,
+    gameSave,
+    openingMarked,
+    hydrateOk: false,
+  }
 }
 
 /**
- * 导入后把经营 live 状态与存档对齐（依赖 useGameState 单例）。
+ * 导入后同步经营 live 状态（必须成功才算经营导入成功）。
  */
 export async function hydrateGameAfterBackupImport(): Promise<boolean> {
   try {
     const { useGameState } = await import('@/composables/useGameState')
     const gs = useGameState()
-    return gs.hydrateFromSave()
+    // 备份导入：以档为准，不 merge 种子（否则弟子册可能被旧 live 干扰体感）
+    const ok = gs.hydrateFromSave({ mergeSparse: false })
+    if (!ok) {
+      console.warn('[备份] hydrateFromSave 返回 false（localStorage 无有效经营档）')
+    }
+    return ok
   } catch (e) {
     console.warn('[备份] 经营态 hydrate 失败', e)
     return false
+  }
+}
+
+/**
+ * 导入后强制重载天机会话（reloadStMeta 不会换 chat 消息）。
+ */
+export async function rebootTianjiAfterBackupImport(): Promise<boolean> {
+  try {
+    const { useTianji } = await import('@/composables/useTianji')
+    const tj = useTianji()
+    await tj.forceRebootFromDb()
+    return true
+  } catch (e) {
+    console.warn('[备份] 天机 reboot 失败', e)
+    return false
+  }
+}
+
+export interface FullImportLocalResult {
+  gameHydrated: boolean
+  tianjiRebooted: boolean
+  hasGameSave: boolean
+  discipleCount: number
+  keysWritten: string[]
+  errors: string[]
+}
+
+/** 应用 local 切片 + hydrate 经营 + reboot 天机 */
+export async function finishBackupImportSideEffects(backup: {
+  localState?: LocalBackupState | Record<string, string> | null
+  gameSave?: unknown
+}): Promise<FullImportLocalResult> {
+  const errors: string[] = []
+  const applied = applyLocalBackupState(backup.localState || {}, {
+    gameSave: backup.gameSave,
+  })
+  const hasGameSave = !!applied.gameSave
+  let gameHydrated = false
+  if (hasGameSave) {
+    gameHydrated = await hydrateGameAfterBackupImport()
+    if (!gameHydrated) errors.push('经营档已写入存储，但界面 hydrate 失败')
+  }
+  let tianjiRebooted = false
+  try {
+    tianjiRebooted = await rebootTianjiAfterBackupImport()
+    if (!tianjiRebooted) errors.push('天机会话未能从库重载')
+  } catch (e) {
+    errors.push(`天机重载异常: ${(e as Error).message || e}`)
+  }
+  return {
+    gameHydrated,
+    tianjiRebooted,
+    hasGameSave,
+    discipleCount: applied.gameSave?.disciples?.length ?? 0,
+    keysWritten: applied.keysWritten,
+    errors,
   }
 }

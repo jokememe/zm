@@ -156,12 +156,11 @@ export async function exportAllData(): Promise<FullBackup> {
     db.chats.toArray(),
   ]);
 
-  // 经营进度在 localStorage，与 IDB 一并导出
-  const { collectLocalBackupState, extractGameSaveFromBackup } = await import(
-    '@/composables/full-backup'
-  );
-  const localState = collectLocalBackupState();
-  const gameSave = extractGameSaveFromBackup({ localState });
+  // 强制把 live 经营态写入 localStorage，再打进备份
+  const { forceCaptureGameForExport } = await import('@/composables/full-backup');
+  const captured = await forceCaptureGameForExport();
+  const localState = captured.localState;
+  const gameSave = captured.gameSave;
 
   return {
     version: DB_VERSION,
@@ -177,6 +176,17 @@ export async function exportAllData(): Promise<FullBackup> {
   };
 }
 
+/** 导入结果：供 UI 显示是否真恢复了经营/会话 */
+export interface ImportAllResult {
+  idbRestored: boolean;
+  gameHydrated: boolean;
+  tianjiRebooted: boolean;
+  hasGameSave: boolean;
+  discipleCount: number;
+  chatCount: number;
+  errors: string[];
+}
+
 export interface ImportBackupOptions {
   /**
    * When backup.appId is present and differs from this app, require explicit
@@ -188,16 +198,25 @@ export interface ImportBackupOptions {
 export async function importAllData(
   backup: FullBackup,
   options: ImportBackupOptions = {},
-): Promise<void> {
+): Promise<ImportAllResult> {
   if (!backup || typeof backup !== 'object') {
     throw new Error('备份格式无效');
   }
 
   const {
-    applyLocalBackupState,
-    hydrateGameAfterBackupImport,
     extractGameSaveFromBackup,
+    finishBackupImportSideEffects,
   } = await import('@/composables/full-backup');
+
+  const emptyResult = (): ImportAllResult => ({
+    idbRestored: false,
+    gameHydrated: false,
+    tianjiRebooted: false,
+    hasGameSave: false,
+    discipleCount: 0,
+    chatCount: 0,
+    errors: [],
+  });
 
   // 纯经营档 JSON（只有 resources/calendar，无 lorebooks 数组）→ 只恢复 local，不抹 IDB
   const looksLikeIdbBackup =
@@ -211,12 +230,21 @@ export async function importAllData(
     backup as { localState?: Record<string, string>; gameSave?: unknown },
   );
   if (pureGame && !looksLikeIdbBackup) {
-    applyLocalBackupState({}, { gameSave: pureGame });
-    const ok = await hydrateGameAfterBackupImport();
-    if (!ok) {
-      throw new Error('经营存档已写入，但未能恢复到界面，请刷新页面');
+    const side = await finishBackupImportSideEffects({ gameSave: pureGame });
+    if (!side.gameHydrated) {
+      throw new Error(
+        '经营存档已写入，但界面未能恢复弟子/资源。请刷新页面；若仍空，检查备份是否含 disciples。',
+      );
     }
-    return;
+    return {
+      idbRestored: false,
+      gameHydrated: side.gameHydrated,
+      tianjiRebooted: side.tianjiRebooted,
+      hasGameSave: true,
+      discipleCount: side.discipleCount,
+      chatCount: 0,
+      errors: side.errors,
+    };
   }
 
   const sourceAppId =
@@ -240,6 +268,7 @@ export async function importAllData(
     );
   }
 
+  const chatCount = Array.isArray(backup.chats) ? backup.chats.length : 0;
   const db = getDatabase();
   await db.transaction('rw', db.lorebooks, db.presets, db.settings, db.chats, async () => {
     await db.lorebooks.clear();
@@ -252,20 +281,38 @@ export async function importAllData(
     if (Array.isArray(backup.chats)) await db.chats.bulkPut(backup.chats);
   });
 
-  // 经营/记忆 localStorage + 内存表；旧备份无 localState 时仅恢复 IDB
-  const hasLocal =
-    (backup.localState &&
-      typeof backup.localState === 'object' &&
-      Object.keys(backup.localState).length > 0) ||
-    backup.gameSave != null;
+  // 始终跑 side effects：有 gameSave 则 hydrate；无论如何 reboot 天机读新 chats
+  const side = await finishBackupImportSideEffects({
+    localState: (backup.localState as Record<string, string> | undefined) || {},
+    gameSave: backup.gameSave,
+  });
 
-  if (hasLocal) {
-    applyLocalBackupState(
-      (backup.localState as Record<string, string> | undefined) || {},
-      { gameSave: backup.gameSave },
+  const result: ImportAllResult = {
+    idbRestored: true,
+    gameHydrated: side.gameHydrated,
+    tianjiRebooted: side.tianjiRebooted,
+    hasGameSave: side.hasGameSave,
+    discipleCount: side.discipleCount,
+    chatCount,
+    errors: side.errors,
+  };
+
+  // 整包备份声称有 gameSave 却 hydrate 失败 → 硬失败，别假成功
+  if (side.hasGameSave && !side.gameHydrated) {
+    throw new Error(
+      `天机数据已写入，但经营进度未能恢复（弟子 ${side.discipleCount}）。` +
+        (side.errors.length ? ` ${side.errors.join('；')}` : ' 请刷新后重试。'),
     );
-    await hydrateGameAfterBackupImport();
   }
+
+  // 旧备份：无经营档 — 不抛错，但 result 标明
+  if (!side.hasGameSave) {
+    result.errors.push(
+      '备份不含经营存档（gameSave / zongmen-game-v1）。弟子名册与资源不会恢复；请用新版密匣重新导出。',
+    );
+  }
+
+  return result;
 }
 
 /**

@@ -243,11 +243,27 @@ let persistTimer: ReturnType<typeof setTimeout> | null = null
 
 function persistGameSaveNow(): boolean {
   if (!openingDone.value) return false
+  return forcePersistGameSaveNow()
+}
+
+/**
+ * 无视 openingDone 落盘（备份导出专用）。
+ * 开场中途导出也要把当前 live 资源/弟子写进 localStorage。
+ */
+function forcePersistGameSaveNow(): boolean {
   try {
     const save = buildGameSave(capturePayload())
-    return writeGameSaveToStorage(save)
+    const ok = writeGameSaveToStorage(save)
+    if (ok) {
+      try {
+        localStorage.setItem(OPENING_STORAGE_KEY, 'done')
+      } catch {
+        /* ignore */
+      }
+    }
+    return ok
   } catch (e) {
-    console.warn('[存档] 写入失败', e)
+    console.warn('[存档] 强制写入失败', e)
     return false
   }
 }
@@ -527,10 +543,26 @@ export function useGameState() {
     return persistGameSaveNow()
   }
 
-  function hydrateFromSave(): boolean {
+  /** 备份导出：无视是否已开局完成，强制把 live 态写入 localStorage */
+  function forcePersistForBackup(): boolean {
+    if (persistTimer) {
+      clearTimeout(persistTimer)
+      persistTimer = null
+    }
+    return forcePersistGameSaveNow()
+  }
+
+  /**
+   * @param opts.mergeSparse 默认 true：旧档空数组不冲掉种子灵田/势力。
+   *   备份导入请传 false，以档内 disciples/资源为唯一真相。
+   */
+  function hydrateFromSave(opts?: { mergeSparse?: boolean }): boolean {
     const save = loadGameSaveFromStorage()
-    if (!save) return false
-    applySaveBlob(save, { mergeSparse: true })
+    if (!save) {
+      console.warn('[存档] hydrateFromSave：无有效 zongmen-game-v1')
+      return false
+    }
+    applySaveBlob(save, { mergeSparse: opts?.mergeSparse !== false })
     openingDone.value = true
     showOpening.value = false
     try {
@@ -756,6 +788,7 @@ export function useGameState() {
     assignFieldPlot,
     craftAlchemy,
     persistGameSave,
+    forcePersistForBackup,
     hydrateFromSave,
     advanceSeason,
     markOpeningDone,

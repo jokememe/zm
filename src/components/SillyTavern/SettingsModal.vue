@@ -485,13 +485,6 @@ async function handleTest(which: ApiWhich) {
 }
 
 async function handleExport() {
-  // 导出前尽量把经营档刷进 localStorage，避免只导出到半截进度
-  try {
-    const { useGameState } = await import('@/composables/useGameState')
-    useGameState().persistGameSave()
-  } catch {
-    /* ignore */
-  }
   const data = await exportAllData()
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
   const url = URL.createObjectURL(blob)
@@ -500,9 +493,15 @@ async function handleExport() {
   a.download = `zongmen-backup-${Date.now()}.json`
   a.click()
   URL.revokeObjectURL(url)
-  const hasGame = !!(data as { gameSave?: unknown; localState?: Record<string, string> }).gameSave
-    || !!(data as { localState?: Record<string, string> }).localState?.['zongmen-game-v1']
-  showToast(hasGame ? '整包备份已导出（含经营存档）' : '备份已导出（当前无经营存档）')
+  const gs = (data as { gameSave?: { disciples?: unknown[]; resources?: { spiritStone?: number } } })
+    .gameSave
+  const n = Array.isArray(gs?.disciples) ? gs!.disciples!.length : 0
+  const stone = gs?.resources?.spiritStone
+  if (gs) {
+    showToast(`整包已导出 · 弟子${n} · 灵石${stone ?? '?'}`)
+  } else {
+    showToast('备份已导出，但未含经营档（请确认本机有进度后再导）')
+  }
 }
 
 function handleImport() {
@@ -515,25 +514,53 @@ function handleImport() {
     try {
       const text = await file.text()
       const data = JSON.parse(text)
+      // 先快速诊断：旧备份无 gameSave 时直接说清楚
+      const hasGameField =
+        data?.gameSave != null ||
+        data?.localState?.['zongmen-game-v1'] ||
+        (data?.resources && data?.calendar && !Array.isArray(data?.lorebooks))
+      if (!hasGameField && Array.isArray(data?.chats)) {
+        const go = confirm(
+          '此备份看起来是旧版：只有天机会话/预设，没有经营存档（弟子名册、资源）。\n' +
+            '导入后会话可恢复，但弟子名册不会变。\n\n' +
+            '建议：在 main/本机用最新版密匣重新「导出备份」，确认提示含弟子数后再导入。\n\n' +
+            '仍要导入天机数据吗？',
+        )
+        if (!go) return
+      }
+      let result
       if (data?.appId && data.appId !== storageInfo.appId && !allowCrossAppImport.value) {
         const ok = confirm(
           `此备份来自「${data.appId}」，当前为「${storageInfo.appId}」。导入会覆盖本宗数据，是否继续？`,
         )
         if (!ok) return
-        await importAllData(data, { allowCrossApp: true })
+        result = await importAllData(data, { allowCrossApp: true })
       } else {
-        await importAllData(data, { allowCrossApp: allowCrossAppImport.value })
+        result = await importAllData(data, { allowCrossApp: allowCrossAppImport.value })
       }
       emit('reloaded')
-      const hasGame =
-        !!(data as { gameSave?: unknown }).gameSave ||
-        !!(data as { localState?: Record<string, string> }).localState?.['zongmen-game-v1'] ||
-        (data?.resources && data?.calendar && !data?.lorebooks)
-      showToast(
-        hasGame
-          ? '备份已导入（含经营进度）'
-          : '备份已导入（仅天机数据；旧备份无经营档请见说明）',
-      )
+      const parts: string[] = []
+      if (result.gameHydrated) {
+        parts.push(`经营已恢复·弟子${result.discipleCount}`)
+      } else if (result.hasGameSave) {
+        parts.push('经营档在文件中但未写入界面')
+      } else {
+        parts.push('无经营档')
+      }
+      if (result.idbRestored) parts.push(`会话${result.chatCount}楼包`)
+      if (result.tianjiRebooted) parts.push('天机已重载')
+      showToast(parts.join(' · '))
+      if (result.errors?.length) {
+        alert(`导入完成，但有问题：\n${result.errors.join('\n')}`)
+      }
+      // 硬刷新一次路由态：部分列表组件不跟单例
+      if (result.gameHydrated) {
+        try {
+          window.dispatchEvent(new Event('zongmen-save-hydrated'))
+        } catch {
+          /* ignore */
+        }
+      }
     } catch (e) {
       alert(`导入失败: ${(e as Error).message}`)
     }
@@ -1789,15 +1816,14 @@ function onTagsInput(value: string) {
 
     <template v-else>
       <p class="tj-hint" style="margin-bottom: 0.75rem">
-        导出含：预设、世界书、会话、密匣设置，以及
-        <strong>经营存档</strong>（资源/弟子/灵田）、开局标记、表格记忆与短中长期记忆。
-        main 与 beta 不同域名时务必用本页整包备份迁移。
-        跨应用导入需勾选下方许可。
+        导出必须含 <strong>gameSave</strong>（弟子名册、资源、灵田等）+ 天机会话。
+        导出成功时会提示「弟子N · 灵石X」——没有这句就别拿去 beta 导入。
+        main / beta 域名不同，只能靠本页整包迁移。
       </p>
       <p class="tj-hint" style="margin-bottom: 0.75rem; color: var(--amber)">
-        若你手里的是<strong>旧版备份</strong>（无 localState / gameSave 字段），只会恢复天机数据，
-        经营进度需在 main 更新后再导出一次，或从浏览器 Application → Local Storage
-        拷贝 <code>zongmen-game-v1</code> 键。
+        <strong>旧备份</strong>（JSON 里搜不到 <code>gameSave</code> 或
+        <code>zongmen-game-v1</code>）= 没有弟子名册。请在本页用最新版重新导出。
+        导入后若提示「无经营档」，不是解析坏了，是文件里本来就没有。
       </p>
       <label class="tj-check" style="margin-bottom: 0.85rem">
         <input v-model="allowCrossAppImport" type="checkbox" />

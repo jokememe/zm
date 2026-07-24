@@ -1217,6 +1217,19 @@ export function useTianji() {
     }
   }
 
+  /**
+   * 备份导入后：丢弃内存会话，从 IndexedDB 重读 chats/设置并 hydrate 消息。
+   * reloadStMeta 不会换楼层，导入后必须走这里。
+   */
+  async function forceRebootFromDb(): Promise<void> {
+    bootPromise = null
+    ready.value = false
+    chatSession.value = null
+    lastParsed.value = null
+    lastError.value = null
+    await boot()
+  }
+
   async function toggleLorebook(id: string) {
     if (!settings.value) return
     if (id === SYSTEM_LOREBOOK_ID) return // 系统书不可关
@@ -1543,6 +1556,7 @@ export function useTianji() {
     clearContext,
     updateSettings,
     reloadStMeta,
+    forceRebootFromDb,
     boot,
     toggleLorebook,
     updateLorebook,

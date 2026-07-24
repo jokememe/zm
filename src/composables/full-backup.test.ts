@@ -103,6 +103,15 @@ describe('full-backup local slice', () => {
     })
     expect(got?.sectName).toBe('主线青岚')
     expect(got?.resources.spiritStone).toBe(999)
+    expect(got?.disciples).toHaveLength(1)
+  })
+
+  it('extractGameSaveFromBackup accepts gameSave JSON string', () => {
+    const save = buildGameSave(basePayload)
+    const got = extractGameSaveFromBackup({
+      gameSave: JSON.stringify(save),
+    })
+    expect(got?.disciples[0].name).toBe('陆承渊')
   })
 
   it('extractGameSaveFromBackup reads localState string', () => {
@@ -117,7 +126,6 @@ describe('full-backup local slice', () => {
   it('extractGameSaveFromBackup accepts pure game JSON', () => {
     const save = buildGameSave(basePayload)
     const got = extractGameSaveFromBackup(save as unknown as { gameSave?: unknown })
-    // pure object is passed as backup root — extract tries parseGameSave(backup)
     expect(parseGameSave(save)?.sectName).toBe('主线青岚')
     expect(got?.sectName).toBe('主线青岚')
   })
@@ -133,6 +141,7 @@ describe('full-backup local slice', () => {
       { storage: s },
     )
     expect(r.gameSave?.sectName).toBe('主线青岚')
+    expect(r.gameSave?.disciples).toHaveLength(1)
     expect(r.openingMarked).toBe(true)
     expect(s.getItem(OPENING_STORAGE_KEY)).toBe('done')
     expect(s.getItem(GAME_SAVE_KEY)).toBeTruthy()
@@ -146,6 +155,7 @@ describe('full-backup local slice', () => {
     const save = buildGameSave(basePayload)
     const r = applyLocalBackupState({}, { storage: s, gameSave: save })
     expect(r.gameSave?.calendar.year).toBe(3848)
+    expect(r.gameSave?.disciples).toHaveLength(1)
     expect(s.getItem(GAME_SAVE_KEY)).toBeTruthy()
   })
 })
