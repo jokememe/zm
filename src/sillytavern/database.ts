@@ -258,6 +258,11 @@ export async function getSettings(): Promise<AppSettings | undefined> {
   if (s.settlementMode === undefined) {
     s.settlementMode = 'secondary_then_primary';
   }
+  if (s.settleJailbreakPrompt === undefined) {
+    s.settleJailbreakPrompt = '';
+  } else if (typeof s.settleJailbreakPrompt === 'string' && s.settleJailbreakPrompt.length > 12_000) {
+    s.settleJailbreakPrompt = s.settleJailbreakPrompt.slice(0, 12_000);
+  }
   if (s.historyKeepMessages === undefined || !Number.isFinite(s.historyKeepMessages)) {
     s.historyKeepMessages = 12;
   } else {
@@ -288,6 +293,9 @@ export async function getSettings(): Promise<AppSettings | undefined> {
       recallTopK: 20,
       entityInjectMaxChars: 2800,
       journalInjectMaxChars: 3200,
+      recallSystemPrompt: '',
+      recallUserTemplate: '',
+      recallJailbreakPrompt: '',
     };
   } else {
     const t = s.tableMemoryScheduler;
@@ -306,6 +314,9 @@ export async function getSettings(): Promise<AppSettings | undefined> {
     if (t.recallTopK === undefined) t.recallTopK = 20;
     if (t.entityInjectMaxChars === undefined) t.entityInjectMaxChars = 2800;
     if (t.journalInjectMaxChars === undefined) t.journalInjectMaxChars = 3200;
+    if (t.recallSystemPrompt === undefined) t.recallSystemPrompt = '';
+    if (t.recallUserTemplate === undefined) t.recallUserTemplate = '';
+    if (t.recallJailbreakPrompt === undefined) t.recallJailbreakPrompt = '';
   }
   return s;
 }

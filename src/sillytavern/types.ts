@@ -180,6 +180,12 @@ export interface AppSettings {
   /** World settle after story: off | secondary API only | secondary then primary fallback */
   settlementMode?: 'off' | 'secondary_only' | 'secondary_then_primary';
   /**
+   * 局面结算（次 API / 回退主 API 的 settle 侧路）专用破限。
+   * 主推演心法 jailbreak **不会**进 settle；非空时插在结算 system 与 user 之间。
+   * 默认空 = 不插。
+   */
+  settleJailbreakPrompt?: string;
+  /**
    * 天机拼装 prompt 时，至少保留最近多少条 user/assistant 消息（可自定义 0～200）。
    * 在 token 预算之外优先保近端上下文；0 = 仅按 token 预算裁剪（旧行为）。
    */
@@ -222,6 +228,15 @@ export interface AppSettings {
     recallTopK?: number;
     entityInjectMaxChars?: number;
     journalInjectMaxChars?: number;
+    /** 精确召回 system 提示；空则用内置默认；占位 {{topK}} */
+    recallSystemPrompt?: string;
+    /** 精确召回 user 模板；空则用内置默认；占位 {{topK}} {{query}} {{previousPlot}} {{indexText}} */
+    recallUserTemplate?: string;
+    /**
+     * 召回支路破限（与主推演心法 jailbreak 分离）。
+     * 侧路选码：独立 system；注入主推演：前缀到召回纪要块。空=不插。
+     */
+    recallJailbreakPrompt?: string;
   };
 }
 
@@ -285,6 +300,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   formatPromptTemplate: DEFAULT_FORMAT_PROMPT,
   thinkingDisplay: 'fold',
   settlementMode: 'secondary_then_primary',
+  settleJailbreakPrompt: '',
   historyKeepMessages: 12,
   tableMemoryEnabled: true,
   historyCompress: true,
@@ -305,6 +321,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
     recallTopK: 20,
     entityInjectMaxChars: 2800,
     journalInjectMaxChars: 3200,
+    // 默认文案由 table-memory-settings 注入；此处空串表示「跟随内置」
+    recallSystemPrompt: '',
+    recallUserTemplate: '',
+    recallJailbreakPrompt: '',
   },
 };
 

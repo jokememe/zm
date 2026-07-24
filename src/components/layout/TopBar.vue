@@ -2,7 +2,7 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import Icon from '@/components/ui/Icon.vue'
 import { useGameState } from '@/composables/useGameState'
-import { resourceMeta, resourceDelta, SECT_MOTTO } from '@/data/mock'
+import { resourceMeta, SECT_MOTTO } from '@/data/mock'
 
 const {
   resources,
@@ -95,13 +95,6 @@ function toggleNotif(e: MouseEvent) {
           <span v-if="!isCompact" class="res-chip__label">{{ meta.label }}</span>
           <span class="res-chip__value stat-value">{{ formatNum(resources[meta.key]) }}</span>
         </div>
-        <span
-          v-if="resourceDelta[meta.key] && !isCompact"
-          class="res-chip__delta"
-          :class="(resourceDelta[meta.key] ?? 0) >= 0 ? 'delta-up' : 'delta-down'"
-        >
-          {{ (resourceDelta[meta.key] ?? 0) > 0 ? '+' : '' }}{{ resourceDelta[meta.key] }}
-        </span>
       </div>
     </div>
 

@@ -153,10 +153,19 @@ export function applyDisplayRegex(text: string, scripts: RegexScript[]): string 
   return applyRegexScriptsDetailed(text, scripts, 'display', PLACEMENT_AI).text
 }
 
-/** 展示层：剥掉仍漏出的游戏/ST 控制标签外壳（保留内容可选） */
+/**
+ * 展示层：剥掉仍漏出的游戏/ST 控制标签外壳。
+ * 注意：只去外壳、不删块内容；整块删除请用 display-compat.stripControlBlocksForDisplay。
+ */
 export function stripControlTagsForDisplay(text: string): string {
   return text
-    .replace(/<\/?(?:thinking|think|maintext|option|sum|vars)\b[^>]*>/gi, '')
-    .replace(/<\/?(?:meow|think_nya~|background)\b[^>]*>/gi, '')
+    .replace(
+      /<\/?(?:thinking|think|maintext|option|sum|vars|var|content|story|text|output|response)\b[^>]*>/gi,
+      '',
+    )
+    .replace(
+      /<\/?(?:meow|think_nya~|background|Memory|GaigaiMemory|tableEdit|StatusBlock|comment)\b[^>]*>/gi,
+      '',
+    )
     .trim()
 }

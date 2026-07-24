@@ -54,6 +54,7 @@ export const resourceDelta: Partial<Record<keyof Resources, number>> = {
   prestige: 1,
 }
 
+/** 侧栏结构（badge 由 nav-badges 按 live 局面计算，勿写死） */
 export const navItems: NavItem[] = [
   { id: 'hall', label: '宗门大殿', icon: 'hall', group: '总览' },
   { id: 'fields', label: '灵田', icon: 'fields', group: '内政' },
@@ -61,11 +62,11 @@ export const navItems: NavItem[] = [
   { id: 'forge', label: '锻器', icon: 'forge', group: '内政' },
   { id: 'library', label: '藏经阁', icon: 'library', group: '内政' },
   { id: 'treasury', label: '宝库', icon: 'treasury', group: '内政' },
-  { id: 'disciples', label: '弟子名册', icon: 'disciples', group: '人事', badge: 2 },
+  { id: 'disciples', label: '弟子名册', icon: 'disciples', group: '人事' },
   { id: 'relations', label: '关系网', icon: 'relations', group: '人事' },
   { id: 'legacy', label: '传承继位', icon: 'legacy', group: '人事' },
   { id: 'cities', label: '城池纳贡', icon: 'cities', group: '外交' },
-  { id: 'diplomacy', label: '势力外交', icon: 'diplomacy', group: '外交', badge: 1 },
+  { id: 'diplomacy', label: '势力外交', icon: 'diplomacy', group: '外交' },
   { id: 'timeline', label: '岁月流转', icon: 'timeline', group: '决策' },
   { id: 'story', label: '天机推演', icon: 'spark', group: '决策' },
 ]

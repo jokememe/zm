@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useSillytavern } from '@/composables/useSillytavern'
+import { sanitizeAssistantForDisplay } from '@/sillytavern'
 import SettingsModal from './SettingsModal.vue'
 import LorebookModal from './LorebookModal.vue'
 import PresetModal from './PresetModal.vue'
@@ -31,15 +32,21 @@ const display = computed(() => {
   if (isStreaming.value) {
     return {
       thinking: st.streamState.value.thinking,
+      // streamState.maintext 已由 StreamTagParser 抽出，无壳
       maintext: st.streamState.value.maintext,
       options: st.streamState.value.options,
       sum: st.streamState.value.sum,
     }
   }
   const a = lastAssistant.value
+  const main =
+    a?.parsed?.maintext ||
+    (a?.content ? sanitizeAssistantForDisplay(a.content) : '') ||
+    a?.content ||
+    ''
   return {
     thinking: a?.parsed?.thinking ?? '',
-    maintext: a?.parsed?.maintext ?? a?.content ?? '',
+    maintext: main,
     options: a?.parsed?.options ?? [],
     sum: a?.parsed?.sum ?? '',
   }

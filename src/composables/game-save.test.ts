@@ -101,6 +101,40 @@ describe('game-save pure', () => {
     expect(applied[0].stock).toBe(3)
   })
 
+  it('accepts legacy incomplete save (missing arrays / string spiritStone)', () => {
+    const legacy = {
+      // 无 v
+      sectName: '旧宗',
+      masterName: '旧掌',
+      resources: { spiritStone: '500', spiritGrain: 100 },
+      calendar: { year: 3840, season: '孟冬' },
+      disciples: [
+        { name: '仅有名的弟子', realm: '炼气三层' },
+        { id: 'x', /* 无名 → 丢弃 */ realm: '筑基' },
+      ],
+      // 无 fieldPlots / urgentEvents / factions
+    }
+    const parsed = parseGameSave(legacy)
+    expect(parsed).not.toBeNull()
+    expect(parsed!.v).toBe(1)
+    expect(parsed!.sectName).toBe('旧宗')
+    expect(parsed!.resources.spiritStone).toBe(500)
+    expect(parsed!.calendar.year).toBe(3840)
+    expect(parsed!.disciples).toHaveLength(1)
+    expect(parsed!.disciples[0].name).toBe('仅有名的弟子')
+    expect(parsed!.disciples[0].id).toMatch(/^d-legacy-/)
+    expect(parsed!.disciples[0].status).toBe('在宗')
+    expect(parsed!.fieldPlots).toEqual([])
+    expect(parsed!.urgentEvents).toEqual([])
+    expect(parsed!.factions).toEqual([])
+  })
+
+  it('rejects garbage without resources/calendar', () => {
+    expect(parseGameSave(null)).toBeNull()
+    expect(parseGameSave({ v: 1, foo: 1 })).toBeNull()
+    expect(parseGameSave({ resources: {}, calendar: { year: 'x', season: 1 } })).toBeNull()
+  })
+
   it('storage write/load/clear', () => {
     const s = memStore()
     const save = buildGameSave({
@@ -197,5 +231,81 @@ describe('craftAlchemy + persist path', () => {
     expect(gs.fieldPlots.value.find((f) => f.id === 'f6')?.assigned).toBe('林晚舟')
     expect(gs.alchemyRecipes.value.find((x) => x.id === 'a2')?.stock).toBe(stock)
     expect(gs.resources.spiritGrain).toBe(grain)
+  })
+
+  it('recruited disciples survive persist + hydrate (refresh path)', () => {
+    const gs = useGameState()
+    const before = gs.disciples.value.length
+    const recruit = {
+      id: 'd-recruit-test',
+      name: '陆承渊·测',
+      gender: '男' as const,
+      age: 18,
+      realm: '炼气一层',
+      aptitude: '中等',
+      role: '外门弟子',
+      loyalty: 70,
+      mood: '平静',
+      talent: ['剑骨'],
+      status: '在宗' as const,
+      avatarHue: 120,
+      master: gs.masterName.value,
+    }
+    gs.disciples.value = [...gs.disciples.value, recruit]
+    expect(gs.disciples.value.length).toBe(before + 1)
+    expect(gs.persistGameSave()).toBe(true)
+
+    // 模拟刷新：回落到种子名册
+    gs.disciples.value = gs.disciples.value.slice(0, Math.max(1, before - 2))
+    expect(gs.disciples.value.some((d) => d.id === 'd-recruit-test')).toBe(false)
+
+    expect(gs.hydrateFromSave()).toBe(true)
+    expect(gs.disciples.value.length).toBe(before + 1)
+    expect(gs.disciples.value.find((d) => d.id === 'd-recruit-test')?.name).toBe('陆承渊·测')
+  })
+})
+
+describe('restoreWorldState persists disciple.add', () => {
+  beforeEach(() => {
+    setGameSaveStorageForTests(memStore())
+    const gs = useGameState()
+    gs.resetGameToOpening()
+    gs.markOpeningDone()
+  })
+
+  it('applyValidatedDelta disciple.add then hydrate keeps roster', async () => {
+    const { applyValidatedDelta } = await import('./world-state')
+    const gs = useGameState()
+    const before = gs.disciples.value.length
+    const r = applyValidatedDelta({
+      resources: {},
+      ops: [
+        {
+          op: 'disciple.add',
+          name: '新人甲',
+          realm: '炼气一层',
+          role: '外门弟子',
+          gender: '男',
+        },
+        {
+          op: 'disciple.add',
+          name: '新人乙',
+          realm: '炼气二层',
+          role: '外门弟子',
+          gender: '女',
+        },
+      ],
+    })
+    expect(r.changed).toBe(true)
+    expect(gs.disciples.value.length).toBe(before + 2)
+    expect(gs.disciples.value.some((d) => d.name === '新人甲')).toBe(true)
+
+    // 污染后再 hydrate（等同刷新后从 localStorage 恢复）
+    gs.disciples.value = []
+    expect(gs.hydrateFromSave()).toBe(true)
+    expect(gs.disciples.value.length).toBe(before + 2)
+    expect(gs.disciples.value.map((d) => d.name)).toEqual(
+      expect.arrayContaining(['新人甲', '新人乙']),
+    )
   })
 })

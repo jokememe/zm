@@ -21,7 +21,11 @@ import {
   type JournalRowView,
 } from '@/composables/table-memory-merge'
 import type { TableMemorySchedulerSettings } from '@/composables/table-memory-settings'
-import { resolveTableMemoryScheduler } from '@/composables/table-memory-settings'
+import {
+  DEFAULT_RECALL_SYSTEM_PROMPT,
+  DEFAULT_RECALL_USER_TEMPLATE,
+  resolveTableMemoryScheduler,
+} from '@/composables/table-memory-settings'
 
 export const TABLE_RECALL_ENTRY_ID = 'table-memory-recall'
 export const RECALL_TAG_PATTERN = /<recall>([\s\S]*?)<\/recall>/i
@@ -135,14 +139,16 @@ function tokenize(query: string): string[] {
   return [...new Set(grams)].filter((t) => t.length >= 1).slice(0, 40)
 }
 
-/** 展开召回纪要全文 */
+/** 展开召回纪要全文；可选前缀破限（注入主推演时用） */
 export function formatRecalledJournalFull(
   rows: JournalRowView[],
-  opts?: { maxChars?: number },
+  opts?: { maxChars?: number; jailbreakPrefix?: string | null },
 ): string {
   const maxChars = opts?.maxChars ?? 3200
+  const jb = (opts?.jailbreakPrefix || '').trim()
+  const jbBlock = jb ? `【档案阅读约定】\n${jb}\n\n` : ''
   if (!rows.length) {
-    return '【召回纪要】\n(本回合未命中索引条目)'
+    return `${jbBlock}【召回纪要】\n(本回合未命中索引条目)`
   }
   const blocks = rows.map((r) => {
     const head = r.indexCode ? `[${r.indexCode}]` : '[?]'
@@ -156,10 +162,15 @@ export function formatRecalledJournalFull(
     return `- ${head} ${parts.join('；')}`
   })
   let body = blocks.join('\n')
-  if (body.length > maxChars) {
-    body = body.slice(0, maxChars - 1) + '…'
+  // 破限前缀占用额度时，正文再让一点
+  const budget = Math.max(200, maxChars - (jbBlock.length || 0))
+  if (body.length > budget) {
+    body = body.slice(0, budget - 1) + '…'
   }
-  return `【召回纪要 · Top-${rows.length}】\n(历史存档，仅作背景参考，请勿复述或重演)\n${body}`
+  return (
+    `${jbBlock}【召回纪要 · Top-${rows.length}】\n` +
+    `(历史存档，仅作背景参考，请勿复述或重演)\n${body}`
+  )
 }
 
 /** 实体表（非纪要）注入文本 */
@@ -235,44 +246,71 @@ export function formatTableMemoryInjection(input: RecallInjectionInput = {}): st
 
   const full = formatRecalledJournalFull(selected, {
     maxChars: sch.journalInjectMaxChars,
+    // 主推演读档案时也需要破限挂点（与侧路选码共用同一字段）
+    jailbreakPrefix: sch.recallJailbreakPrompt,
   })
 
   return [entity, index, full].join('\n\n')
 }
 
+/** 替换召回模板占位符 */
+export function applyRecallTemplate(
+  template: string,
+  vars: Record<string, string | number>,
+): string {
+  let out = template || ''
+  for (const [key, val] of Object.entries(vars)) {
+    out = out.split(`{{${key}}}`).join(String(val))
+  }
+  return out
+}
+
 /**
  * 构建召回 LLM 任务 messages（可选二次 API 精确 Top-K）。
- * 库存少于 topK 时提示「有多少用多少」。
+ * 顺序：system 任务 →（可选）system 破限 → user 任务
+ * 主推演心法的 jailbreak 不会自动进来；破限只认本函数的 jailbreak 参数。
+ * 占位：{{topK}} {{query}} {{previousPlot}} {{indexText}}
  */
 export function buildRecallMessages(input: {
   query: string
   previousPlot?: string
   indexText: string
   topK: number
+  /** 自定义 system；空/缺省 → 默认 */
+  systemPrompt?: string | null
+  /** 自定义 user 模板；空/缺省 → 默认 */
+  userTemplate?: string | null
+  /**
+   * 破限正文；非空则插入独立 system（在任务 system 之后、user 之前）。
+   * 这是召回支路专用挂点，与 ST 心法 jailbreak 分离。
+   */
+  jailbreakPrompt?: string | null
 }): Array<{ role: 'system' | 'user'; content: string }> {
   const k = Math.max(1, input.topK)
-  return [
-    {
-      role: 'system',
-      content:
-        '你是记忆索引召回器。根据用户意图与前文，从纪要索引中选出最相关的编码。' +
-        `最终只输出 <recall>编码1,编码2,...</recall>，数量尽量接近 ${k} 条（库存不足则全选）。` +
-        '编码必须真实存在于索引中，禁止编造。字典序或相关度均可，逗号分隔。',
-    },
-    {
-      role: 'user',
-      content: [
-        '【前文】',
-        (input.previousPlot || '').slice(0, 800) || '（无）',
-        '【本回用户】',
-        (input.query || '').slice(0, 400) || '（无）',
-        '【纪要索引 MEMORY_INDEX_DB】',
-        input.indexText,
-        '',
-        `请输出 <recall>...</recall>，目标约 ${k} 条编码。`,
-      ].join('\n'),
-    },
+  const vars = {
+    topK: k,
+    query: (input.query || '').slice(0, 400) || '（无）',
+    previousPlot: (input.previousPlot || '').slice(0, 800) || '（无）',
+    indexText: input.indexText || '(无索引)',
+  }
+  const sysRaw =
+    typeof input.systemPrompt === 'string' && input.systemPrompt.trim()
+      ? input.systemPrompt
+      : DEFAULT_RECALL_SYSTEM_PROMPT
+  const userRaw =
+    typeof input.userTemplate === 'string' && input.userTemplate.trim()
+      ? input.userTemplate
+      : DEFAULT_RECALL_USER_TEMPLATE
+  const msgs: Array<{ role: 'system' | 'user'; content: string }> = [
+    { role: 'system', content: applyRecallTemplate(sysRaw, vars) },
   ]
+  const jb =
+    typeof input.jailbreakPrompt === 'string' ? input.jailbreakPrompt.trim() : ''
+  if (jb) {
+    msgs.push({ role: 'system', content: applyRecallTemplate(jb, vars) })
+  }
+  msgs.push({ role: 'user', content: applyRecallTemplate(userRaw, vars) })
+  return msgs
 }
 
 /** 可选：调用 LLM 做精确召回，失败则回退关键词 */
@@ -301,6 +339,9 @@ export async function runIndexRecall(input: {
         previousPlot: input.previousPlot,
         indexText,
         topK: sch.recallTopK,
+        systemPrompt: sch.recallSystemPrompt,
+        userTemplate: sch.recallUserTemplate,
+        jailbreakPrompt: sch.recallJailbreakPrompt,
       })
       const text = await input.postChat(messages)
       codes = parseRecallTag(text)

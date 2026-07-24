@@ -31,7 +31,7 @@ import {
   createDefaultPreset,
   normalizePresetSettings,
   getSamplingForApi,
-  prepareAssistantDisplay,
+  sanitizeAssistantForDisplay,
   postChatCompletion,
   postChatCompletionStream,
   type AppSettings,
@@ -180,13 +180,24 @@ function choicesFromParsed(parsed?: ParsedTags | null): TianjiMessage['choices']
     .filter((c) => c.label.length > 0)
 }
 
-function displayContentFromAssistant(raw: string, parsed?: ParsedTags | null): string {
+/**
+ * 气泡/正文展示：优先 parsed.maintext，否则走 sanitize（抽 maintext + 剥控制块）。
+ * 绝不把带一堆 XML 标签的 raw 原样塞进 UI。
+ */
+function displayContentFromAssistant(
+  raw: string,
+  parsed?: ParsedTags | null,
+  settings?: Record<string, unknown> | null,
+): string {
   if (parsed?.maintext?.trim()) {
     let out = parsed.maintext.trim()
+    // maintext 内偶发嵌套标签时再剥一层
+    out = sanitizeAssistantForDisplay(out, settings, { includeSum: false }) || out
     if (parsed.sum?.trim()) out += `\n\n〔小结〕${parsed.sum.trim()}`
     return out
   }
-  return raw.trim()
+  const cleaned = sanitizeAssistantForDisplay(raw, settings)
+  return cleaned || String(raw || '').trim()
 }
 
 function hydrateMessagesFromSession(session: ChatSession) {
@@ -194,11 +205,15 @@ function hydrateMessagesFromSession(session: ChatSession) {
     messages.value = defaultLocalMessages()
     return
   }
+  const presetSettings =
+    (presets.value.find((p) => p.id === session.presetId || p.id === settings.value?.activePresetId)
+      ?.settings as Record<string, unknown> | undefined) ||
+    (settings.value as unknown as Record<string, unknown> | null)
   messages.value = session.messages.map((m) => {
     const role = stRoleToTianji(m.role)
     const content =
       role === 'oracle'
-        ? displayContentFromAssistant(m.content, m.parsed)
+        ? displayContentFromAssistant(m.content, m.parsed, presetSettings)
         : m.content
     return {
       id: m.id,
@@ -630,10 +645,7 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
     throw new Error('天机返回为空，请检查模型名是否与中转一致')
   }
 
-  // 展示兼容（display regex + 折叠）；标签解析仍用原文，避免正则误伤 <vars>
-  const displayPrep = prepareAssistantDisplay(rawOriginal, normalizedSettings, {
-    keepGameTags: true,
-  })
+  // 标签解析必须用原文，避免 display regex 误伤 <vars>/<Memory>
   const raw = rawOriginal
 
   const tags = s.customTags?.length ? s.customTags : [...DEFAULT_TAGS]
@@ -642,9 +654,13 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
   const parsed = aggregateEvents(events)
   const hasTags = !!(parsed.maintext || parsed.options.length || parsed.sum)
 
-  // 展示：仍解析标签；局面写入改由 runSettle，story 的 <vars> 不改档
+  // 展示：剥标签 / 抽 maintext（与解析分离）
   const { cleanedText } = extractVariables(raw)
-  const displayFallback = displayPrep.text || cleanedText
+  const displayFallback = sanitizeAssistantForDisplay(
+    cleanedText || raw,
+    normalizedSettings as Record<string, unknown>,
+  )
+
   // 会话气数键与游戏资源对齐（只读同步），不应用 LLM vars 补丁
   const settled = mergeSessionWithGame({})
 
@@ -669,8 +685,8 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
   }
 
   const content = hasTags
-    ? displayContentFromAssistant(cleanedText || raw, parsed)
-    : displayFallback || cleanedText || raw
+    ? displayContentFromAssistant(cleanedText || raw, parsed, normalizedSettings as Record<string, unknown>)
+    : displayFallback || sanitizeAssistantForDisplay(raw, normalizedSettings as Record<string, unknown>) || cleanedText || raw
 
   return {
     content,
@@ -702,9 +718,21 @@ export function useTianji() {
   )
 
   const displayMain = computed(() => {
-    if (lastParsed.value?.maintext) return lastParsed.value.maintext
+    if (lastParsed.value?.maintext?.trim()) {
+      // 已解析正文再剥一层，防 maintext 内嵌套标签
+      return (
+        sanitizeAssistantForDisplay(lastParsed.value.maintext, null, {
+          includeSum: false,
+        }) || lastParsed.value.maintext
+      )
+    }
     const last = [...messages.value].reverse().find((m) => m.role === 'oracle')
-    return last?.content ?? ''
+    // 消息 content 在写入时已 sanitize；流式中途可能仍是 raw
+    if (!last?.content) return ''
+    if (/<[A-Za-z\u4e00-\u9fff][\w\u4e00-\u9fff:.-]{0,40}[\s>]/.test(last.content)) {
+      return sanitizeAssistantForDisplay(last.content) || last.content
+    }
+    return last.content
   })
 
   const displayOptions = computed(() => lastParsed.value?.options ?? [])
@@ -760,8 +788,10 @@ export function useTianji() {
 
       const result = await callLlm(text, useStream ? (partial) => {
         if (streamMsg) {
+          // 流式也走展示净化：避免主 API 预设标签刷屏
+          const live = sanitizeAssistantForDisplay(partial) || partial
           messages.value = messages.value.map((m) =>
-            m.id === streamMsg!.id ? { ...m, content: partial } : m,
+            m.id === streamMsg!.id ? { ...m, content: live } : m,
           )
         }
       } : undefined)

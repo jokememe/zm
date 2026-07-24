@@ -1,20 +1,43 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import Icon from '@/components/ui/Icon.vue'
-import { navItems } from '@/data/mock'
+import { buildNavItems } from '@/composables/nav-badges'
 import { useGameState } from '@/composables/useGameState'
 import type { ViewId } from '@/types/game'
 
-const { currentView, navCollapsed, isCompact, navDrawerOpen, setView } = useGameState()
+const {
+  currentView,
+  navCollapsed,
+  isCompact,
+  navDrawerOpen,
+  setView,
+  disciples,
+  openUrgentEvents,
+  fieldPlots,
+  factions,
+  sectName,
+} = useGameState()
+
+const navItemsLive = computed(() =>
+  buildNavItems({
+    openUrgents: openUrgentEvents.value,
+    fieldPlots: fieldPlots.value,
+    disciples: disciples.value,
+    factions: factions.value,
+  }),
+)
 
 const groups = computed(() => {
-  const map = new Map<string, typeof navItems>()
-  for (const item of navItems) {
+  const map = new Map<string, ReturnType<typeof buildNavItems>>()
+  for (const item of navItemsLive.value) {
     if (!map.has(item.group)) map.set(item.group, [])
     map.get(item.group)!.push(item)
   }
   return [...map.entries()]
 })
+
+const discipleCount = computed(() => disciples.value.length)
+const openUrgentCount = computed(() => openUrgentEvents.value.length)
 
 /** 紧凑模式抽屉内始终展示文字 */
 const showLabels = computed(() => isCompact.value || !navCollapsed.value)
@@ -49,7 +72,7 @@ function go(id: ViewId) {
               type="button"
               class="nav-item"
               :class="{ active: currentView === item.id }"
-              :title="item.label"
+              :title="item.badge ? `${item.label}（${item.badge}）` : item.label"
               :aria-current="currentView === item.id ? 'page' : undefined"
               @click="go(item.id)"
             >
@@ -76,8 +99,11 @@ function go(id: ViewId) {
       <div class="foot-card">
         <Icon name="spark" :size="16" />
         <div>
-          <strong>天机可问</strong>
-          <p>{{ isCompact ? '底栏打开天机卷轴' : '点选事务后注入右侧卷轴' }}</p>
+          <strong>{{ sectName || '本宗' }}</strong>
+          <p>
+            在册 {{ discipleCount }} 人
+            <template v-if="openUrgentCount"> · 待决 {{ openUrgentCount }}</template>
+          </p>
         </div>
       </div>
     </footer>

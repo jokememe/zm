@@ -174,36 +174,61 @@ function capturePayload() {
   }
 }
 
-function applySaveBlob(save: GameSaveV1) {
+/**
+ * 写入存档到 live。
+ * 旧档若缺灵田/待决/势力/城池（空数组），保留当前种子，避免「读旧档把内政清空」。
+ * 弟子以存档为准（含空册：表示真的无人）。
+ */
+function applySaveBlob(save: GameSaveV1, opts?: { mergeSparse?: boolean }) {
+  const mergeSparse = opts?.mergeSparse !== false
   sectName.value = save.sectName || sectName.value
   masterName.value = save.masterName || masterName.value
   difficulty.value = save.difficulty
   Object.assign(resources, save.resources)
   Object.assign(calendar, save.calendar)
   disciples.value = save.disciples.map((d) => ({ ...d }))
-  factions.value = save.factions.map((f) => ({ ...f }))
-  cities.value = save.cities.map((c) => ({ ...c }))
-  notifications.value = save.notifications.map((n) => ({ ...n }))
-  fieldPlots.value = save.fieldPlots.map((f) => ({ ...f }))
-  urgentEvents.value = save.urgentEvents.map((e) => ({
-    ...e,
-    choices: (e.choices || []).map((c) => ({
-      ...c,
-      resourceDelta: c.resourceDelta ? { ...c.resourceDelta } : undefined,
-    })),
-  }))
-  designatedHeirId.value = save.designatedHeirId
+  if (!mergeSparse || save.factions.length > 0) {
+    factions.value = save.factions.map((f) => ({ ...f }))
+  }
+  if (!mergeSparse || save.cities.length > 0) {
+    cities.value = save.cities.map((c) => ({ ...c }))
+  }
+  if (!mergeSparse || save.notifications.length > 0) {
+    notifications.value = save.notifications.map((n) => ({ ...n }))
+  }
+  if (!mergeSparse || save.fieldPlots.length > 0) {
+    fieldPlots.value = save.fieldPlots.map((f) => ({ ...f }))
+  }
+  if (!mergeSparse || save.urgentEvents.length > 0) {
+    urgentEvents.value = save.urgentEvents.map((e) => ({
+      ...e,
+      choices: (e.choices || []).map((c) => ({
+        ...c,
+        resourceDelta: c.resourceDelta ? { ...c.resourceDelta } : undefined,
+      })),
+    }))
+  }
+  if (save.designatedHeirId) {
+    designatedHeirId.value = save.designatedHeirId
+  }
   alchemyRecipes.value = applyStocksToRecipes(cloneAlchemySeed(), save.alchemyStocks)
 }
 
-/** 启动时若有存档且已开局过，恢复经营态 */
+/** 启动时若有存档且已开局过，恢复经营态（含弟子名册等） */
 function tryHydrateOnBoot() {
   if (typeof window === 'undefined') return
   if (!openingDone.value) return
   const save = loadGameSaveFromStorage()
   if (!save) return
   try {
-    applySaveBlob(save)
+    applySaveBlob(save, { mergeSparse: true })
+    // 旧档读入后立刻用完整 v1 回写，下次解析更稳；弟子等以当前 live 为准
+    try {
+      const upgraded = buildGameSave(capturePayload())
+      writeGameSaveToStorage(upgraded)
+    } catch {
+      /* ignore upgrade write */
+    }
   } catch (e) {
     console.warn('[存档] 启动恢复失败', e)
   }
@@ -213,6 +238,40 @@ tryHydrateOnBoot()
 let compactMql: MediaQueryList | null = null
 let compactListener: (() => void) | null = null
 let compactBound = false
+let persistFlushBound = false
+let persistTimer: ReturnType<typeof setTimeout> | null = null
+
+function persistGameSaveNow(): boolean {
+  if (!openingDone.value) return false
+  try {
+    const save = buildGameSave(capturePayload())
+    return writeGameSaveToStorage(save)
+  } catch (e) {
+    console.warn('[存档] 写入失败', e)
+    return false
+  }
+}
+
+/** 取消防抖并立即落盘（刷新/切页前调用） */
+function flushPersist() {
+  if (persistTimer) {
+    clearTimeout(persistTimer)
+    persistTimer = null
+  }
+  if (!openingDone.value) return
+  persistGameSaveNow()
+}
+
+function bindPersistFlush() {
+  if (persistFlushBound || typeof window === 'undefined') return
+  persistFlushBound = true
+  const onLeave = () => flushPersist()
+  window.addEventListener('pagehide', onLeave)
+  window.addEventListener('beforeunload', onLeave)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushPersist()
+  })
+}
 
 function bindCompactListener() {
   if (compactBound || typeof window === 'undefined') return
@@ -221,6 +280,7 @@ function bindCompactListener() {
   compactMql = window.matchMedia(COMPACT_MQ)
   compactListener = () => evaluateCompact()
   compactMql.addEventListener('change', compactListener)
+  bindPersistFlush()
 }
 
 export function useGameState() {
@@ -450,30 +510,27 @@ export function useGameState() {
     return { ok: true, name: recipe.name, stock }
   }
 
-  let persistTimer: ReturnType<typeof setTimeout> | null = null
   function schedulePersist() {
     if (!openingDone.value) return
     if (persistTimer) clearTimeout(persistTimer)
     persistTimer = setTimeout(() => {
       persistTimer = null
-      persistGameSave()
+      persistGameSaveNow()
     }, 200)
   }
 
   function persistGameSave(): boolean {
-    try {
-      const save = buildGameSave(capturePayload())
-      return writeGameSaveToStorage(save)
-    } catch (e) {
-      console.warn('[存档] 写入失败', e)
-      return false
+    if (persistTimer) {
+      clearTimeout(persistTimer)
+      persistTimer = null
     }
+    return persistGameSaveNow()
   }
 
   function hydrateFromSave(): boolean {
     const save = loadGameSaveFromStorage()
     if (!save) return false
-    applySaveBlob(save)
+    applySaveBlob(save, { mergeSparse: true })
     openingDone.value = true
     showOpening.value = false
     return true
@@ -525,7 +582,9 @@ export function useGameState() {
       masterName: masterName.value,
       difficulty: difficulty.value,
     })
+    // 开局瞬间同步落盘，避免尚未 debounce 就刷新丢档
     persistGameSave()
+    bindPersistFlush()
   }
 
   /** 仅重看开场（不重置资源） */

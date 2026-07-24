@@ -388,27 +388,32 @@ function rowBrief(rec: MemoryRecord): string {
 
       <template v-else-if="tab === 'sched'">
         <p class="mem__hint">
-          调度参数在密匣「显示」页可改。此处展示当前楼层进度与纪要细/粗行。
+          此处只读当前进度。改数字请到密匣 →「显示」→「表格记忆 · 何时填表 / 纪要合并 / 索引召回」。
         </p>
         <div class="mem__sum" v-if="schedStatus">
           <section>
-            <h4>楼层调度</h4>
-            <pre>AI 楼层：{{ schedStatus.totalAiFloors }}
-上次填表：{{ schedStatus.lastUpdatedAiFloor }}
-下次触发：{{ schedStatus.nextTriggerFloor }}
-有效未记录：{{ schedStatus.effectiveUnrecorded }}
-应更新：{{ schedStatus.shouldUpdate ? '是' : '否' }} ({{ schedStatus.reason }})
-读深={{ schedStatus.autoUpdateThreshold }} 频率={{ schedStatus.autoUpdateFrequency }}
-批={{ schedStatus.updateBatchSize }} 跳过={{ schedStatus.skipUpdateFloors }}
-保留标记={{ schedStatus.retainRecentLayers }}</pre>
+            <h4>楼层进度</h4>
+            <pre>当前 AI 回复总层数：{{ schedStatus.totalAiFloors }}
+上次成功填表停在第：{{ schedStatus.lastUpdatedAiFloor }} 层
+按频率估算下次可触发：第 {{ schedStatus.nextTriggerFloor }} 层
+有效尚未记入的层数：{{ schedStatus.effectiveUnrecorded }}
+本轮是否应自动填表：{{ schedStatus.shouldUpdate ? '是' : '否' }}
+（原因码：{{ schedStatus.reason }}）
+
+— 当前调度参数 —
+上下文读深：最近 {{ schedStatus.autoUpdateThreshold }} 条 AI 楼
+填表频率：每 {{ schedStatus.autoUpdateFrequency }} 层一次（0=关自动）
+每批处理：{{ schedStatus.updateBatchSize }} 层
+跳过最近未定：{{ schedStatus.skipUpdateFloors }} 层
+填表标记保留：{{ schedStatus.retainRecentLayers }}（0=不清理）</pre>
           </section>
           <section>
-            <h4>纪要表</h4>
-            <pre>细行：{{ journalFine }}
-总行：{{ journalTotal }}
-合并阈值：{{ schedStatus.autoMergeThreshold }}
-保留细行：{{ schedStatus.autoMergeReserve }}
-召回 Top-K：{{ schedStatus.recallTopK }} / 索引 {{ schedStatus.recallIndexTop }}</pre>
+            <h4>情节纪要</h4>
+            <pre>细行（未合并）：{{ journalFine }}
+纪要总行：{{ journalTotal }}
+细行达到 {{ schedStatus.autoMergeThreshold }} 条时触发合并
+合并时留下最近细行：{{ schedStatus.autoMergeReserve }} 条
+推演注入：索引最多 {{ schedStatus.recallIndexTop }} 条 · 全文召回 Top-{{ schedStatus.recallTopK }}</pre>
           </section>
         </div>
         <p v-else class="mem__empty">调度状态不可用</p>

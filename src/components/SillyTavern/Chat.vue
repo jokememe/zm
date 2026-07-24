@@ -1,9 +1,13 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { USER_ROLE } from '@/sillytavern'
+import { USER_ROLE, sanitizeAssistantForDisplay } from '@/sillytavern'
 import { useSillytavern } from '@/composables/useSillytavern'
 import VariablePanel from './VariablePanel.vue'
 import './st-shared.css'
+
+function displayAssistant(raw: string): string {
+  return sanitizeAssistantForDisplay(raw) || raw
+}
 
 const {
   activeChat,
@@ -66,10 +70,15 @@ async function confirmEdit() {
           <template v-else>
             <div class="st-bubble">
               <div class="st-bubble__role">{{ msg.role === 'user' ? '你' : 'AI' }}</div>
-              <div class="st-bubble__content">{{ msg.content }}</div>
-              <div v-if="msg.parsed?.maintext" class="st-bubble__parsed">
-                <p>{{ msg.parsed.maintext }}</p>
-                <ul v-if="msg.parsed.options?.length">
+              <div class="st-bubble__content">
+                {{
+                  msg.role === 'assistant'
+                    ? msg.parsed?.maintext || displayAssistant(msg.content)
+                    : msg.content
+                }}
+              </div>
+              <div v-if="msg.parsed?.options?.length" class="st-bubble__parsed">
+                <ul>
                   <li v-for="(opt, i) in msg.parsed.options" :key="i">{{ opt }}</li>
                 </ul>
               </div>

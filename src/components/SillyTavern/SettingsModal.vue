@@ -15,6 +15,8 @@ import {
 } from '@/sillytavern'
 import {
   resolveTableMemoryScheduler,
+  DEFAULT_RECALL_SYSTEM_PROMPT,
+  DEFAULT_RECALL_USER_TEMPLATE,
   type TableMemorySchedulerSettings,
 } from '@/composables/table-memory-settings'
 import './st-shared.css'
@@ -176,8 +178,15 @@ function patchSched(
   raw: string | number | boolean,
 ) {
   const cur = resolveTableMemoryScheduler(props.settings)
-  let val: number | boolean = raw as boolean
-  if (typeof raw !== 'boolean') {
+  let val: number | boolean | string = raw as boolean
+  if (
+    typeof raw === 'string' &&
+    (key === 'recallSystemPrompt' ||
+      key === 'recallUserTemplate' ||
+      key === 'recallJailbreakPrompt')
+  ) {
+    val = raw
+  } else if (typeof raw !== 'boolean') {
     const n = Number(raw)
     val = Number.isFinite(n) ? Math.round(n) : (cur[key] as number)
   }
@@ -187,6 +196,20 @@ function patchSched(
       [key]: val,
     },
   })
+}
+
+function resetRecallPrompts() {
+  const cur = resolveTableMemoryScheduler(props.settings)
+  patch({
+    tableMemoryScheduler: {
+      ...cur,
+      recallSystemPrompt: DEFAULT_RECALL_SYSTEM_PROMPT,
+      recallUserTemplate: DEFAULT_RECALL_USER_TEMPLATE,
+      // 破限不替用户塞默认越狱，只清空
+      recallJailbreakPrompt: '',
+    },
+  })
+  showToast('已恢复默认召回提示词（破限已清空）')
 }
 
 const KEEP_PRESETS = [0, 4, 8, 12, 16, 24, 32, 48, 64] as const
@@ -822,6 +845,38 @@ function onTagsInput(value: string) {
           </p>
         </div>
 
+        <div class="tj-field" style="margin-bottom: 0.85rem">
+          <label>局面结算 · 破限（jailbreak）</label>
+          <textarea
+            class="tj-textarea"
+            rows="5"
+            :value="props.settings.settleJailbreakPrompt || ''"
+            :disabled="(props.settings.settlementMode || 'secondary_then_primary') === 'off'"
+            placeholder="空 = 不插破限。主推演心法的越狱不会进次 API；需要时把破限贴在这里。发送顺序：system 任务 → 本段破限 → user 局面与契约。"
+            @change="
+              patch({
+                settleJailbreakPrompt: ($event.target as HTMLTextAreaElement).value,
+              })
+            "
+          />
+          <p class="tj-hint">
+            <strong>为何单独做：</strong>
+            回合后的局面分析走次 API（或回退主 API）的侧路，不拼主推演心法，
+            所以心法里的「相对/越狱」挂不进这里。敏感收徒、资源、外交等若被模型拒写，
+            在此贴破限。默认空，不内置越狱正文。与「召回破限」互不共用。
+          </p>
+          <div class="tj-row" style="margin-top: 0.4rem">
+            <button
+              type="button"
+              class="btn btn-ghost btn-sm"
+              :disabled="!(props.settings.settleJailbreakPrompt || '').trim()"
+              @click="patch({ settleJailbreakPrompt: '' })"
+            >
+              清空破限
+            </button>
+          </div>
+        </div>
+
         <div class="tj-row" style="margin-bottom: 0.75rem">
           <button
             type="button"
@@ -1317,16 +1372,19 @@ function onTagsInput(value: string) {
       <div class="api-panel" style="margin-top: 1rem">
         <div class="secondary-head">
           <div>
-            <h3 class="api-panel__title">表格记忆 · 调度（shujuku 对齐）</h3>
+            <h3 class="api-panel__title">表格记忆 · 何时填表</h3>
             <p class="tj-hint" style="margin: 0">
-              读深 / 每N层 / 批大小 / 跳过 / 保留 · 与 AutoCardUpdater 同语义。
-              次API 结算与填表无关；填表走记忆API（或回退）。
+              推演结束后，按「AI 回复楼层」决定要不要自动把剧情写入角色/物品/纪要表。
+              与局面结算（次 API）无关；填表请求走「记忆 API」，未配齐时会跳过或回退。
+              参数语义对齐 shujuku AutoCardUpdater，下面用白话说明每个数字的作用。
             </p>
           </div>
         </div>
-        <div class="sched-grid">
-          <label class="tj-field">
-            <span>读深 threshold</span>
+
+        <div class="sched-fields">
+          <label class="tj-field sched-field">
+            <span class="sched-field__title">上下文读深</span>
+            <span class="sched-field__key">threshold · 默认 3</span>
             <input
               class="tj-input limit-input"
               type="number"
@@ -1335,9 +1393,16 @@ function onTagsInput(value: string) {
               :value="sched.autoUpdateThreshold"
               @change="patchSched('autoUpdateThreshold', ($event.target as HTMLInputElement).value)"
             />
+            <p class="sched-field__help">
+              一次填表时，模型最多回看最近多少条<strong>AI 楼</strong>的正文。
+              数字越大，跨多轮的人物状态越容易写全，但更费 token、更慢。
+              一般 2～5 即可；剧情跳跃大可调到 6～10。
+            </p>
           </label>
-          <label class="tj-field">
-            <span>每 N 层 frequency</span>
+
+          <label class="tj-field sched-field">
+            <span class="sched-field__title">填表频率（每 N 层）</span>
+            <span class="sched-field__key">frequency · 默认 1 · 填 0 关闭自动</span>
             <input
               class="tj-input limit-input"
               type="number"
@@ -1346,9 +1411,17 @@ function onTagsInput(value: string) {
               :value="sched.autoUpdateFrequency"
               @change="patchSched('autoUpdateFrequency', ($event.target as HTMLInputElement).value)"
             />
+            <p class="sched-field__help">
+              距「上次成功填表」又攒了多少层 AI 回复后，才触发下一轮自动填表。
+              <strong>1</strong> = 几乎每层都填（最跟手、最费调用）；
+              <strong>3</strong> = 大约每 3 层填一次（省费用）；
+              <strong>0</strong> = 关闭自动填表（仍可在记忆面板里手动追溯）。
+            </p>
           </label>
-          <label class="tj-field">
-            <span>批大小 batch</span>
+
+          <label class="tj-field sched-field">
+            <span class="sched-field__title">每批处理楼数</span>
+            <span class="sched-field__key">batch · 默认 3</span>
             <input
               class="tj-input limit-input"
               type="number"
@@ -1357,9 +1430,16 @@ function onTagsInput(value: string) {
               :value="sched.updateBatchSize"
               @change="patchSched('updateBatchSize', ($event.target as HTMLInputElement).value)"
             />
+            <p class="sched-field__help">
+              若一次落后了很多层，不会把全部旧楼塞进同一请求，而是按此批大小切片。
+              例如落后 9 层、批大小 3 → 拆成 3 批依次（或并发）处理。
+              批太大单次 prompt 变长易超时；批太小则请求次数变多。
+            </p>
           </label>
-          <label class="tj-field">
-            <span>并发组 concurrent</span>
+
+          <label class="tj-field sched-field">
+            <span class="sched-field__title">最大并发批次数</span>
+            <span class="sched-field__key">concurrent · 默认 1</span>
             <input
               class="tj-input limit-input"
               type="number"
@@ -1368,9 +1448,16 @@ function onTagsInput(value: string) {
               :value="sched.maxConcurrentGroups"
               @change="patchSched('maxConcurrentGroups', ($event.target as HTMLInputElement).value)"
             />
+            <p class="sched-field__help">
+              上面拆出的多批，最多同时打几路记忆 API。
+              <strong>1</strong> = 串行最稳（推荐本地/限流接口）；
+              云端额度充足可调 2～3 加快追赶落后楼层。并发过高容易限流或写表冲突。
+            </p>
           </label>
-          <label class="tj-field">
-            <span>跳过最近 skip</span>
+
+          <label class="tj-field sched-field">
+            <span class="sched-field__title">跳过最近未定层</span>
+            <span class="sched-field__key">skip · 默认 0</span>
             <input
               class="tj-input limit-input"
               type="number"
@@ -1379,9 +1466,16 @@ function onTagsInput(value: string) {
               :value="sched.skipUpdateFloors"
               @change="patchSched('skipUpdateFloors', ($event.target as HTMLInputElement).value)"
             />
+            <p class="sched-field__help">
+              从「当前最新 AI 楼」往回数，最近这几层<strong>先不算进触发、也不写入本轮填表</strong>。
+              适合：你常删楼重推、最新一两层剧情还可能改口——可设 1～2，等剧情稳定后再记。
+              0 = 最新层也会参与填表（默认）。
+            </p>
           </label>
-          <label class="tj-field">
-            <span>保留标记 retain</span>
+
+          <label class="tj-field sched-field">
+            <span class="sched-field__title">填表楼层标记保留数</span>
+            <span class="sched-field__key">retain · 默认 100 · 0=永不清理</span>
             <input
               class="tj-input limit-input"
               type="number"
@@ -1390,19 +1484,27 @@ function onTagsInput(value: string) {
               :value="sched.retainRecentLayers"
               @change="patchSched('retainRecentLayers', ($event.target as HTMLInputElement).value)"
             />
+            <p class="sched-field__help">
+              系统会记下「哪些 AI 楼已经填过表」。标记无限堆积没必要，只保留最近 N 次的标记。
+              超出的旧标记丢掉后，不会删表格内容，只是调度历史变短。
+              <strong>0</strong> = 永不清理标记（长对话可能略占存储）。日常 50～200 即可。
+            </p>
           </label>
         </div>
-        <p class="tj-hint">
-          frequency=0 关闭自动填表；retain=0 不清理填表标记。默认 threshold=3, freq=1, batch=3, skip=0, retain=100。
+
+        <p class="tj-hint" style="margin-top: 0.65rem">
+          推荐起步：读深 3 · 每层 1 · 批 3 · 并发 1 · 跳过 0 · 标记保留 100。
+          想省调用：把「每 N 层」改成 2 或 3；想更稳追记：读深 5、批 2、并发 1。
         </p>
       </div>
 
       <div class="api-panel" style="margin-top: 0.85rem">
         <div class="secondary-head">
           <div>
-            <h3 class="api-panel__title">纪要合并 · 清理</h3>
+            <h3 class="api-panel__title">情节纪要 · 自动合并</h3>
             <p class="tj-hint" style="margin: 0">
-              细行过多时合并为 auto_merged 粗行（不是单纯删除）。对齐 performAutoMergeSummary。
+              填表时会往「情节纪要」里追加细行（逐段摘要）。细行太多会占注入额度，
+              开启后会把较早的细行<strong>合成</strong>为粗行（auto_merged），不是直接删剧情。
             </p>
           </div>
           <label class="switch">
@@ -1422,9 +1524,10 @@ function onTagsInput(value: string) {
             }}</span>
           </label>
         </div>
-        <div class="sched-grid">
-          <label class="tj-field">
-            <span>合并阈值</span>
+        <div class="sched-fields">
+          <label class="tj-field sched-field">
+            <span class="sched-field__title">触发合并的细行数</span>
+            <span class="sched-field__key">merge threshold · 默认 20</span>
             <input
               class="tj-input limit-input"
               type="number"
@@ -1433,9 +1536,15 @@ function onTagsInput(value: string) {
               :value="sched.autoMergeThreshold"
               @change="patchSched('autoMergeThreshold', ($event.target as HTMLInputElement).value)"
             />
+            <p class="sched-field__help">
+              非合并态的细行达到这个数量时，才启动一轮合并。
+              数字越小合并越勤、摘要更粗；越大则细节保留更久、表更长。
+            </p>
           </label>
-          <label class="tj-field">
-            <span>保留细行 reserve</span>
+
+          <label class="tj-field sched-field">
+            <span class="sched-field__title">合并时留下的最近细行</span>
+            <span class="sched-field__key">reserve · 默认 0</span>
             <input
               class="tj-input limit-input"
               type="number"
@@ -1444,9 +1553,16 @@ function onTagsInput(value: string) {
               :value="sched.autoMergeReserve"
               @change="patchSched('autoMergeReserve', ($event.target as HTMLInputElement).value)"
             />
+            <p class="sched-field__help">
+              合并时从队尾往前，有多少条细行<strong>不参与合并、原样保留</strong>。
+              例如阈值 20、保留 5：只把较早的约 15 条细行压成粗行，最近 5 条仍保持细粒度。
+              0 = 凡进入本轮合并范围的细行都可被压。
+            </p>
           </label>
-          <label class="tj-field">
-            <span>合并批大小</span>
+
+          <label class="tj-field sched-field">
+            <span class="sched-field__title">合并时每批送模的细行数</span>
+            <span class="sched-field__key">merge batch · 默认 5</span>
             <input
               class="tj-input limit-input"
               type="number"
@@ -1455,6 +1571,10 @@ function onTagsInput(value: string) {
               :value="sched.mergeBatchSize"
               @change="patchSched('mergeBatchSize', ($event.target as HTMLInputElement).value)"
             />
+            <p class="sched-field__help">
+              一次合并调用里，把多少条细行打包给模型压成粗行。
+              批太大单次输出易截断；批太小请求次数变多。一般 4～8。
+            </p>
           </label>
         </div>
       </div>
@@ -1462,9 +1582,13 @@ function onTagsInput(value: string) {
       <div class="api-panel" style="margin-top: 0.85rem">
         <div class="secondary-head">
           <div>
-            <h3 class="api-panel__title">索引召回 Top-K</h3>
+            <h3 class="api-panel__title">推演时注入 · 索引与召回</h3>
             <p class="tj-hint" style="margin: 0">
-              注入=实体表 + 纪要索引(~50) + 召回全文 Top-K(~20)。不是整表硬截断。
+              下次推演拼装系统世界书时，不会把整本记忆硬塞进去，而是：
+              <strong>实体表（角色/物品/设定）</strong>
+              + <strong>纪要轻量索引</strong>
+              + <strong>与当前输入最相关的若干条纪要全文</strong>。
+              关闭召回后仍可注入实体表与短索引（视实现），但不再做 Top-K 精选全文。
             </p>
           </div>
           <label class="switch">
@@ -1484,9 +1608,10 @@ function onTagsInput(value: string) {
             }}</span>
           </label>
         </div>
-        <div class="sched-grid">
-          <label class="tj-field">
-            <span>索引条数</span>
+        <div class="sched-fields">
+          <label class="tj-field sched-field">
+            <span class="sched-field__title">纪要索引条数上限</span>
+            <span class="sched-field__key">index top · 默认 50</span>
             <input
               class="tj-input limit-input"
               type="number"
@@ -1495,9 +1620,15 @@ function onTagsInput(value: string) {
               :value="sched.recallIndexTop"
               @change="patchSched('recallIndexTop', ($event.target as HTMLInputElement).value)"
             />
+            <p class="sched-field__help">
+              索引是「编码 + 一行摘要」的轻列表，先给模型扫一眼全书大纲。
+              条数多则覆盖面广、略费 token；一般 30～80。
+            </p>
           </label>
-          <label class="tj-field">
-            <span>召回 Top-K</span>
+
+          <label class="tj-field sched-field">
+            <span class="sched-field__title">召回全文条数（Top-K）</span>
+            <span class="sched-field__key">top-k · 默认 20</span>
             <input
               class="tj-input limit-input"
               type="number"
@@ -1506,9 +1637,15 @@ function onTagsInput(value: string) {
               :value="sched.recallTopK"
               @change="patchSched('recallTopK', ($event.target as HTMLInputElement).value)"
             />
+            <p class="sched-field__help">
+              根据你本回合输入/事务关键词，从纪要里挑出最相关的 K 条<strong>全文</strong>注入。
+              K 越大细节越多，但挤占上下文；剧情复杂可 20～30，省 token 可 8～12。
+            </p>
           </label>
-          <label class="tj-field">
-            <span>实体表字数</span>
+
+          <label class="tj-field sched-field">
+            <span class="sched-field__title">实体表注入字数上限</span>
+            <span class="sched-field__key">entity chars · 默认 2800</span>
             <input
               class="tj-input limit-input"
               type="number"
@@ -1518,9 +1655,15 @@ function onTagsInput(value: string) {
               :value="sched.entityInjectMaxChars"
               @change="patchSched('entityInjectMaxChars', ($event.target as HTMLInputElement).value)"
             />
+            <p class="sched-field__help">
+              角色档案、物品、世界设定拼进世界书时的总字符软上限。
+              弟子/宝物很多时可适当加大；上下文紧张则减小，避免挤掉近端剧情。
+            </p>
           </label>
-          <label class="tj-field">
-            <span>纪要全文字数</span>
+
+          <label class="tj-field sched-field">
+            <span class="sched-field__title">纪要全文注入字数上限</span>
+            <span class="sched-field__key">journal chars · 默认 3200</span>
             <input
               class="tj-input limit-input"
               type="number"
@@ -1529,6 +1672,96 @@ function onTagsInput(value: string) {
               step="100"
               :value="sched.journalInjectMaxChars"
               @change="patchSched('journalInjectMaxChars', ($event.target as HTMLInputElement).value)"
+            />
+            <p class="sched-field__help">
+              Top-K 召回的纪要正文合计字符软上限。与「召回条数」一起限制记忆块体积：
+              条数再多也会在此截断，防止单次推演 prompt 爆炸。
+            </p>
+          </label>
+        </div>
+
+        <div class="sched-field" style="margin-top: 0.85rem">
+          <div class="sched-prompt-head">
+            <div>
+              <span class="sched-field__title">召回支路 · 提示词与破限</span>
+              <span class="sched-field__key">
+                主推演心法里的 jailbreak 不会进记忆 API；这里是召回专用挂点
+              </span>
+            </div>
+            <button type="button" class="btn btn-ghost btn-sm" @click="resetRecallPrompts">
+              恢复默认
+            </button>
+          </div>
+          <p class="sched-field__help" style="margin-bottom: 0.55rem">
+            <strong>为什么要单独做？</strong>
+            精确召回 / 纪要注入是侧路调用，不走主推演心法的 prompt_order，
+            所以心法里的「相对/越狱」挂不进这里。需要破限时请写在本页「破限」框，
+            不要指望主预设自动带过来。
+          </p>
+          <p class="sched-field__help" style="margin-bottom: 0.55rem">
+            占位符（发送前替换）：
+            <code>{{'{{topK}}'}}</code>
+            ·
+            <code>{{'{{query}}'}}</code>
+            ·
+            <code>{{'{{previousPlot}}'}}</code>
+            ·
+            <code>{{'{{indexText}}'}}</code>
+            。侧路选码须输出
+            <code>&lt;recall&gt;编码1,编码2&lt;/recall&gt;</code>
+            。
+          </p>
+
+          <label class="tj-field" style="margin-bottom: 0.65rem">
+            <span>破限（jailbreak）· 召回专用</span>
+            <textarea
+              class="tj-textarea"
+              rows="5"
+              :value="sched.recallJailbreakPrompt"
+              placeholder="空 = 不插破限。粘贴你的破限文即可；侧路会作为独立 system，注入主推演时会前缀到【召回纪要】前。"
+              @change="
+                patchSched(
+                  'recallJailbreakPrompt',
+                  ($event.target as HTMLTextAreaElement).value,
+                )
+              "
+            />
+            <p class="sched-field__help" style="margin-top: 0.35rem">
+              <strong>生效两处：</strong>
+              ① 记忆 API 精确选码时：system 任务 → <em>本段破限</em> → user 任务；
+              ② 拼进主推演世界书的召回纪要块前，加「档案阅读约定」前缀（主模型读敏感档案时用）。
+              默认空，不内置任何越狱正文。
+            </p>
+          </label>
+
+          <label class="tj-field" style="margin-bottom: 0.65rem">
+            <span>System（选码任务 · 角色设定）</span>
+            <textarea
+              class="tj-textarea"
+              rows="4"
+              :value="sched.recallSystemPrompt"
+              placeholder="空则使用内置默认"
+              @change="
+                patchSched(
+                  'recallSystemPrompt',
+                  ($event.target as HTMLTextAreaElement).value,
+                )
+              "
+            />
+          </label>
+          <label class="tj-field">
+            <span>User 模板（选码任务 · 本回）</span>
+            <textarea
+              class="tj-textarea"
+              rows="8"
+              :value="sched.recallUserTemplate"
+              placeholder="空则使用内置默认"
+              @change="
+                patchSched(
+                  'recallUserTemplate',
+                  ($event.target as HTMLTextAreaElement).value,
+                )
+              "
             />
           </label>
         </div>
@@ -1850,6 +2083,7 @@ function onTagsInput(value: string) {
   margin-bottom: 0.35rem;
 }
 
+/* 旧两列表格（若别处仍用） */
 .sched-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
@@ -1867,6 +2101,84 @@ function onTagsInput(value: string) {
 .sched-grid .limit-input {
   width: 100%;
   max-width: none;
+}
+
+/* 表格记忆参数：单列说明 + 数字框，避免「读深/批大小」半截标签 */
+.sched-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  margin-top: 0.75rem;
+}
+
+.sched-field {
+  display: block;
+  margin: 0;
+  padding: 0.7rem 0.8rem;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.35);
+  border: 1px solid var(--border-subtle);
+}
+
+.sched-field__title {
+  display: block;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--ink-primary);
+  margin-bottom: 0.1rem;
+}
+
+.sched-field__key {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--ink-faint);
+  letter-spacing: 0.02em;
+  margin-bottom: 0.4rem;
+}
+
+.sched-field .limit-input {
+  width: 100%;
+  max-width: 12rem;
+}
+
+.sched-field__help {
+  margin: 0.45rem 0 0;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--ink-muted);
+}
+
+.sched-field__help strong {
+  color: var(--ink-secondary);
+  font-weight: 600;
+}
+
+.sched-field__help code {
+  font-size: 0.72rem;
+  padding: 0.05em 0.3em;
+  border-radius: 4px;
+  background: rgba(91, 141, 239, 0.12);
+  color: var(--moon-deep);
+}
+
+.sched-prompt-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.35rem;
+}
+
+.sched-prompt-head .sched-field__title {
+  margin-bottom: 0.15rem;
+}
+
+.sched-field .tj-textarea {
+  width: 100%;
+  min-height: 4.5rem;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.78rem;
+  line-height: 1.45;
 }
 
 .model-fetch-err {

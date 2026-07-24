@@ -73,7 +73,7 @@ export function restoreWorldState(snap: WorldSnapshot): void {
   if (Array.isArray(snap.urgentEvents)) {
     setRef(gs.urgentEvents as Ref<typeof snap.urgentEvents>, clone(snap.urgentEvents))
   }
-  // 删楼回滚 / apply 后同步最小存档
+  // 删楼回滚 / disciple.add 等 apply 后立即同步最小存档（勿仅 debounce）
   try {
     if (typeof gs.persistGameSave === 'function') {
       gs.persistGameSave()
