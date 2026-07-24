@@ -57,6 +57,8 @@ import {
 } from '@/composables/table-memory'
 import { syncTableMemoryFromGame } from '@/composables/table-memory-sync'
 import { runSettle, textFromSettleCompletion } from '@/composables/settle-runner'
+import { runMemoryTrace } from '@/composables/table-memory-trace'
+import { buildMainFormatMemoryHint } from '@/composables/table-memory-prompts'
 import { snapshotWorldState, restoreWorldState } from '@/composables/world-state'
 import {
   isApiConfigured,
@@ -108,6 +110,10 @@ const showLorebooks = ref(false)
 const showPresets = ref(false)
 const showVariables = ref(false)
 const showMemory = ref(false)
+/** 记忆追溯（yuzuki trace）最近结果，供顶栏/锦囊展示 */
+const lastMemoryTrace = ref<string | null>(null)
+const lastMemoryTraceKind = ref<'ok' | 'fail' | 'info' | null>(null)
+const memoryTracing = ref(false)
 
 let seq = 100
 let bootPromise: Promise<void> | null = null
@@ -526,6 +532,14 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
   )
   const livePreset: ChatPreset = { ...preset, settings: normalizedSettings }
 
+  // 主推演格式 = 用户模板 + yuzuki 填表契约（TABLE_DEFINITIONS 动态）
+  const baseFormat =
+    s.formatPromptTemplate || DEFAULT_SETTINGS.formatPromptTemplate || ''
+  const memoryFormatHint = buildMainFormatMemoryHint()
+  const formatPrompt = baseFormat.includes('<Memory>')
+    ? `${baseFormat}\n\n${memoryFormatHint}`
+    : `${baseFormat}\n\n${memoryFormatHint}`
+
   const { messages: promptMessages } = assemblePrompt({
     userInput: userText + contextBlock,
     history,
@@ -535,7 +549,7 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
     characterName: s.characterName || '天机',
     variables: vars,
     extraVariables: vars,
-    formatPrompt: s.formatPromptTemplate || DEFAULT_SETTINGS.formatPromptTemplate,
+    formatPrompt,
     historyKeepMessages:
       typeof s.historyKeepMessages === 'number' ? s.historyKeepMessages : 12,
   })
@@ -770,6 +784,38 @@ export function useTianji() {
       typing.value = false
 
       if (settings.value) {
+        const postChatForSide = async ({
+          target,
+          body,
+        }: {
+          target: 'primary' | 'secondary'
+          body: Record<string, unknown>
+        }) => {
+          const api = settings.value!.api
+          const ep =
+            target === 'secondary' && api.secondary?.enabled
+              ? {
+                  baseUrl: normalizeBaseUrl(api.secondary.baseUrl || ''),
+                  apiKey: String(api.secondary.apiKey || ''),
+                  model: String(api.secondary.model || '').trim(),
+                }
+              : {
+                  baseUrl: normalizeBaseUrl(api.baseUrl || ''),
+                  apiKey: String(api.apiKey || ''),
+                  model: String(api.model || '').trim() || String(body.model || ''),
+                }
+          const model = ep.model || String(body.model || '')
+          const completion = await postChatCompletion({
+            baseUrl: ep.baseUrl,
+            apiKey: ep.apiKey,
+            body: { ...body, model, stream: false },
+          })
+          if (!completion.ok) {
+            return { ok: false as const, error: completion.error || '请求失败' }
+          }
+          return textFromSettleCompletion(completion.data)
+        }
+
         settling.value = true
         lastSettlementKind.value = 'info'
         lastSettlement.value = '局面分析中…'
@@ -779,32 +825,7 @@ export function useTianji() {
             maintext: result.parsed?.maintext || result.content,
             sum: result.parsed?.sum || '',
             settings: settings.value,
-            postChat: async ({ target, body }) => {
-              const api = settings.value!.api
-              const ep =
-                target === 'secondary' && api.secondary?.enabled
-                  ? {
-                      baseUrl: normalizeBaseUrl(api.secondary.baseUrl || ''),
-                      apiKey: String(api.secondary.apiKey || ''),
-                      model: String(api.secondary.model || '').trim(),
-                    }
-                  : {
-                      baseUrl: normalizeBaseUrl(api.baseUrl || ''),
-                      apiKey: String(api.apiKey || ''),
-                      model: String(api.model || '').trim() || String(body.model || ''),
-                    }
-              const model = ep.model || String(body.model || '')
-              const completion = await postChatCompletion({
-                baseUrl: ep.baseUrl,
-                apiKey: ep.apiKey,
-                body: { ...body, model, stream: false },
-              })
-              if (!completion.ok) {
-                return { ok: false as const, error: completion.error || 'settle 请求失败' }
-              }
-              // 次 API 思考模型常把 JSON 放在 reasoning_content，勿只读 message.content
-              return textFromSettleCompletion(completion.data)
-            },
+            postChat: postChatForSide,
           })
 
           if (settle.status === 'skipped') {
@@ -833,6 +854,44 @@ export function useTianji() {
             lastSettlement.value = '本回无变更'
           }
 
+          // ★ yuzuki 式独立记忆追溯：主文若未带 Memory，用二次任务强制抽表
+          memoryTracing.value = true
+          lastMemoryTraceKind.value = 'info'
+          lastMemoryTrace.value = '记忆追溯中…'
+          try {
+            const mem = await runMemoryTrace({
+              userText: text,
+              maintext: result.parsed?.maintext || result.content,
+              sum: result.parsed?.sum || '',
+              settings: settings.value,
+              postChat: postChatForSide,
+            })
+            if (mem.status === 'applied') {
+              lastMemoryTraceKind.value = 'ok'
+              lastMemoryTrace.value = `表格已更新 ${mem.count} 行`
+              if (settings.value) {
+                await syncSystemLore(settings.value)
+                lorebooks.value = await getLorebooks()
+              }
+            } else if (mem.status === 'empty') {
+              lastMemoryTraceKind.value = 'info'
+              lastMemoryTrace.value = '记忆追溯无新增'
+            } else if (mem.status === 'skipped') {
+              lastMemoryTraceKind.value = 'info'
+              lastMemoryTrace.value =
+                mem.reason === 'api_not_ready' ? '记忆追溯跳过（未通灵）' : `记忆追溯跳过`
+            } else {
+              lastMemoryTraceKind.value = 'fail'
+              const raw = mem.error || '失败'
+              lastMemoryTrace.value = raw.length > 48 ? raw.slice(0, 48) + '…' : raw
+            }
+          } catch (memErr) {
+            lastMemoryTraceKind.value = 'fail'
+            lastMemoryTrace.value = String((memErr as Error).message || memErr).slice(0, 48)
+          } finally {
+            memoryTracing.value = false
+          }
+
           // 把 stateAfter 回写到本条 assistant，供删楼回滚
           if (chatSession.value) {
             const msgs = chatSession.value.messages.map((m) =>
@@ -858,6 +917,7 @@ export function useTianji() {
           lastSettlement.value = msg.length > 60 ? msg.slice(0, 60) + '…' : msg
         } finally {
           settling.value = false
+          memoryTracing.value = false
         }
       }
     } catch (e) {
@@ -1127,6 +1187,93 @@ export function useTianji() {
    * 宗门/掌门/难度须已由 applyOpeningConfig 写入 game state。
    * 不抛错阻断开局：DB 失败时仍写入本地卷首消息。
    */
+  /**
+   * 记忆锦囊手动触发：对最近一轮剧情跑 yuzuki 式追溯填表。
+   */
+  async function runManualMemoryTrace(): Promise<{ ok: boolean; message: string }> {
+    await boot()
+    if (!settings.value || !hasApiKey(settings.value)) {
+      return { ok: false, message: '未通灵，无法追溯' }
+    }
+    const session = chatSession.value
+    if (!session?.messages?.length) {
+      return { ok: false, message: '尚无会话' }
+    }
+    let lastUser = ''
+    let lastAsst = ''
+    for (let i = session.messages.length - 1; i >= 0; i--) {
+      const m = session.messages[i]
+      if (!lastAsst && m.role === 'assistant') lastAsst = m.content
+      if (!lastUser && m.role === 'user') lastUser = m.content
+      if (lastUser && lastAsst) break
+    }
+    if (!lastAsst) return { ok: false, message: '没有可追溯的天机正文' }
+
+    memoryTracing.value = true
+    lastMemoryTraceKind.value = 'info'
+    lastMemoryTrace.value = '手动追溯中…'
+    try {
+      const mem = await runMemoryTrace({
+        userText: lastUser,
+        maintext: lastAsst,
+        sum: lastParsed.value?.sum || '',
+        settings: settings.value,
+        postChat: async ({ target, body }) => {
+          const api = settings.value!.api
+          const ep =
+            target === 'secondary' && api.secondary?.enabled
+              ? {
+                  baseUrl: normalizeBaseUrl(api.secondary.baseUrl || ''),
+                  apiKey: String(api.secondary.apiKey || ''),
+                  model: String(api.secondary.model || '').trim(),
+                }
+              : {
+                  baseUrl: normalizeBaseUrl(api.baseUrl || ''),
+                  apiKey: String(api.apiKey || ''),
+                  model: String(api.model || '').trim() || String(body.model || ''),
+                }
+          const model = ep.model || String(body.model || '')
+          const completion = await postChatCompletion({
+            baseUrl: ep.baseUrl,
+            apiKey: ep.apiKey,
+            body: { ...body, model, stream: false },
+          })
+          if (!completion.ok) {
+            return { ok: false as const, error: completion.error || '请求失败' }
+          }
+          return textFromSettleCompletion(completion.data)
+        },
+      })
+      if (mem.status === 'applied') {
+        lastMemoryTraceKind.value = 'ok'
+        lastMemoryTrace.value = `手动追溯：更新 ${mem.count} 行`
+        await syncSystemLore(settings.value)
+        lorebooks.value = await getLorebooks()
+        return { ok: true, message: lastMemoryTrace.value }
+      }
+      if (mem.status === 'empty') {
+        lastMemoryTraceKind.value = 'info'
+        lastMemoryTrace.value = '手动追溯无新增'
+        return { ok: true, message: lastMemoryTrace.value }
+      }
+      if (mem.status === 'skipped') {
+        lastMemoryTraceKind.value = 'info'
+        lastMemoryTrace.value = '手动追溯已跳过'
+        return { ok: false, message: lastMemoryTrace.value }
+      }
+      lastMemoryTraceKind.value = 'fail'
+      lastMemoryTrace.value = mem.error || '失败'
+      return { ok: false, message: lastMemoryTrace.value }
+    } catch (e) {
+      const msg = String((e as Error).message || e)
+      lastMemoryTraceKind.value = 'fail'
+      lastMemoryTrace.value = msg.slice(0, 48)
+      return { ok: false, message: msg }
+    } finally {
+      memoryTracing.value = false
+    }
+  }
+
   async function startOpeningRun() {
     lastError.value = null
     lastSettlement.value = null
@@ -1231,6 +1378,9 @@ export function useTianji() {
     lastError,
     lastSettlement,
     lastSettlementKind,
+    lastMemoryTrace,
+    lastMemoryTraceKind,
+    memoryTracing,
     lastParsed,
     llmReady,
     apiMissing,
@@ -1272,5 +1422,6 @@ export function useTianji() {
     addPresetFromDefault,
     setSessionVariables,
     startOpeningRun,
+    runManualMemoryTrace,
   }
 }

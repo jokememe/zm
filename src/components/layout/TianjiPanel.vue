@@ -29,6 +29,9 @@ const {
   lastError,
   lastSettlement,
   lastSettlementKind,
+  lastMemoryTrace,
+  lastMemoryTraceKind,
+  memoryTracing,
   settings,
   showSettings,
   showLorebooks,
@@ -257,6 +260,18 @@ async function onPresetClose() {
       >
         <template v-if="settling">局面分析进行中…</template>
         <template v-else>局面：{{ lastSettlement }}</template>
+      </p>
+      <p
+        v-if="memoryTracing || lastMemoryTrace"
+        class="tianji-settle"
+        :class="{
+          'tianji-settle--ok': lastMemoryTraceKind === 'ok',
+          'tianji-settle--fail': lastMemoryTraceKind === 'fail',
+          'tianji-settle--info': lastMemoryTraceKind === 'info' || memoryTracing,
+        }"
+      >
+        <template v-if="memoryTracing">记忆追溯进行中…</template>
+        <template v-else>记忆：{{ lastMemoryTrace }}</template>
       </p>
 
       <div ref="listRef" id="tianji-message-list" class="tianji__list scroll-y">

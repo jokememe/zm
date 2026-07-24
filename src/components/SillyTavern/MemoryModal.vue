@@ -21,12 +21,16 @@ import {
   formatLongMemory,
   loadMemoryBank,
 } from '@/composables/memory-lore'
+import { buildTableDefinitionsText, buildTraceRealtimePrompt } from '@/composables/table-memory-prompts'
+import { useTianji } from '@/composables/useTianji'
 import './st-shared.css'
 
 const emit = defineEmits<{ close: [] }>()
+const { runManualMemoryTrace, memoryTracing, lastMemoryTrace, lastMemoryTraceKind } =
+  useTianji()
 
 const state = ref<TableMemoryState>(loadTableMemory())
-const tab = ref<'tables' | 'sum' | 'inject'>('tables')
+const tab = ref<'tables' | 'sum' | 'inject' | 'scheme'>('tables')
 const activeTableId = ref('character_profile')
 const status = ref('')
 const selectedRecordId = ref<string | null>(null)
@@ -74,6 +78,9 @@ const columnNames = computed(() =>
 const total = computed(() => countAllRecords(state.value))
 
 const injectionPreview = computed(() => formatWorldStateInjection(state.value))
+const schemaPreview = computed(() => buildTableDefinitionsText(state.value))
+const tracePromptPreview = computed(() => buildTraceRealtimePrompt(state.value))
+const tracing = computed(() => memoryTracing.value)
 
 const sumShort = computed(() => {
   loadMemoryBank()
@@ -107,6 +114,13 @@ function onClearAll() {
   state.value = loadTableMemory()
   selectedRecordId.value = null
   status.value = '表格记忆已清空'
+}
+
+async function onTraceNow() {
+  status.value = '追溯任务请求中…'
+  const r = await runManualMemoryTrace()
+  status.value = r.message
+  refresh()
 }
 
 function onClearTable() {
@@ -181,14 +195,40 @@ function rowBrief(rec: MemoryRecord): string {
         >
           注入预览
         </button>
+        <button
+          type="button"
+          class="mem__tab"
+          :class="{ active: tab === 'scheme' }"
+          @click="tab = 'scheme'"
+        >
+          追溯契约
+        </button>
       </div>
 
       <p v-if="status" class="mem__status">{{ status }}</p>
+      <p
+        v-if="lastMemoryTrace"
+        class="mem__status"
+        :class="{
+          'mem__status--ok': lastMemoryTraceKind === 'ok',
+          'mem__status--fail': lastMemoryTraceKind === 'fail',
+        }"
+      >
+        最近追溯：{{ lastMemoryTrace }}
+      </p>
 
       <template v-if="tab === 'tables'">
         <div class="mem__toolbar">
           <button type="button" class="btn btn-primary btn-sm" @click="onSyncGame">
             从经营同步
+          </button>
+          <button
+            type="button"
+            class="btn btn-primary btn-sm"
+            :disabled="tracing"
+            @click="onTraceNow"
+          >
+            {{ tracing ? '追溯中…' : '追溯填表（yuzuki）' }}
           </button>
           <button type="button" class="btn btn-ghost btn-sm" @click="onClearTable">
             清空本表
@@ -197,7 +237,7 @@ function rowBrief(rec: MemoryRecord): string {
             清空全部表
           </button>
           <span class="mem__hint">
-            推演时模型可用 &lt;Memory&gt; 增量改表；同步会用弟子/宝物/势力填底表。
+            对标 yuzuki-Memory：主推演可写 &lt;Memory&gt;；每回合后另跑独立追溯任务抽表；也可手动点「追溯填表」。
           </span>
         </div>
 
@@ -270,18 +310,35 @@ function rowBrief(rec: MemoryRecord): string {
         </div>
       </template>
 
-      <template v-else>
+      <template v-else-if="tab === 'inject'">
         <p class="mem__hint">
           下列内容会作为系统世界书「表格世界状态」常驻注入天机推演（与局面快照、sum
-          记忆并列）。
+          记忆并列）——对应 yuzuki 的【当前世界状态参考】。
         </p>
         <pre class="mem__inject">{{ injectionPreview }}</pre>
+      </template>
+
+      <template v-else>
+        <p class="mem__hint">
+          移植自 yuzuki-Memory 的 TABLE_DEFINITIONS + traceRealtime 守则；独立追溯任务与主推演格式提示共用此契约。
+        </p>
+        <h4 class="mem__h4">数据库结构定义</h4>
+        <pre class="mem__inject">{{ schemaPreview }}</pre>
+        <h4 class="mem__h4">追溯提示词（摘要）</h4>
+        <pre class="mem__inject">{{ tracePromptPreview }}</pre>
       </template>
     </div>
 
     <template #footer>
       <button type="button" class="btn btn-ghost" @click="emit('close')">关闭</button>
-      <button type="button" class="btn btn-primary" @click="onSyncGame">同步并刷新</button>
+      <button
+        type="button"
+        class="btn btn-primary"
+        :disabled="tracing"
+        @click="onTraceNow"
+      >
+        {{ tracing ? '追溯中…' : '追溯填表' }}
+      </button>
     </template>
   </ModalFrame>
 </template>
@@ -319,6 +376,17 @@ function rowBrief(rec: MemoryRecord): string {
 .mem__status {
   margin: 0;
   font-size: 0.8rem;
+  color: var(--jade, #5a9);
+}
+.mem__status--ok {
+  color: var(--jade, #3a8);
+}
+.mem__status--fail {
+  color: #a33;
+}
+.mem__h4 {
+  margin: 0.5rem 0 0.25rem;
+  font-size: 0.85rem;
   color: var(--jade, #5a9);
 }
 .mem__toolbar {
