@@ -366,7 +366,7 @@ export function useGameState() {
       id: `n-evt-${eventId}-${Date.now()}`,
       title: `已决：${ev.title}`,
       body: `${choice.label}（${choice.effect}）`,
-      timeLabel: '方才',
+      time: '方才',
       category: '决议',
       read: true,
     }

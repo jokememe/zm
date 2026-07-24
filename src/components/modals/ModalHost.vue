@@ -21,7 +21,6 @@ import {
 const { stack, close } = useModal()
 const toast = useToast()
 const {
-  adjustResource,
   setDesignatedHeir,
   advanceSeason,
   assignFieldPlot,
