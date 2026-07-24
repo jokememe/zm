@@ -1700,13 +1700,13 @@ function onTagsInput(value: string) {
           </p>
           <p class="sched-field__help" style="margin-bottom: 0.55rem">
             占位符（发送前替换）：
-            <code>{{'{{topK}}'}}</code>
+            <code v-pre>{{topK}}</code>
             ·
-            <code>{{'{{query}}'}}</code>
+            <code v-pre>{{query}}</code>
             ·
-            <code>{{'{{previousPlot}}'}}</code>
+            <code v-pre>{{previousPlot}}</code>
             ·
-            <code>{{'{{indexText}}'}}</code>
+            <code v-pre>{{indexText}}</code>
             。侧路选码须输出
             <code>&lt;recall&gt;编码1,编码2&lt;/recall&gt;</code>
             。
