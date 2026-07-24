@@ -170,6 +170,11 @@ export interface AppSettings {
   thinkingDisplay: 'fold' | 'hide' | 'inline';
   /** World settle after story: off | secondary API only | secondary then primary fallback */
   settlementMode?: 'off' | 'secondary_only' | 'secondary_then_primary';
+  /**
+   * 天机拼装 prompt 时，至少保留最近多少条 user/assistant 消息。
+   * 在 token 预算之外优先保近端上下文；0 = 仅按 token 预算裁剪（旧行为）。
+   */
+  historyKeepMessages?: number;
 }
 
 export const DEFAULT_FORMAT_PROMPT = `你必须严格按照以下 XML 标签格式输出回复，不要使用 Markdown 包裹：
@@ -214,6 +219,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   formatPromptTemplate: DEFAULT_FORMAT_PROMPT,
   thinkingDisplay: 'fold',
   settlementMode: 'secondary_then_primary',
+  historyKeepMessages: 12,
 };
 
 // ========== Chat Types ==========

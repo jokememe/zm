@@ -26,6 +26,73 @@ export interface AssembleOptions {
   formatPrompt?: string
   /** 默认：完整 ST 预设仍追加游戏 format（宗门气数标签）；可关 */
   appendFormatPrompt?: boolean
+  /**
+   * 至少保留最近 N 条 user/assistant（近端优先）。
+   * 0 = 仅按 token 预算；默认由调用方从 settings.historyKeepMessages 传入。
+   */
+  historyKeepMessages?: number
+}
+
+/** 粗估 token（与现有拼装一致：字数/4） */
+export function estimateTokensRough(text: string): number {
+  return Math.max(0, String(text || '').length / 4)
+}
+
+/**
+ * 从会话历史选出注入 prompt 的近期消息。
+ * - keepMessages &gt; 0：先锁定最近 N 条（近端必留）
+ * - 再在 token 预算内尽量向前多装旧消息
+ * - system 角色跳过
+ */
+export function selectRecentHistory(
+  history: ChatMessage[],
+  opts: {
+    maxContextTokens?: number
+    budgetRatio?: number
+    keepMessages?: number
+    transformContent?: (content: string, role: string) => string
+  } = {},
+): { role: 'user' | 'assistant'; content: string }[] {
+  const maxContextTokens = opts.maxContextTokens ?? 8192
+  const budgetRatio = opts.budgetRatio ?? 0.75
+  const budget = Math.max(256, maxContextTokens * budgetRatio)
+  const keep = Math.max(0, Math.min(64, Math.round(opts.keepMessages ?? 0)))
+  const transform =
+    opts.transformContent ?? ((c: string) => c)
+
+  type Row = { role: 'user' | 'assistant'; content: string; tokens: number }
+  const candidates: Row[] = []
+  for (let i = history.length - 1; i >= 0; i--) {
+    const msg = history[i]
+    if (msg.role !== 'user' && msg.role !== 'assistant') continue
+    const content = transform(msg.content, msg.role)
+    candidates.push({
+      role: msg.role,
+      content,
+      tokens: estimateTokensRough(content),
+    })
+  }
+  // candidates[0] = 最新
+
+  const selected: Row[] = []
+  let used = 0
+
+  for (let i = 0; i < candidates.length; i++) {
+    const row = candidates[i]
+    const withinKeep = keep > 0 && selected.length < keep
+    if (withinKeep) {
+      selected.push(row)
+      used += row.tokens
+      continue
+    }
+    // 超出保底条数后：仅 token 预算允许才继续装更旧的
+    if (used + row.tokens > budget) break
+    selected.push(row)
+    used += row.tokens
+  }
+
+  // selected 仍是新→旧，反转为时间正序
+  return selected.reverse().map(({ role, content }) => ({ role, content }))
 }
 
 export interface AssembleResult {
@@ -99,19 +166,18 @@ export function assemblePrompt(options: AssembleOptions): AssembleResult {
     (settings.openai_max_context as number) ||
     (settings.max_length as number) ||
     8192
-  let currentTokens = 0
+  const keepMessages =
+    typeof options.historyKeepMessages === 'number' && Number.isFinite(options.historyKeepMessages)
+      ? Math.max(0, Math.min(64, Math.round(options.historyKeepMessages)))
+      : 12
 
-  const recentHistory: { role: 'system' | 'user' | 'assistant'; content: string }[] = []
-  for (let i = history.length - 1; i >= 0; i--) {
-    const msg = history[i]
-    if (msg.role === 'system') continue
-    let content = msg.content
-    content = applyPromptRegex(content, scripts, msg.role === 'user')
-    const msgTokens = content.length / 4
-    if (currentTokens + msgTokens > maxContextTokens * 0.75) break
-    recentHistory.unshift({ role: msg.role, content })
-    currentTokens += msgTokens
-  }
+  const recentHistory = selectRecentHistory(history, {
+    maxContextTokens,
+    budgetRatio: 0.75,
+    keepMessages,
+    transformContent: (content, role) =>
+      applyPromptRegex(content, scripts, role === 'user'),
+  })
 
   const promptOrder = (settings.prompt_order || []) as FlatPromptOrderItem[]
   const prompts = (settings.prompts || []) as NormalizedPromptBlock[]

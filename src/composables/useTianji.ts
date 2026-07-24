@@ -523,6 +523,8 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
     variables: vars,
     extraVariables: vars,
     formatPrompt: s.formatPromptTemplate || DEFAULT_SETTINGS.formatPromptTemplate,
+    historyKeepMessages:
+      typeof s.historyKeepMessages === 'number' ? s.historyKeepMessages : 12,
   })
 
   const sampling = getSamplingForApi(normalizedSettings)

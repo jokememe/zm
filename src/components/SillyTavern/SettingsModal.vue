@@ -838,6 +838,29 @@ function onTagsInput(value: string) {
           <option value="hide">隐藏</option>
         </select>
       </div>
+      <div class="tj-field" style="margin-top: 0.85rem">
+        <label>天机上下文 · 至少保留最近消息条数</label>
+        <select
+          class="tj-select"
+          :value="String(settings.historyKeepMessages ?? 12)"
+          @change="
+            patch({
+              historyKeepMessages: Number(($event.target as HTMLSelectElement).value),
+            })
+          "
+        >
+          <option value="0">0 · 仅按 token 预算（旧行为）</option>
+          <option value="4">4 · 约近 2 回合</option>
+          <option value="8">8 · 约近 4 回合</option>
+          <option value="12">12 · 约近 6 回合（默认）</option>
+          <option value="16">16 · 约近 8 回合</option>
+          <option value="24">24 · 约近 12 回合</option>
+          <option value="32">32 · 更长近端（占更多上下文）</option>
+        </select>
+        <p class="tj-hint">
+          拼装 prompt 时优先保留最近 N 条玩家/天机消息，再在 token 预算内尽量塞更早的楼。条数越大，近端连贯越好，但更易挤占世界书与 system。
+        </p>
+      </div>
       <p class="tj-hint">库标识：{{ storageInfo.dbName }}（与其它项目隔离）</p>
     </template>
 

@@ -310,6 +310,10 @@ export function useSillytavern() {
           settings.value.uiMode === 'game'
             ? settings.value.formatPromptTemplate
             : undefined,
+        historyKeepMessages:
+          typeof settings.value.historyKeepMessages === 'number'
+            ? settings.value.historyKeepMessages
+            : 12,
       })
 
       const requestBody: Record<string, unknown> = {
@@ -411,6 +415,10 @@ export function useSillytavern() {
       variables: updatedChat.variables as Record<string, string | number>,
       extraVariables: updatedChat.variables,
       formatPrompt: settings.value.formatPromptTemplate,
+      historyKeepMessages:
+        typeof settings.value.historyKeepMessages === 'number'
+          ? settings.value.historyKeepMessages
+          : 12,
     })
 
     const tags = settings.value.customTags?.length

@@ -258,6 +258,11 @@ export async function getSettings(): Promise<AppSettings | undefined> {
   if (s.settlementMode === undefined) {
     s.settlementMode = 'secondary_then_primary';
   }
+  if (s.historyKeepMessages === undefined || !Number.isFinite(s.historyKeepMessages)) {
+    s.historyKeepMessages = 12;
+  } else {
+    s.historyKeepMessages = Math.max(0, Math.min(64, Math.round(Number(s.historyKeepMessages))));
+  }
   return s;
 }
 
