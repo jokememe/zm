@@ -66,6 +66,25 @@ function resolveName(id: string) {
   return disciples.value.find((d) => d.id === id || d.name === id)?.name ?? id
 }
 
+function onRemoveDisciple() {
+  const d = disciple.value
+  if (!d) return
+  if (
+    !window.confirm(
+      `确定将「${d.name}」从名册除名？关系与表格记忆会一并清理。`,
+    )
+  ) {
+    return
+  }
+  const r = removeDisciple(d.id)
+  if (r.ok) {
+    toast.success('已除名', r.name || d.name)
+    close()
+  } else {
+    toast.error('除名失败', r.error || '')
+  }
+}
+
 function onEventChoice(choiceId: string) {
   const e = event.value
   if (!e) return
@@ -286,21 +305,7 @@ async function doAdvanceSeason() {
           class="btn btn-ghost"
           type="button"
           style="color: #a04555"
-          @click="
-            () => {
-              if (
-                !confirm(
-                  `确定将「${disciple.name}」从名册除名？关系与表格记忆会一并清理。`,
-                )
-              )
-                return
-              const r = removeDisciple(disciple.id)
-              if (r.ok) {
-                toast.success('已除名', r.name || disciple.name)
-                close()
-              } else toast.error('除名失败', r.error || '')
-            }
-          "
+          @click="onRemoveDisciple"
         >
           除名
         </button>
