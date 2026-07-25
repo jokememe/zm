@@ -75,6 +75,7 @@ import {
   mergeApiSettings,
   saveApiCache,
   normalizeBaseUrl,
+  resolveRecallApiEndpoint,
 } from '@/composables/api-cache'
 
 const TIANJI_CHAT_NAME = '天机卷轴'
@@ -332,31 +333,23 @@ async function runPreTurnRecall(userText: string): Promise<string[] | null> {
       background,
       scheduler: sch,
       postChat: async (messages) => {
-        // 召回走记忆 API（未配则次回退主）
-        const api = s.api
-        let ep: { baseUrl: string; apiKey: string; model: string }
-        if (api.memory?.enabled) {
-          ep = {
-            baseUrl: normalizeBaseUrl(api.memory.baseUrl || ''),
-            apiKey: String(api.memory.apiKey || ''),
-            model: String(api.memory.model || '').trim(),
-          }
-        } else if (api.secondary?.enabled) {
-          ep = {
-            baseUrl: normalizeBaseUrl(api.secondary.baseUrl || ''),
-            apiKey: String(api.secondary.apiKey || ''),
-            model: String(api.secondary.model || '').trim(),
-          }
-        } else {
-          ep = {
-            baseUrl: normalizeBaseUrl(api.baseUrl || ''),
-            apiKey: String(api.apiKey || ''),
-            model: String(api.model || '').trim(),
-          }
+        // 召回 API → 记忆 → 次 → 主；召回启用未配齐则不静默偷线
+        const ep = resolveRecallApiEndpoint(s.api)
+        if (ep.kind === 'none') {
+          throw new Error(
+            ep.reason === 'recall_enabled_but_incomplete'
+              ? '召回 API 已启用但未配齐（请补地址/密钥/模型）'
+              : '无可用召回端点',
+          )
         }
-        if (!ep.baseUrl || !ep.apiKey || !ep.model) {
-          throw new Error('召回 API 未配齐')
-        }
+        const temperature =
+          typeof ep.temperature === 'number' && Number.isFinite(ep.temperature)
+            ? ep.temperature
+            : 0.2
+        const maxTokens =
+          typeof ep.maxTokens === 'number' && Number.isFinite(ep.maxTokens)
+            ? Math.max(256, Math.round(ep.maxTokens))
+            : 900
         const completion = await postChatCompletion({
           baseUrl: ep.baseUrl,
           apiKey: ep.apiKey,
@@ -364,15 +357,14 @@ async function runPreTurnRecall(userText: string): Promise<string[] | null> {
             model: ep.model,
             messages,
             stream: false,
-            temperature: 0.2,
-            max_tokens: 900,
+            temperature,
+            max_tokens: maxTokens,
           },
         })
         if (!completion.ok) throw new Error(completion.error || '召回请求失败')
         const data = completion.data as {
           choices?: Array<{ message?: { content?: string } }>
         }
-        // 兼容 reasoning 模型：走 settle 同款抽取
         const extracted = textFromSettleCompletion(completion.data)
         if (extracted.ok) return extracted.text
         return data.choices?.[0]?.message?.content || ''
@@ -380,14 +372,28 @@ async function runPreTurnRecall(userText: string): Promise<string[] | null> {
     })
 
     lastRecallCodes.value = result.codes
+    const epKind = resolveRecallApiEndpoint(s.api).kind
+    const via =
+      epKind === 'recall'
+        ? '召回API'
+        : epKind === 'memory'
+          ? '记忆API'
+          : epKind === 'secondary'
+            ? '次API'
+            : epKind === 'primary'
+              ? '主API'
+              : ''
     if (result.method === 'llm' && result.codes.length) {
       lastRecallTraceKind.value = 'ok'
-      lastRecallTrace.value = `LLM选码 ${result.codes.length} 条` +
+      lastRecallTrace.value =
+        `LLM选码 ${result.codes.length} 条` +
+        (via ? `·${via}` : '') +
         (result.attempts > 1 ? `（重试${result.attempts - 1}）` : '') +
         `：${result.codes.slice(0, 8).join(',')}${result.codes.length > 8 ? '…' : ''}`
     } else if (result.codes.length) {
       lastRecallTraceKind.value = 'info'
-      lastRecallTrace.value = `关键词召回 ${result.codes.length} 条` +
+      lastRecallTrace.value =
+        `关键词召回 ${result.codes.length} 条` +
         (result.error ? `（LLM失败：${result.error.slice(0, 24)}）` : '')
     } else {
       lastRecallTraceKind.value = 'info'
@@ -1514,6 +1520,7 @@ export function useTianji() {
           ...DEFAULT_SETTINGS.api,
           secondary: { ...DEFAULT_SETTINGS.api.secondary! },
           memory: { ...DEFAULT_SETTINGS.api.memory! },
+          recall: { ...DEFAULT_SETTINGS.api.recall! },
         },
       }
     }
@@ -1541,6 +1548,12 @@ export function useTianji() {
             ? JSON.parse(JSON.stringify(partial.api.memory))
             : {}),
         },
+        recall: {
+          ...(plainBase.api.recall ?? DEFAULT_SETTINGS.api.recall!),
+          ...(partial.api.recall
+            ? JSON.parse(JSON.stringify(partial.api.recall))
+            : {}),
+        },
       }
     }
     // 规范化 URL；数组字段保证是纯数组
@@ -1559,6 +1572,12 @@ export function useTianji() {
             baseUrl: normalizeBaseUrl(next.api.memory.baseUrl || ''),
           }
         : next.api.memory,
+      recall: next.api.recall
+        ? {
+            ...next.api.recall,
+            baseUrl: normalizeBaseUrl(next.api.recall.baseUrl || ''),
+          }
+        : next.api.recall,
     }
     next.activeLorebookIds = Array.isArray(next.activeLorebookIds)
       ? [...next.activeLorebookIds]

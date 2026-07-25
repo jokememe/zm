@@ -134,7 +134,7 @@ export interface ChatPreset {
 
 // ========== Settings Types ==========
 
-/** 次 API / 记忆 API 共用的旁路通道配置 */
+/** 次 API / 记忆 API / 召回 API 共用的旁路通道配置 */
 export interface SideApiChannel {
   enabled: boolean;
   baseUrl: string;
@@ -158,6 +158,12 @@ export interface ApiSettings {
    * 启用并配齐后，记忆追溯只走此通道，不抢主/次 API。
    */
   memory?: SideApiChannel;
+  /**
+   * 发话前纯召回选码专用通道。
+   * 启用并配齐后，索引 Top-K 选码只走此通道；
+   * 未启用时回退：记忆 → 次 → 主。
+   */
+  recall?: SideApiChannel;
 }
 
 export interface AppSettings {
@@ -284,6 +290,14 @@ export const DEFAULT_SETTINGS: AppSettings = {
       model: '',
       temperature: 0.2,
       maxTokens: 1200,
+    },
+    recall: {
+      enabled: false,
+      baseUrl: '',
+      apiKey: '',
+      model: '',
+      temperature: 0.2,
+      maxTokens: 900,
     },
   },
   apiMode: 'single',

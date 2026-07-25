@@ -52,6 +52,7 @@ export function loadApiCache(): Partial<ApiSettings> | null {
       timeout: typeof o.timeout === 'number' ? o.timeout : 60000,
       secondary: o.secondary,
       memory: o.memory,
+      recall: o.recall,
     }
   } catch {
     return null
@@ -69,6 +70,7 @@ export function saveApiCache(api: ApiSettings) {
         timeout: api.timeout ?? 60000,
         secondary: api.secondary,
         memory: api.memory,
+        recall: api.recall,
       }),
     )
   } catch {
@@ -97,6 +99,11 @@ export function mergeApiSettings(
       ...(fromDb?.memory || {}),
       ...(cache?.memory || {}),
     },
+    recall: {
+      ...defaults.recall!,
+      ...(fromDb?.recall || {}),
+      ...(cache?.recall || {}),
+    },
   }
 
   // cache 覆盖主字段（用户最近保存优先）
@@ -116,7 +123,103 @@ export function mergeApiSettings(
   }
 
   base.baseUrl = normalizeBaseUrl(base.baseUrl || '')
+  if (base.recall) {
+    base.recall = {
+      ...base.recall,
+      baseUrl: normalizeBaseUrl(base.recall.baseUrl || ''),
+    }
+  }
   return base
+}
+
+/** 旁路通道是否启用且 baseUrl/key/model 齐全 */
+export function sideChannelReady(
+  ch?: { enabled?: boolean; baseUrl?: string; apiKey?: string; model?: string } | null,
+): boolean {
+  if (!ch?.enabled) return false
+  return !!(
+    normalizeBaseUrl(String(ch.baseUrl || '')) &&
+    String(ch.apiKey || '').trim() &&
+    String(ch.model || '').trim()
+  )
+}
+
+/**
+ * 发话前召回选码端点优先级：
+ * 1. 召回 API 启用且配齐 → 只用召回（不抢记忆）
+ * 2. 召回启用但未配齐 → null（关键词兜底，不静默偷其它线）
+ * 3. 召回未启用 → 记忆 → 次 → 主（兼容旧配置）
+ */
+export function resolveRecallApiEndpoint(api: ApiSettings): {
+  kind: 'recall' | 'memory' | 'secondary' | 'primary' | 'none'
+  baseUrl: string
+  apiKey: string
+  model: string
+  temperature?: number
+  maxTokens?: number
+  reason: string
+} {
+  const rec = api.recall
+  if (rec?.enabled) {
+    if (sideChannelReady(rec)) {
+      return {
+        kind: 'recall',
+        baseUrl: normalizeBaseUrl(rec.baseUrl || ''),
+        apiKey: String(rec.apiKey || ''),
+        model: String(rec.model || '').trim(),
+        temperature: rec.temperature,
+        maxTokens: rec.maxTokens,
+        reason: 'recall_api',
+      }
+    }
+    return {
+      kind: 'none',
+      baseUrl: '',
+      apiKey: '',
+      model: '',
+      reason: 'recall_enabled_but_incomplete',
+    }
+  }
+  if (sideChannelReady(api.memory)) {
+    const m = api.memory!
+    return {
+      kind: 'memory',
+      baseUrl: normalizeBaseUrl(m.baseUrl || ''),
+      apiKey: String(m.apiKey || ''),
+      model: String(m.model || '').trim(),
+      temperature: m.temperature,
+      maxTokens: m.maxTokens,
+      reason: 'fallback_memory',
+    }
+  }
+  if (sideChannelReady(api.secondary)) {
+    const s = api.secondary!
+    return {
+      kind: 'secondary',
+      baseUrl: normalizeBaseUrl(s.baseUrl || ''),
+      apiKey: String(s.apiKey || ''),
+      model: String(s.model || '').trim(),
+      temperature: s.temperature,
+      maxTokens: s.maxTokens,
+      reason: 'fallback_secondary',
+    }
+  }
+  if (isApiConfigured(api)) {
+    return {
+      kind: 'primary',
+      baseUrl: normalizeBaseUrl(api.baseUrl || ''),
+      apiKey: String(api.apiKey || ''),
+      model: String(api.model || '').trim(),
+      reason: 'fallback_primary',
+    }
+  }
+  return {
+    kind: 'none',
+    baseUrl: '',
+    apiKey: '',
+    model: '',
+    reason: 'no_endpoint',
+  }
 }
 
 export function applyApiToSettings(

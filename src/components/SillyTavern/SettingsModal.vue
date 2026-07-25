@@ -54,6 +54,7 @@ const tabs = [
   { id: 'primary', label: '主 API' },
   { id: 'secondary', label: '次 API' },
   { id: 'memory', label: '记忆 API' },
+  { id: 'recall', label: '召回 API' },
   { id: 'tags', label: '称谓' },
   { id: 'prompt', label: '格式' },
   { id: 'display', label: '显示' },
@@ -66,6 +67,7 @@ const busy = ref<string | null>(null)
 const primaryModels = ref<string[]>([])
 const secondaryModels = ref<string[]>([])
 const memoryModels = ref<string[]>([])
+const recallModels = ref<string[]>([])
 const storageInfo = getActiveStorageInfo()
 const legacySharedDbs = ref<string[]>([])
 const allowCrossAppImport = ref(false)
@@ -95,6 +97,14 @@ const draftMemory = reactive({
   temperature: 0.2,
   maxTokens: 1200,
 })
+const draftRecall = reactive({
+  enabled: false,
+  baseUrl: '',
+  apiKey: '',
+  model: '',
+  temperature: 0.2,
+  maxTokens: 900,
+})
 
 function pullDraftFromProps() {
   const api = props.settings.api
@@ -117,6 +127,13 @@ function pullDraftFromProps() {
   draftMemory.model = mem?.model ?? ''
   draftMemory.temperature = mem?.temperature ?? 0.2
   draftMemory.maxTokens = mem?.maxTokens ?? 1200
+  const rec = api.recall
+  draftRecall.enabled = !!rec?.enabled
+  draftRecall.baseUrl = rec?.baseUrl ?? ''
+  draftRecall.apiKey = rec?.apiKey ?? ''
+  draftRecall.model = rec?.model ?? ''
+  draftRecall.temperature = rec?.temperature ?? 0.2
+  draftRecall.maxTokens = rec?.maxTokens ?? 900
 }
 
 onMounted(async () => {
@@ -148,6 +165,18 @@ const memory = computed(
       model: '',
       temperature: 0.2,
       maxTokens: 1200,
+    },
+)
+
+const recall = computed(
+  () =>
+    props.settings.api.recall ?? {
+      enabled: false,
+      baseUrl: '',
+      apiKey: '',
+      model: '',
+      temperature: 0.2,
+      maxTokens: 900,
     },
 )
 
@@ -235,6 +264,15 @@ function packSideChannels() {
       temperature: draftMemory.temperature,
       maxTokens: draftMemory.maxTokens,
     },
+    recall: {
+      ...recall.value,
+      enabled: draftRecall.enabled,
+      baseUrl: draftRecall.baseUrl.trim(),
+      apiKey: draftRecall.apiKey.trim(),
+      model: draftRecall.model.trim(),
+      temperature: draftRecall.temperature,
+      maxTokens: draftRecall.maxTokens,
+    },
   }
 }
 
@@ -302,6 +340,26 @@ async function flushMemory() {
   }
 }
 
+async function flushRecall() {
+  saveHint.value = '保存中…'
+  try {
+    await updateSettings({
+      api: {
+        ...props.settings.api,
+        baseUrl: draftPrimary.baseUrl.trim() || props.settings.api.baseUrl,
+        apiKey: draftPrimary.apiKey.trim() || props.settings.api.apiKey,
+        model: draftPrimary.model.trim() || props.settings.api.model,
+        ...packSideChannels(),
+      },
+    })
+    saveHint.value = '已保存'
+    showToast('召回 API 已保存')
+  } catch (e) {
+    saveHint.value = '保存失败'
+    showToast('保存失败：' + ((e as Error).message || String(e)))
+  }
+}
+
 function patchSecondary(partial: Partial<typeof draftSecondary>) {
   Object.assign(draftSecondary, partial)
   if (partial.enabled === true) {
@@ -316,6 +374,11 @@ function patchMemory(partial: Partial<typeof draftMemory>) {
   Object.assign(draftMemory, partial)
   // 开关即时落盘，避免只改开关却未保存
   void flushMemory()
+}
+
+function patchRecall(partial: Partial<typeof draftRecall>) {
+  Object.assign(draftRecall, partial)
+  void flushRecall()
 }
 
 function copyPrimaryToSecondary() {
@@ -348,6 +411,26 @@ function copySecondaryToMemory() {
   tab.value = 'memory'
 }
 
+function copyPrimaryToRecall() {
+  draftRecall.enabled = true
+  draftRecall.baseUrl = draftPrimary.baseUrl
+  draftRecall.apiKey = draftPrimary.apiKey
+  draftRecall.model = draftPrimary.model
+  void flushRecall()
+  showToast('已从主 API 复制到召回 API 并启用')
+  tab.value = 'recall'
+}
+
+function copyMemoryToRecall() {
+  draftRecall.enabled = true
+  draftRecall.baseUrl = draftMemory.baseUrl || draftPrimary.baseUrl
+  draftRecall.apiKey = draftMemory.apiKey || draftPrimary.apiKey
+  draftRecall.model = draftMemory.model || draftPrimary.model
+  void flushRecall()
+  showToast('已从记忆 API 复制到召回 API 并启用')
+  tab.value = 'recall'
+}
+
 const secondaryReady = computed(
   () =>
     !!draftSecondary.enabled &&
@@ -362,6 +445,14 @@ const memoryReady = computed(
     !!draftMemory.baseUrl.trim() &&
     !!draftMemory.apiKey.trim() &&
     !!draftMemory.model.trim(),
+)
+
+const recallReady = computed(
+  () =>
+    !!draftRecall.enabled &&
+    !!draftRecall.baseUrl.trim() &&
+    !!draftRecall.apiKey.trim() &&
+    !!draftRecall.model.trim(),
 )
 
 const primaryReady = computed(
@@ -381,7 +472,7 @@ const primaryAccessWarn = computed(() => {
 const lastFetchError = ref('')
 const lastFetchSource = ref<'remote' | 'fallback' | ''>('')
 
-type ApiWhich = 'primary' | 'secondary' | 'memory'
+type ApiWhich = 'primary' | 'secondary' | 'memory' | 'recall'
 
 function pickModel(which: ApiWhich, id: string) {
   if (which === 'primary') {
@@ -390,9 +481,12 @@ function pickModel(which: ApiWhich, id: string) {
   } else if (which === 'secondary') {
     draftSecondary.model = id
     void flushSecondary()
-  } else {
+  } else if (which === 'memory') {
     draftMemory.model = id
     void flushMemory()
+  } else {
+    draftRecall.model = id
+    void flushRecall()
   }
   showToast(`已选用模型：${id}`)
 }
@@ -401,7 +495,8 @@ async function handleFetchModels(which: ApiWhich) {
   // 先落盘草稿，保证用最新值拉模型
   if (which === 'primary') await flushPrimary()
   else if (which === 'secondary') await flushSecondary()
-  else await flushMemory()
+  else if (which === 'memory') await flushMemory()
+  else await flushRecall()
   busy.value = `fetch-${which}`
   lastFetchError.value = ''
   lastFetchSource.value = ''
@@ -411,15 +506,17 @@ async function handleFetchModels(which: ApiWhich) {
         ? { baseUrl: draftPrimary.baseUrl, apiKey: draftPrimary.apiKey }
         : which === 'secondary'
           ? { baseUrl: draftSecondary.baseUrl, apiKey: draftSecondary.apiKey }
-          : { baseUrl: draftMemory.baseUrl, apiKey: draftMemory.apiKey }
+          : which === 'memory'
+            ? { baseUrl: draftMemory.baseUrl, apiKey: draftMemory.apiKey }
+            : { baseUrl: draftRecall.baseUrl, apiKey: draftRecall.apiKey }
     const { models, source, error } = await fetchModels(target)
     if (which === 'primary') primaryModels.value = models
     else if (which === 'secondary') secondaryModels.value = models
-    else memoryModels.value = models
+    else if (which === 'memory') memoryModels.value = models
+    else recallModels.value = models
     lastFetchSource.value = source
     if (source === 'remote') {
       showToast(`已从接口获取 ${models.length} 个模型`)
-      // 若当前模型为空，自动填第一个
       if (which === 'primary' && !draftPrimary.model.trim() && models[0]) {
         draftPrimary.model = models[0]
         await flushPrimary()
@@ -431,6 +528,10 @@ async function handleFetchModels(which: ApiWhich) {
       if (which === 'memory' && !draftMemory.model.trim() && models[0]) {
         draftMemory.model = models[0]
         await flushMemory()
+      }
+      if (which === 'recall' && !draftRecall.model.trim() && models[0]) {
+        draftRecall.model = models[0]
+        await flushRecall()
       }
     } else {
       lastFetchError.value = error || '拉取失败，以下为猜测的常用模型，可手动改名'
@@ -447,7 +548,8 @@ async function handleFetchModels(which: ApiWhich) {
 async function handleTest(which: ApiWhich) {
   if (which === 'primary') await flushPrimary()
   else if (which === 'secondary') await flushSecondary()
-  else await flushMemory()
+  else if (which === 'memory') await flushMemory()
+  else await flushRecall()
   busy.value = `test-${which}`
   try {
     const target =
@@ -463,15 +565,27 @@ async function handleTest(which: ApiWhich) {
               apiKey: draftSecondary.apiKey,
               model: draftSecondary.model,
             }
-          : {
-              baseUrl: draftMemory.baseUrl,
-              apiKey: draftMemory.apiKey,
-              model: draftMemory.model,
-            }
+          : which === 'memory'
+            ? {
+                baseUrl: draftMemory.baseUrl,
+                apiKey: draftMemory.apiKey,
+                model: draftMemory.model,
+              }
+            : {
+                baseUrl: draftRecall.baseUrl,
+                apiKey: draftRecall.apiKey,
+                model: draftRecall.model,
+              }
     const result = await testConnection(target)
     if (result.ok) {
       const label =
-        which === 'primary' ? '主' : which === 'secondary' ? '辅' : '记忆'
+        which === 'primary'
+          ? '主'
+          : which === 'secondary'
+            ? '辅'
+            : which === 'memory'
+              ? '记忆'
+              : '召回'
       showToast(
         `${label}线连通` + (result.usedUrl ? ` · ${result.usedUrl}` : ''),
       )
@@ -1252,6 +1366,182 @@ function onTagsInput(value: string) {
       </div>
     </template>
 
+    <!-- 召回 API（发话前纯选码） -->
+    <template v-else-if="tab === 'recall'">
+      <div class="api-status-bar">
+        <span class="api-pill" :class="draftRecall.enabled ? 'is-on' : 'is-off'">
+          {{ draftRecall.enabled ? '召回 API 已启用' : '召回 API 未启用' }}
+        </span>
+        <span class="api-pill" :class="recallReady ? 'is-on' : 'is-warn'">
+          {{
+            recallReady
+              ? '字段已配齐'
+              : draftRecall.enabled
+                ? '请补全地址 / 密钥 / 模型'
+                : '关闭时回退记忆→次→主'
+          }}
+        </span>
+      </div>
+
+      <div class="api-panel api-panel--secondary">
+        <div class="secondary-head">
+          <div>
+            <h3 class="api-panel__title">召回 API（发话前索引选码）</h3>
+            <p class="tj-hint" style="margin: 0">
+              掌门每发一句，先用此通道从纪要索引选出
+              <code>&lt;recall&gt;</code> 编码，再注入主推演。
+              <strong>启用并配齐后只打召回 API</strong>（不抢记忆填表线）；
+              未启用时兼容：记忆 → 次 → 主。建议快/便宜小模型，温度 ≤0.3。
+            </p>
+          </div>
+          <label class="switch">
+            <input
+              type="checkbox"
+              :checked="draftRecall.enabled"
+              @change="
+                patchRecall({ enabled: ($event.target as HTMLInputElement).checked })
+              "
+            />
+            <span class="switch__ui" />
+            <span class="switch__label">{{ draftRecall.enabled ? '已启用' : '已关闭' }}</span>
+          </label>
+        </div>
+
+        <div class="tj-row" style="margin-bottom: 0.75rem">
+          <button
+            type="button"
+            class="btn btn-ghost btn-sm"
+            :disabled="!primaryReady"
+            @click="copyPrimaryToRecall"
+          >
+            从主 API 复制
+          </button>
+          <button
+            type="button"
+            class="btn btn-ghost btn-sm"
+            :disabled="!memoryReady && !primaryReady"
+            @click="copyMemoryToRecall"
+          >
+            从记忆 API 复制
+          </button>
+          <button type="button" class="btn btn-primary btn-sm" @click="flushRecall">
+            保存召回 API
+          </button>
+        </div>
+
+        <div class="tj-field">
+          <label>Base URL</label>
+          <input
+            v-model="draftRecall.baseUrl"
+            class="tj-input"
+            :disabled="!draftRecall.enabled"
+            placeholder="https://…/v1 或本地 http://localhost:1234/v1"
+            autocomplete="off"
+            spellcheck="false"
+            @blur="flushRecall"
+          />
+          <p class="tj-hint">OpenAI 兼容，不要带 /chat/completions</p>
+        </div>
+        <div class="tj-field">
+          <label>API Key</label>
+          <input
+            v-model="draftRecall.apiKey"
+            class="tj-input"
+            type="password"
+            :disabled="!draftRecall.enabled"
+            placeholder="sk-...（可与主/记忆不同）"
+            autocomplete="off"
+            @blur="flushRecall"
+          />
+        </div>
+        <div class="tj-field">
+          <label>模型</label>
+          <input
+            v-model="draftRecall.model"
+            class="tj-input"
+            list="tj-recall-models"
+            :disabled="!draftRecall.enabled"
+            placeholder="小模型即可，专做选码"
+            autocomplete="off"
+            @blur="flushRecall"
+          />
+          <datalist id="tj-recall-models">
+            <option v-for="m in recallModels" :key="m" :value="m" />
+          </datalist>
+        </div>
+        <div v-if="recallModels.length && draftRecall.enabled" class="model-pick">
+          <p class="model-pick__label">
+            {{ lastFetchSource === 'remote' ? '接口返回' : '参考列表' }} · 点击选用
+          </p>
+          <div class="model-pick__list">
+            <button
+              v-for="m in recallModels.slice(0, 80)"
+              :key="m"
+              type="button"
+              class="model-chip"
+              :class="{ 'is-on': draftRecall.model === m }"
+              @click="pickModel('recall', m)"
+            >
+              {{ m }}
+            </button>
+          </div>
+        </div>
+
+        <div class="secondary-grid">
+          <div class="tj-field">
+            <label>温度 {{ draftRecall.temperature }}</label>
+            <input
+              v-model.number="draftRecall.temperature"
+              type="range"
+              min="0"
+              max="1"
+              step="0.05"
+              :disabled="!draftRecall.enabled"
+              @change="flushRecall"
+            />
+          </div>
+          <div class="tj-field">
+            <label>最大 tokens</label>
+            <input
+              v-model.number="draftRecall.maxTokens"
+              class="tj-input"
+              type="number"
+              min="256"
+              step="64"
+              :disabled="!draftRecall.enabled"
+              @blur="flushRecall"
+            />
+          </div>
+        </div>
+
+        <p class="tj-hint" style="margin: 0.75rem 0 0.5rem">
+          <strong>破限要不要？</strong>
+          纯选码多数模型<strong>不强制</strong>破限；若中转拒答、空
+          <code>recall</code>、或主文读召回纪要时缩手，再到「显示 → 表格记忆 · 索引召回」填
+          <em>召回专用破限</em>（与主心法 jailbreak 分离）。
+        </p>
+
+        <div class="tj-row">
+          <button
+            type="button"
+            class="btn btn-ghost btn-sm"
+            :disabled="!draftRecall.enabled || busy === 'fetch-recall'"
+            @click="handleFetchModels('recall')"
+          >
+            拉取模型列表
+          </button>
+          <button
+            type="button"
+            class="btn btn-primary btn-sm"
+            :disabled="!draftRecall.enabled || busy === 'test-recall'"
+            @click="handleTest('recall')"
+          >
+            测试召回 API
+          </button>
+        </div>
+      </div>
+    </template>
+
     <template v-else-if="tab === 'tags'">
       <div class="tj-field">
         <label>输出标签（须含 maintext 与 option）</label>
@@ -1814,10 +2104,11 @@ function onTagsInput(value: string) {
               "
             />
             <p class="sched-field__help" style="margin-top: 0.35rem">
+              <strong>要不要开：</strong>纯选码通常可空；模型拒答/空 recall 时再填。
               <strong>生效两处：</strong>
-              ① 记忆 API 精确选码时：system 任务 → <em>本段破限</em> → user 任务；
-              ② 拼进主推演世界书的召回纪要块前，加「档案阅读约定」前缀（主模型读敏感档案时用）。
-              默认空，不内置任何越狱正文。
+              ① <em>召回 API</em>（或回退线）精确选码：system → 本段破限 → user；
+              ② 主推演读到的【召回纪要】块前加「档案阅读约定」。
+              与主心法 / 结算破限分离；默认空，不内置越狱。
             </p>
           </label>
 

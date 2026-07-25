@@ -78,6 +78,26 @@ class AppDatabase extends Dexie {
           if (s.api && s.api.secondary === undefined) {
             s.api.secondary = { enabled: false, baseUrl: '', apiKey: '', model: '' };
           }
+          if (s.api && s.api.memory === undefined) {
+            s.api.memory = {
+              enabled: false,
+              baseUrl: '',
+              apiKey: '',
+              model: '',
+              temperature: 0.2,
+              maxTokens: 1200,
+            };
+          }
+          if (s.api && s.api.recall === undefined) {
+            s.api.recall = {
+              enabled: false,
+              baseUrl: '',
+              apiKey: '',
+              model: '',
+              temperature: 0.2,
+              maxTokens: 900,
+            };
+          }
           await tx.table('settings').put(s);
         }
       });

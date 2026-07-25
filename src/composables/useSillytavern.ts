@@ -134,6 +134,10 @@ async function loadAll(force = false) {
               ...DEFAULT_SETTINGS.api.memory!,
               ...s.api?.memory,
             },
+            recall: {
+              ...DEFAULT_SETTINGS.api.recall!,
+              ...s.api?.recall,
+            },
           },
         }
       : { ...DEFAULT_SETTINGS }
@@ -198,6 +202,10 @@ export function useSillytavern() {
         memory: {
           ...settings.value.api.memory!,
           ...updates.api.memory,
+        },
+        recall: {
+          ...settings.value.api.recall!,
+          ...updates.api.recall,
         },
       }
     }
