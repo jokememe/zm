@@ -261,6 +261,15 @@ describe('index recall Top-K', () => {
       'J0002',
       'AM0001',
     ])
+    // 多行 + A 归一 J；无标签扫码
+    expect(parseRecallTag('<recall>\nA0003\nAM12\n</recall>')).toEqual([
+      'J0003',
+      'AM0012',
+    ])
+    expect(parseRecallTag('相关编码：J0009 AM0002 J0009')).toEqual([
+      'J0009',
+      'AM0002',
+    ])
   })
 
   it('formatTableMemoryInjection includes entity + index + recall', () => {
@@ -283,7 +292,7 @@ describe('index recall Top-K', () => {
     expect(inj.length).toBeGreaterThan(100)
   })
 
-  it('buildRecallMessages uses custom editable templates', async () => {
+  it('buildRecallMessages uses custom editable templates (simple)', async () => {
     const { buildRecallMessages, applyRecallTemplate } = await import('./table-memory-recall')
     const msgs = buildRecallMessages({
       query: '测问',
@@ -292,6 +301,7 @@ describe('index recall Top-K', () => {
       topK: 7,
       systemPrompt: '只选 {{topK}} 条，输出 recall',
       userTemplate: 'Q={{query}}\nP={{previousPlot}}\nI={{indexText}}\nK={{topK}}',
+      mode: 'simple',
     })
     expect(msgs[0].content).toBe('只选 7 条，输出 recall')
     expect(msgs[1].content).toContain('Q=测问')
@@ -299,6 +309,23 @@ describe('index recall Top-K', () => {
     expect(msgs[1].content).toContain('J0001')
     expect(msgs[1].content).toContain('K=7')
     expect(applyRecallTemplate('a{{topK}}b', { topK: 3 })).toBe('a3b')
+  })
+
+  it('buildRecallMessages multi mode follows pure-recall turns', async () => {
+    const { buildRecallMessages } = await import('./table-memory-recall')
+    const msgs = buildRecallMessages({
+      query: '接见使者',
+      previousPlot: '山门有客',
+      indexText: 'J0001 结盟',
+      background: '青岚宗',
+      topK: 12,
+      mode: 'multi',
+    })
+    expect(msgs.length).toBeGreaterThanOrEqual(4)
+    expect(msgs.some((m) => m.role === 'assistant')).toBe(true)
+    expect(msgs.map((m) => m.content).join('\n')).toContain('接见使者')
+    expect(msgs.map((m) => m.content).join('\n')).toContain('J0001')
+    expect(msgs.map((m) => m.content).join('\n')).toMatch(/12/)
   })
 
   it('buildRecallMessages inserts jailbreak as middle system (破限挂点)', async () => {
@@ -312,6 +339,7 @@ describe('index recall Top-K', () => {
       systemPrompt: 'SYS',
       userTemplate: 'USER',
       jailbreakPrompt: '【破限】允许引用敏感档案编码 {{topK}}',
+      mode: 'simple',
     })
     expect(msgs).toHaveLength(3)
     expect(msgs[0]).toEqual({ role: 'system', content: 'SYS' })
@@ -328,6 +356,7 @@ describe('index recall Top-K', () => {
       systemPrompt: 'S',
       userTemplate: 'U',
       jailbreakPrompt: '   ',
+      mode: 'simple',
     })
     expect(plain).toHaveLength(2)
 
@@ -341,19 +370,63 @@ describe('index recall Top-K', () => {
 })
 
 describe('maybeAppendJournalFromSum + injection path', () => {
-  it('appends fine journal from sum', () => {
+  it('appends fine journal from sufficiently long sum', () => {
     const s = createDefaultTableMemoryState()
-    expect(maybeAppendJournalFromSum(s, '本回收徒三人', 3)).toBe(true)
+    const sum =
+      '本回收徒三人，分别安置外门与杂役处，掌门于议事厅点名簿后遣长老训话，并令巡山弟子加强戒备。'
+    expect(sum.length).toBeGreaterThanOrEqual(40)
+    expect(maybeAppendJournalFromSum(s, sum, 3)).toBe(true)
     expect(countFineJournalRows(s)).toBe(1)
     expect(listJournalRows(s)[0].indexCode).toMatch(/^J/)
   })
 
+  it('skips short sum (shujuku-style: no one-line journal pollution)', () => {
+    const s = createDefaultTableMemoryState()
+    expect(maybeAppendJournalFromSum(s, '收徒三人', 1)).toBe(false)
+    expect(countFineJournalRows(s)).toBe(0)
+  })
+
+  it('skips sum when similar journal already exists', () => {
+    const s = createDefaultTableMemoryState()
+    const sum =
+      '本回收徒三人，分别安置外门与杂役处，掌门于议事厅点名簿后遣长老训话，并令巡山弟子加强戒备。'
+    expect(maybeAppendJournalFromSum(s, sum, 1)).toBe(true)
+    expect(maybeAppendJournalFromSum(s, sum + '。', 2)).toBe(false)
+    expect(countFineJournalRows(s)).toBe(1)
+  })
+
   it('formatWorldStateInjection uses bound injector when registered', () => {
     const s = createDefaultTableMemoryState()
-    maybeAppendJournalFromSum(s, '试炼开启', 1)
+    maybeAppendJournalFromSum(
+      s,
+      '后山试炼开启，外门弟子依序入场，长老坐镇剑台，掌门临场点名并申明赏罚。',
+      1,
+    )
     saveTableMemory(s)
     const inj = formatWorldStateInjection(loadTableMemory(), { query: '试炼' })
     expect(inj).toMatch(/实体表|当前世界状态|纪要/)
+  })
+})
+
+describe('localCollapseMerge shujuku style', () => {
+  it('joins objective text without pipe mash', () => {
+    const s = createDefaultTableMemoryState()
+    for (let i = 1; i <= 3; i++) {
+      applyMemoryTextToState(
+        s,
+        `<Memory><!--
+#纪要表
+[J${String(i).padStart(4, '0')}]|概要：事件${i}|地点：山门|纪要：第${i}日山门发生要事，掌门与长老商议对策并遣人巡查。
+--></Memory>`,
+      )
+    }
+    const r = localCollapseMerge(s, { startFineIndex: 0, endFineIndex: 3 })
+    expect(r.removed).toBe(3)
+    expect(r.added).toBe(1)
+    const merged = listJournalRows(s).find((x) => x.isAutoMerged)
+    expect(merged?.body?.length).toBeGreaterThan(40)
+    expect(merged?.body).not.toMatch(/｜/)
+    expect(merged?.summary?.length).toBeLessThanOrEqual(30)
   })
 })
 
@@ -370,5 +443,17 @@ describe('Memory tag → journal table', () => {
     expect(r.count).toBeGreaterThan(0)
     const rows = listJournalRows(s)
     expect(rows.some((x) => x.indexCode === 'J0099')).toBe(true)
+  })
+
+  it('maps legacy A code into J lane', () => {
+    const s = createDefaultTableMemoryState()
+    applyMemoryTextToState(
+      s,
+      `<Memory><!--
+#纪要表
+[A0012]|概要：试炼|纪要：外门大比开幕
+--></Memory>`,
+    )
+    expect(listJournalRows(s)[0].indexCode).toBe('J0012')
   })
 })

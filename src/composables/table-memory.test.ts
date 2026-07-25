@@ -14,6 +14,9 @@ import {
   clearTableMemory,
   getTableMemory,
   saveTableMemory,
+  addTableRecord,
+  deleteTableRecord,
+  setTableRecordField,
 } from './table-memory'
 import { recordTurnSum, clearMemoryBank, loadMemoryBank, formatShortMemory } from './memory-lore'
 
@@ -76,6 +79,79 @@ describe('parseMemoryText / extractMemoryRows (yuzuki-compatible)', () => {
       `<tableEdit>#角色档案\n[沈微]|身份：外门弟子</tableEdit>`,
     )
     expect(c[0].values['身份']).toBe('外门弟子')
+  })
+})
+
+describe('table record CRUD (hand edit)', () => {
+  it('adds, edits, deletes a journal row', () => {
+    const s = createDefaultTableMemoryState()
+    const rec = addTableRecord('plot_journal', { 概要: '手改试', 纪要: '手写一段纪要正文' }, s)
+    expect(rec).toBeTruthy()
+    expect(rec!.values['编码索引']).toMatch(/^J/)
+    expect(s.records['plot_journal']).toHaveLength(1)
+
+    expect(setTableRecordField('plot_journal', rec!.id, '地点', '山门', s)).toBe(true)
+    expect(s.records['plot_journal'][0].values['地点']).toBe('山门')
+
+    expect(deleteTableRecord('plot_journal', rec!.id, s)).toBe(true)
+    expect(s.records['plot_journal']).toHaveLength(0)
+  })
+
+  it('adds character row with default primary', () => {
+    const s = createDefaultTableMemoryState()
+    const rec = addTableRecord('character_profile', { 身份: '外门' }, s)
+    expect(rec?.values['角色名']).toBeTruthy()
+    expect(setTableRecordField('character_profile', rec!.id, '角色名', '沈微', s)).toBe(
+      true,
+    )
+    expect(s.records['character_profile'][0].values['角色名']).toBe('沈微')
+  })
+})
+
+describe('journal A/J normalize + dedup', () => {
+  it('normalizes A0001 to J0001 and does not dual-track', () => {
+    const s = createDefaultTableMemoryState()
+    applyMemoryTextToState(
+      s,
+      `<Memory><!--
+#纪要表
+[A0001]|概要：使者来访|纪要：赤焰谷使者至山门求矿
+--></Memory>`,
+    )
+    const journal = s.records['plot_journal'] || []
+    expect(journal).toHaveLength(1)
+    expect(journal[0].values['编码索引']).toBe('J0001')
+
+    // 再写近似内容 + J 码 → 应并入同一行，不堆第二条
+    applyMemoryTextToState(
+      s,
+      `<Memory><!--
+#纪要表
+[J0001]|概要：使者来访|纪要：赤焰谷使者至山门求矿脉权益
+--></Memory>`,
+    )
+    expect(s.records['plot_journal']).toHaveLength(1)
+    expect(s.records['plot_journal'][0].values['纪要']).toContain('矿')
+  })
+
+  it('dedups near-identical journal body under different codes', () => {
+    const s = createDefaultTableMemoryState()
+    applyMemoryTextToState(
+      s,
+      `<Memory><!--
+#纪要表
+[J0003]|概要：收徒|纪要：本回收徒三人，分别安置外门
+--></Memory>`,
+    )
+    applyMemoryTextToState(
+      s,
+      `<Memory><!--
+#纪要表
+[J0009]|概要：收徒|纪要：本回收徒三人，分别安置外门
+--></Memory>`,
+    )
+    expect(s.records['plot_journal']).toHaveLength(1)
+    expect(s.records['plot_journal'][0].values['编码索引']).toBe('J0003')
   })
 })
 

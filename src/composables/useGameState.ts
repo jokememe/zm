@@ -66,6 +66,10 @@ import { clearMemoryBank, seedOpeningMemory } from '@/composables/memory-lore'
 import {
   clearTableMemory,
   seedOpeningTableMemory,
+  loadTableMemory,
+  saveTableMemory,
+  deleteTableRecord,
+  getPrimaryColumnName,
 } from '@/composables/table-memory'
 import { syncTableMemoryFromGame } from '@/composables/table-memory-sync'
 
@@ -785,6 +789,73 @@ export function useGameState() {
   }
 
   /**
+   * 从名册除名（手改 / 清理改名残留）。
+   * 同步清关系、继位观察、灵田指派、宝物持有名、表格记忆角色行。
+   */
+  function removeDisciple(discipleId: string): { ok: boolean; name?: string; error?: string } {
+    const id = String(discipleId || '').trim()
+    if (!id) return { ok: false, error: '无弟子 id' }
+    const d = disciples.value.find((x) => x.id === id)
+    if (!d) return { ok: false, error: '弟子不在册' }
+    const name = d.name
+
+    disciples.value = disciples.value.filter((x) => x.id !== id)
+
+    // 道侣互指
+    disciples.value = disciples.value.map((x) =>
+      x.spouse === id || x.spouse === name ? { ...x, spouse: undefined } : x,
+    )
+
+    relationEdges.value = relationEdges.value.filter(
+      (e) => e.from !== id && e.to !== id && e.from !== name && e.to !== name,
+    )
+
+    heirs.value = heirs.value.filter((h) => h.discipleId !== id && h.name !== name)
+    if (designatedHeirId.value) {
+      const still = heirs.value.find((h) => h.id === designatedHeirId.value)
+      if (!still) {
+        designatedHeirId.value = heirs.value.find((h) => h.designated)?.id ?? heirs.value[0]?.id ?? ''
+        heirs.value = heirs.value.map((h) => ({
+          ...h,
+          designated: h.id === designatedHeirId.value,
+        }))
+      }
+    }
+
+    fieldPlots.value = fieldPlots.value.map((p) =>
+      p.assigned === id || p.assigned === name ? { ...p, assigned: null } : p,
+    )
+
+    treasures.value = treasures.value.map((t) =>
+      t.owner === id || t.owner === name ? { ...t, owner: null } : t,
+    )
+
+    forgeQueue.value = forgeQueue.value.map((g) =>
+      g.craftsman === id || g.craftsman === name ? { ...g, craftsman: null } : g,
+    )
+
+    // 表格记忆：删角色档案同名行
+    try {
+      const tm = loadTableMemory()
+      const table = tm.tables.find((t) => t.id === 'character_profile')
+      if (table) {
+        const primary = getPrimaryColumnName(table)
+        const list = tm.records[table.id] || []
+        for (const rec of [...list]) {
+          const pn = String(rec.values?.[primary] || '').trim()
+          if (pn === name) deleteTableRecord(table.id, rec.id, tm)
+        }
+        saveTableMemory(tm)
+      }
+    } catch {
+      /* ignore */
+    }
+
+    persistGameSave()
+    return { ok: true, name }
+  }
+
+  /**
    * 从头开局：资源/历法/通知回到开场状态。
    * 天机会话由 useTianji.startOpeningRun 一并重置。
    */
@@ -881,6 +952,7 @@ export function useGameState() {
     setDesignatedHeir,
     assignFieldPlot,
     craftAlchemy,
+    removeDisciple,
     persistGameSave,
     forcePersistForBackup,
     liveDiscipleCount,

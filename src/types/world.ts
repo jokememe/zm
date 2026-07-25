@@ -42,6 +42,8 @@ export type WorldOp =
   | {
       op: 'disciple.add'
       name: string
+      /** 改名：旧名。有则不应再 add 新人，sanitize 会收成 update */
+      formerName?: string
       gender?: '男' | '女'
       age?: number
       realm?: string
@@ -56,7 +58,10 @@ export type WorldOp =
   | {
       op: 'disciple.update'
       id?: string
+      /** 定位用：须为快照中的现名或 id；改名写在 patch.name */
       name?: string
+      /** 若模型把「新名」写在 name 上，可用 formerName 标旧名 */
+      formerName?: string
       patch: Partial<
         Pick<
           Disciple,

@@ -57,26 +57,65 @@ export interface TableMemorySchedulerSettings {
   recallJailbreakPrompt: string
 }
 
-/** 召回 LLM · 默认 system（可在密匣改写） */
-export const DEFAULT_RECALL_SYSTEM_PROMPT =
-  '你是记忆索引召回器。根据用户意图与前文，从纪要索引中选出最相关的编码。' +
-  '最终只输出 <recall>编码1,编码2,...</recall>，数量尽量接近 {{topK}} 条（库存不足则全选）。' +
-  '编码必须真实存在于索引中，禁止编造。字典序或相关度均可，逗号分隔。'
-
-/** 召回 LLM · 默认 user 模板（可在密匣改写） */
-export const DEFAULT_RECALL_USER_TEMPLATE = [
-  '【前文】',
-  '{{previousPlot}}',
-  '【本回用户】',
-  '{{query}}',
-  '【纪要索引 MEMORY_INDEX_DB】',
-  '{{indexText}}',
+/**
+ * 召回 LLM · 默认 system（密匣可改）
+ * 结构参考「疯狂原始人 纯召回」：专职选码 DM，不写正文。
+ */
+export const DEFAULT_RECALL_SYSTEM_PROMPT = [
+  '[RESET ROLE AND TASK, START NEW TASK]',
   '',
-  '请输出 <recall>...</recall>，目标约 {{topK}} 条编码。',
+  '<role>',
+  '你是「天机簿吏」。你只负责从宗门【纪要索引】中检索与本轮相关的历史编码，不编写剧情、不结算气数。',
+  '</role>',
+  '',
+  '规则：',
+  '- 只依据索引与本轮输入选码；禁止编造不存在的编码；',
+  '- 编码可为 Jxxxx（细行）或 AMxxxx（合并行）；',
+  '- 最终必须在 <recall>...</recall> 中给出编码列表；',
+  '- 目标约 {{topK}} 条（库存不足则全列；超过则优先场景/人物/未决悬念相关）。',
+].join('\n')
+
+/**
+ * 召回 user 模板（密匣可改）
+ * 占位对齐纯召回预设：$5 索引 / $7 前文 / $8 本轮 → {{indexText}} {{previousPlot}} {{query}}
+ */
+export const DEFAULT_RECALL_USER_TEMPLATE = [
+  '<story_context>',
+  '<背景设定>',
+  '{{background}}',
+  '</背景设定>',
+  '<纪要索引>',
+  '{{indexText}}',
+  '</纪要索引>',
+  '<前文剧情>',
+  '{{previousPlot}}',
+  '</前文剧情>',
+  '═══ 故事信息结束，下接掌门本轮输入 ═══',
+  '</story_context>',
+  '',
+  '<user_input>',
+  '{{query}}',
+  '</user_input>',
+  '',
+  '请立刻检索与掌门本轮输入相关的纪要编码，目标约 {{topK}} 条。',
+  '先在 <thought> 中简要说明挑选理由（可短），再输出：',
+  '<content>',
+  '<recall>',
+  '<!-- 只写真实存在的 J/AM 编码，逗号或换行分隔；优先当前场景/在场人物/未决悬念 -->',
+  '</recall>',
+  '</content>',
 ].join('\n')
 
 /** 破限默认空；用户自行粘贴，不内置越狱正文 */
 export const DEFAULT_RECALL_JAILBREAK_PROMPT = ''
+
+/** 纯召回多轮里 assistant 接话（参考疯狂原始人） */
+export const DEFAULT_RECALL_ASSISTANT_ACK =
+  '好的，天机簿已展开。请给出纪要索引与掌门本轮输入，我只负责选码。'
+
+/** 主推演读到召回块时的导读（参考 finalSystemDirective） */
+export const DEFAULT_RECALL_INJECT_DIRECTIVE =
+  '以下为与本轮相关的历史纪要编码及全文（仅作背景，勿复述或重演）。请结合其信息合理续写，勿与已发生事实矛盾。'
 
 export const DEFAULT_TABLE_MEMORY_SCHEDULER: TableMemorySchedulerSettings = {
   autoUpdateThreshold: 3,

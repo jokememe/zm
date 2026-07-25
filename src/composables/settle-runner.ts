@@ -15,6 +15,12 @@ import {
 } from '@/composables/world-state'
 import { normalizeBaseUrl } from '@/composables/api-cache'
 import { extractChatCompletionText } from '@/sillytavern/api-tools'
+import {
+  isRetryableFailureMessage,
+  withRetry,
+  withRetryHint,
+  DEFAULT_API_MAX_ATTEMPTS,
+} from '@/composables/api-retry'
 
 /**
  * Pure settle text extraction from a non-stream chat/completions body.
@@ -40,10 +46,26 @@ export function textFromSettleCompletion(
 }
 
 export type SettleOutcome =
-  | { status: 'skipped'; reason: 'off' | 'secondary_only_unavailable' }
-  | { status: 'empty'; summary?: string; stateAfter: WorldSnapshot }
-  | { status: 'applied'; lines: string[]; summary?: string; stateAfter: WorldSnapshot }
-  | { status: 'failed'; error: string; stateAfter: WorldSnapshot }
+  | { status: 'skipped'; reason: 'off' | 'secondary_only_unavailable'; attempts?: number }
+  | {
+      status: 'empty'
+      summary?: string
+      stateAfter: WorldSnapshot
+      attempts?: number
+    }
+  | {
+      status: 'applied'
+      lines: string[]
+      summary?: string
+      stateAfter: WorldSnapshot
+      attempts?: number
+    }
+  | {
+      status: 'failed'
+      error: string
+      stateAfter: WorldSnapshot
+      attempts?: number
+    }
 
 /**
  * 选**一个**目标端点：有次用次，否则主。
@@ -147,11 +169,14 @@ resources：可选。键只能是中文：灵石、灵谷、丹材、矿铁、�
 不要用英文键 spiritStone。
 
 ops：数组，本回最多 12 条。op 只能是下列之一（字面量完全一致）：
-- disciple.add：新人入宗。必须有 name。正文收了几个就写几条，勿漏名。
+- disciple.add：仅「正文新入宗、快照里没有的人」。必须有 name。已在册者禁止再 add。
   例 {"op":"disciple.add","name":"陆承渊","realm":"炼气一层","role":"外门弟子","gender":"男"}
-- disciple.update：改现有弟子。必须用快照里的 id 或 name，且必须有 patch 对象。
+- disciple.update：改现有弟子。定位必须用快照里的 id 或【现用名】，且必须有 patch。
   例 {"op":"disciple.update","name":"陆承渊","patch":{"loyalty":85,"status":"外勤"}}
-  错误示例（禁止）：{"op":"disciple.update","name":"陆承渊","loyalty":85}
+  改名（重要）：不要 add 新名。用旧名定位，新名写在 patch.name。
+  例 {"op":"disciple.update","name":"陆承渊","patch":{"name":"陆承渊·青岚"}}
+  或 {"op":"disciple.update","formerName":"陆承渊","patch":{"name":"陆九"}}
+  错误：对已在册者 disciple.add 新名（会双开名册）；错误：update 顶层直接写 loyalty 无 patch。
 - disciple.remove：离宗/除名。id 或 name 二选一。
   例 {"op":"disciple.remove","name":"某某"}
 - faction.add：正文新出现、快照势力列表里没有的势力。必须有 name。
@@ -280,7 +305,6 @@ export async function runSettle(input: {
     }
   }
 
-  // 单次调用：校验失败也不重打（避免超时叠乘）
   const messages = buildSettleMessages({
     userText: input.userText,
     maintext: input.maintext,
@@ -288,7 +312,7 @@ export async function runSettle(input: {
     snap: snap0,
     jailbreakPrompt: input.settings.settleJailbreakPrompt,
   })
-  // 非流式：settle 只需短 JSON，很多中转不支持 stream
+  // 非流式：settle 只需短 JSON；失败（网络/解析）轻量重试 1 次
   const body: Record<string, unknown> = {
     model: ep.model,
     messages,
@@ -296,60 +320,76 @@ export async function runSettle(input: {
     temperature: 0.1,
     max_tokens: 900,
   }
-  const res = await input.postChat({ target, body })
-  if (!res.ok) {
-    return {
-      status: 'failed',
-      error: res.error,
-      stateAfter: snapshotWorldState(),
-    }
-  }
 
-  const parsed = parseSettlePayload(res.text)
-  if (!parsed.ok) {
-    return {
-      status: 'failed',
-      error: parsed.error,
-      stateAfter: snapshotWorldState(),
-    }
-  }
-  // 模型常一次加过多弟子 / 用 姓名 代替 name：先规范化再校验
-  const delta = sanitizeWorldDelta(parsed.delta)
-  const v = validateWorldDelta(delta, snap0)
-  // partial：坏 op 已跳过；仅当清洗后仍无可写内容 → empty
-  const clean = v.delta ?? { ops: [], resources: {} }
-  const hasRes = clean.resources && Object.keys(clean.resources).length > 0
-  const hasOps = (clean.ops?.length ?? 0) > 0
-  if (!hasRes && !hasOps) {
-    const base = clean.summary || delta.summary || ''
-    const skipHint = v.warnings.length
-      ? `（已跳过：${v.warnings.slice(0, 2).join('；')}）`
-      : ''
-    const summary = (base + skipHint).trim() || undefined
-    return {
-      status: 'empty',
-      summary,
-      stateAfter: snapshotWorldState(),
-    }
-  }
+  const loop = await withRetry(
+    async () => {
+      const res = await input.postChat({ target, body })
+      if (!res.ok) {
+        return {
+          status: 'failed' as const,
+          error: res.error,
+          stateAfter: snapshotWorldState(),
+        }
+      }
+      const parsed = parseSettlePayload(res.text)
+      if (!parsed.ok) {
+        return {
+          status: 'failed' as const,
+          error: parsed.error,
+          stateAfter: snapshotWorldState(),
+        }
+      }
+      const delta = sanitizeWorldDelta(parsed.delta)
+      const v = validateWorldDelta(delta, snap0)
+      const clean = v.delta ?? { ops: [], resources: {} }
+      const hasRes = clean.resources && Object.keys(clean.resources).length > 0
+      const hasOps = (clean.ops?.length ?? 0) > 0
+      if (!hasRes && !hasOps) {
+        const base = clean.summary || delta.summary || ''
+        const skipHint = v.warnings.length
+          ? `（已跳过：${v.warnings.slice(0, 2).join('；')}）`
+          : ''
+        const summary = (base + skipHint).trim() || undefined
+        return {
+          status: 'empty' as const,
+          summary,
+          stateAfter: snapshotWorldState(),
+        }
+      }
+      const applied = applyValidatedDelta(clean)
+      const stateAfter = snapshotWorldState()
+      if (!applied.changed) {
+        return {
+          status: 'empty' as const,
+          summary: clean.summary ?? delta.summary,
+          stateAfter,
+        }
+      }
+      const lines =
+        v.warnings.length > 0
+          ? [...applied.lines, `（部分跳过 ${v.warnings.length} 项）`]
+          : applied.lines
+      return {
+        status: 'applied' as const,
+        lines,
+        summary: clean.summary ?? delta.summary,
+        stateAfter,
+      }
+    },
+    {
+      maxAttempts: DEFAULT_API_MAX_ATTEMPTS,
+      shouldRetry: (r) =>
+        r.status === 'failed' && isRetryableFailureMessage(r.error || ''),
+    },
+  )
 
-  const applied = applyValidatedDelta(clean)
-  const stateAfter = snapshotWorldState()
-  if (!applied.changed) {
+  const out = loop.result
+  if (out.status === 'failed') {
     return {
-      status: 'empty',
-      summary: clean.summary ?? delta.summary,
-      stateAfter,
+      ...out,
+      error: withRetryHint(out.error, loop.attempts),
+      attempts: loop.attempts,
     }
   }
-  const lines =
-    v.warnings.length > 0
-      ? [...applied.lines, `（部分跳过 ${v.warnings.length} 项）`]
-      : applied.lines
-  return {
-    status: 'applied',
-    lines,
-    summary: clean.summary ?? delta.summary,
-    stateAfter,
-  }
+  return { ...out, attempts: loop.attempts }
 }

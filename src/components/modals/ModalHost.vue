@@ -35,6 +35,7 @@ const {
   resolveUrgentEvent,
   appendUrgentEvents,
   calendar,
+  removeDisciple,
 } = useGameState()
 const { injectContext, pushEvent, sendPlayer } = useTianji()
 
@@ -276,9 +277,33 @@ async function doAdvanceSeason() {
         </div>
         <p class="muted">
           可作为外勤、管事或亲传候选。深层互动（训诫、赐丹、联姻）将通过天机卷轴叙事完成。
+          若因改名残留旧名双开，可点「除名」清掉错误那一行。
         </p>
       </div>
       <template #footer>
+        <button
+          id="btn-disciple-remove"
+          class="btn btn-ghost"
+          type="button"
+          style="color: #a04555"
+          @click="
+            () => {
+              if (
+                !confirm(
+                  `确定将「${disciple.name}」从名册除名？关系与表格记忆会一并清理。`,
+                )
+              )
+                return
+              const r = removeDisciple(disciple.id)
+              if (r.ok) {
+                toast.success('已除名', r.name || disciple.name)
+                close()
+              } else toast.error('除名失败', r.error || '')
+            }
+          "
+        >
+          除名
+        </button>
         <button
           id="btn-disciple-to-tianji"
           class="btn btn-soft"

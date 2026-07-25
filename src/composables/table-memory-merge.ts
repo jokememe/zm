@@ -1,8 +1,9 @@
 /**
- * 纪要表自动合并 — 对齐 shujuku performAutoMergeSummary_ACU。
+ * 纪要表自动合并 — 对齐 shujuku@mov5.5 performAutoMergeSummary_ACU。
  *
  * cleanup ≠ 删除：把细粒度纪要行合并为更粗的 auto_merged 行，
  * 保留已有 auto_merged + 新合并结果 + reserve 之后的细行。
+ * 合并后纪要目标约 300～400 字客观流水（非标题党摘要）。
  */
 import {
   cleanColumnName,
@@ -14,6 +15,16 @@ import {
   type TableMemoryState,
 } from '@/composables/table-memory'
 import type { TableMemorySchedulerSettings } from '@/composables/table-memory-settings'
+import {
+  JOURNAL_BODY_MERGE_MAX,
+  JOURNAL_BODY_MERGE_MIN,
+  JOURNAL_SUMMARY_MAX_CHARS,
+} from '@/composables/table-memory-prompts'
+import {
+  DEFAULT_API_MAX_ATTEMPTS,
+  isRetryableFailureMessage,
+  withRetry,
+} from '@/composables/api-retry'
 
 export const JOURNAL_TABLE_ID = 'plot_journal'
 export const JOURNAL_TABLE_NAME = '纪要表'
@@ -31,14 +42,14 @@ export interface JournalRowView {
 
 export function isJournalTableName(name: string): boolean {
   const n = String(name || '').trim()
-  return n === '纪要表' || n === '总结表' || n === '剧情摘要'
+  // 不含「剧情摘要」：那是主线/支线摘要表，与纪要表分流，避免 A/J 感双写串表
+  return n === '纪要表' || n === '总结表' || n === 'plot_journal' || /纪要/.test(n)
 }
 
 export function getJournalTable(s: TableMemoryState = loadTableMemory()) {
   return (
     findTable(s, JOURNAL_TABLE_NAME) ||
     findTable(s, '总结表') ||
-    findTable(s, '剧情摘要') ||
     s.tables.find((t) => t.id === JOURNAL_TABLE_ID) ||
     null
   )
@@ -158,26 +169,37 @@ export function buildMergePrompt(input: {
     {
       role: 'system',
       content:
-        '你是纪要合并引擎。把多条细粒度剧情纪要合并为更粗粒度的总结行。' +
-        '只输出 <Memory><!--...--></Memory>，不要解释。' +
-        '合并后的行必须写在 #纪要表 下；标记字段必须写 auto_merged；编码索引用 AM 前缀（如 AM0001）。',
+        '你是「填表美杜莎」纪要合并执行器（对齐 shujuku@mov5.5 DEFAULT_MERGE_SUMMARY）。' +
+        '任务：在已有粗纪要底稿上，将本批细纪要融合精简，写入 #纪要表 的 auto_merged 行。' +
+        '只输出 <Memory><!--...--></Memory>，不要解释，不要 <thought>。' +
+        '编码索引必须 AM0001 形式（合并行）；禁止输出细行 J/A 编码当主键。',
     },
     {
       role: 'user',
       content: [
-        '【已有粗粒度合并纪要（可参考衔接，勿重复堆砌）】',
+        '【已精简的数据 · 粗粒度底稿（可衔接，勿重复堆砌）】',
         input.existingMergedText?.trim() || '（无）',
         '',
-        '【待合并的细粒度纪要】',
+        '【需要精简的纪要数据 · 本批细行】',
         input.fineText || '（无）',
         '',
-        `请将上述细纪要合并为 ${target} 条粗纪要。`,
+        `TARGET_COUNT = ${target}（精简后本批应产出的粗行条数）`,
+        '',
+        '【硬约束 · 违反则输出无效】',
+        `C1 编码：AM0001 起严格递增，不跳号、不重复；标记必须 auto_merged。`,
+        `C2 纪要字数：每条纪要 ${JOURNAL_BODY_MERGE_MIN}～${JOURNAL_BODY_MERGE_MAX} 个中文字符。`,
+        `C3 概要字数：每条概要 ≤${JOURNAL_SUMMARY_MAX_CHARS} 字，含关键专名。`,
+        `C4 条数：恰好 ${target} 条。`,
+        'C5 内容完整：关键剧情节点、重要人物行为、因果关系不得丢失。',
+        'C6 时序：按时间线顺序；不得错乱。',
+        'C7 文风：第三方客观；禁推测/情绪/负面解读/主观判断；结尾禁总结升华。',
+        'C8 去冗：删重复与空话，不是截断关键信息；禁止「本阶段有所推进」类空句。',
+        '',
         '输出格式：',
         '<Memory><!--',
         '#纪要表',
-        '[AM0001]|概要：…|时间跨度：…|地点：…|纪要：…|标记：auto_merged',
+        '[AM0001]|时间跨度：…|地点：…|概要：…|纪要：…|标记：auto_merged',
         '--></Memory>',
-        '规则：保留关键人物/地点/因果；压缩废话；禁止空字段；编码索引全局唯一。',
       ].join('\n'),
     },
   ]
@@ -329,15 +351,33 @@ export function localCollapseMerge(
   const slice = fine.slice(opts.startFineIndex, opts.endFineIndex)
   if (!slice.length) return { removed: 0, added: 0 }
 
-  const summary = slice
-    .map((r) => r.summary || r.body.slice(0, 40))
+  // 本地折叠：尽量贴近 shujuku 合并后的客观流水密度（非标题拼接）
+  const titles = slice
+    .map((r) => r.summary || r.body.slice(0, 24))
     .filter(Boolean)
-    .slice(0, 6)
-    .join('；')
-  const body = slice
-    .map((r) => r.body || r.summary)
+  let summary = titles[0] || `合并纪要${slice.length}事`
+  if (summary.length > JOURNAL_SUMMARY_MAX_CHARS) {
+    summary = summary.slice(0, JOURNAL_SUMMARY_MAX_CHARS)
+  }
+  // 按序拼接细行正文；控制在 MERGE_MAX 附近，宁可略超本地上限也不用｜糊
+  const parts = slice
+    .map((r) => {
+      const bit = (r.body || r.summary || '').trim()
+      if (!bit) return ''
+      const where = r.place ? `事发于${r.place}。` : ''
+      const span = r.span ? `${r.span}，` : ''
+      return `${span}${where}${bit}`.replace(/\s+/g, '')
+    })
     .filter(Boolean)
-    .join('｜')
+  let body = parts.join('')
+  if (body.length > JOURNAL_BODY_MERGE_MAX + 80) {
+    body = body.slice(0, JOURNAL_BODY_MERGE_MAX + 80)
+  }
+  // 过短时保留分条，避免信息被压没
+  if (body.length < JOURNAL_BODY_MERGE_MIN && parts.length > 1) {
+    body = parts.map((p, i) => `（${i + 1}）${p}`).join('')
+    if (body.length > 1200) body = body.slice(0, 1200)
+  }
   const place = [...new Set(slice.map((r) => r.place).filter(Boolean))].join('、')
   const span = [slice[0]?.span, slice[slice.length - 1]?.span].filter(Boolean).join('→')
   const code = nextAmCode(s)
@@ -348,10 +388,10 @@ export function localCollapseMerge(
     mergedRows: [
       {
         编码索引: code,
-        概要: summary || `合并纪要 ${slice.length} 条`,
+        概要: summary,
         时间跨度: span,
         地点: place,
-        纪要: body.slice(0, 1200),
+        纪要: body,
         标记: AUTO_MERGED_TAG,
       },
     ],
@@ -408,12 +448,37 @@ export async function runAutoMergeJournal(input: {
           existingMergedText: existingText,
           targetCount: 1,
         })
-        const text = await input.postChat(messages)
-        mergedValues = parseMergedJournalRows(text)
+        try {
+          const loop = await withRetry(
+            async () => {
+              const text = await input.postChat!(messages)
+              const rows = parseMergedJournalRows(text)
+              return { text, rows }
+            },
+            {
+              maxAttempts: DEFAULT_API_MAX_ATTEMPTS,
+              shouldRetry: (r) => !r.rows.length,
+            },
+          )
+          mergedValues = loop.result.rows
+        } catch (e) {
+          // 网络抛错：可重试一次再放弃给本地折叠
+          const msg = String((e as Error)?.message || e)
+          if (isRetryableFailureMessage(msg)) {
+            try {
+              const text = await input.postChat(messages)
+              mergedValues = parseMergedJournalRows(text)
+            } catch {
+              mergedValues = []
+            }
+          } else {
+            mergedValues = []
+          }
+        }
       }
 
       if (!mergedValues.length) {
-        // 本地兜底
+        // 本地兜底（LLM 失败或空结果）
         const r = localCollapseMerge(s, {
           startFineIndex: cursor,
           endFineIndex: cursor + take,

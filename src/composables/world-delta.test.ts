@@ -191,6 +191,85 @@ describe('validateWorldDelta', () => {
   })
 })
 
+describe('disciple rename (no dual roster)', () => {
+  it('sanitize: add+formerName → update patch.name', () => {
+    const cleaned = sanitizeWorldDelta({
+      ops: [
+        {
+          op: 'disciple.add',
+          name: '陆九',
+          原名: '陆承渊',
+          realm: '筑基',
+        } as never,
+      ],
+    })
+    expect(cleaned.ops?.[0]).toMatchObject({
+      op: 'disciple.update',
+      name: '陆承渊',
+      patch: { name: '陆九', realm: '筑基' },
+    })
+  })
+
+  it('sanitize: remove old + add new → single rename update', () => {
+    const cleaned = sanitizeWorldDelta({
+      ops: [
+        { op: 'disciple.remove', name: '陆承渊' },
+        { op: 'disciple.add', name: '陆九', realm: '筑基一层' },
+      ],
+    })
+    const ops = cleaned.ops || []
+    expect(ops.some((o) => o.op === 'disciple.add')).toBe(false)
+    expect(ops.some((o) => o.op === 'disciple.remove')).toBe(false)
+    expect(ops).toHaveLength(1)
+    expect(ops[0]).toMatchObject({
+      op: 'disciple.update',
+      name: '陆承渊',
+      patch: { name: '陆九' },
+    })
+  })
+
+  it('validate demotes add when name already on roster', () => {
+    const snap = emptyTestSnapshot()
+    snap.disciples = [baseDisciple()]
+    const v = validateWorldDelta(
+      { ops: [{ op: 'disciple.add', name: '陆承渊', loyalty: 90 }] },
+      snap,
+    )
+    expect(v.ok).toBe(true)
+    expect(v.delta?.ops?.[0]?.op).toBe('disciple.update')
+    const { snap: next } = applyWorldDeltaToSnapshot(v.delta!, snap)
+    expect(next.disciples.filter((d) => d.name === '陆承渊')).toHaveLength(1)
+    expect(next.disciples[0].loyalty).toBe(90)
+  })
+
+  it('apply rename keeps one row and rewrites treasure owner', () => {
+    const snap = emptyTestSnapshot()
+    snap.disciples = [baseDisciple()]
+    snap.treasures = [
+      {
+        id: 't1',
+        name: '木剑',
+        type: '法器',
+        grade: '黄',
+        owner: '陆承渊',
+        desc: '',
+        bound: false,
+      },
+    ]
+    const cleaned = sanitizeWorldDelta({
+      ops: [{ op: 'disciple.add', name: '陆九', formerName: '陆承渊' } as never],
+    })
+    const v = validateWorldDelta(cleaned, snap)
+    expect(v.delta?.ops?.[0]?.op).toBe('disciple.update')
+    const { snap: next, result } = applyWorldDeltaToSnapshot(v.delta!, snap)
+    expect(next.disciples).toHaveLength(1)
+    expect(next.disciples[0].name).toBe('陆九')
+    expect(next.disciples[0].id).toBe('d1')
+    expect(next.treasures?.[0].owner).toBe('陆九')
+    expect(result.lines.some((l) => /改名/.test(l))).toBe(true)
+  })
+})
+
 describe('applyWorldDeltaToSnapshot', () => {
   it('applies relative resource change', () => {
     const snap = emptyTestSnapshot()

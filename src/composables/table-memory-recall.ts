@@ -12,6 +12,7 @@ import {
   buildTableText,
   cleanColumnName,
   loadTableMemory,
+  saveTableMemory,
   type MemoryTableDef,
   type TableMemoryState,
 } from '@/composables/table-memory'
@@ -24,8 +25,15 @@ import type { TableMemorySchedulerSettings } from '@/composables/table-memory-se
 import {
   DEFAULT_RECALL_SYSTEM_PROMPT,
   DEFAULT_RECALL_USER_TEMPLATE,
+  DEFAULT_RECALL_ASSISTANT_ACK,
+  DEFAULT_RECALL_INJECT_DIRECTIVE,
   resolveTableMemoryScheduler,
 } from '@/composables/table-memory-settings'
+import {
+  DEFAULT_API_MAX_ATTEMPTS,
+  isRetryableFailureMessage,
+  withRetry,
+} from '@/composables/api-retry'
 
 export const TABLE_RECALL_ENTRY_ID = 'table-memory-recall'
 export const RECALL_TAG_PATTERN = /<recall>([\s\S]*?)<\/recall>/i
@@ -51,14 +59,33 @@ export function buildJournalIndexText(
   return ['## 表格: 纪要索引', 'Columns: 概要, 编码索引', ...lines].join('\n')
 }
 
-/** 从 LLM 输出解析 <recall>A001,A002</recall> */
+/**
+ * 从 LLM 输出解析召回编码。
+ * 兼容：<recall>…</recall>、多行 AM/J、content 包裹；归一 A→J。
+ */
 export function parseRecallTag(text: string): string[] {
-  const m = String(text || '').match(RECALL_TAG_PATTERN)
-  if (!m) return []
-  return String(m[1] || '')
-    .split(/[,，\s]+/)
-    .map((x) => x.trim())
-    .filter(Boolean)
+  const raw = String(text || '')
+  const chunks: string[] = []
+  const tagRe = /<recall>([\s\S]*?)<\/recall>/gi
+  let m: RegExpExecArray | null
+  while ((m = tagRe.exec(raw)) !== null) chunks.push(m[1])
+  // 无标签时：从全文扫编码（纯召回模型偶发只吐码列表）
+  const scan = chunks.length ? chunks.join('\n') : raw
+  const found: string[] = []
+  const codeRe = /\b(AM\d{1,6}|[AJ]\d{1,6})\b/gi
+  let cm: RegExpExecArray | null
+  while ((cm = codeRe.exec(scan)) !== null) {
+    found.push(normalizeCode(cm[1]))
+  }
+  // 去重保序
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const c of found) {
+    if (!c || seen.has(c)) continue
+    seen.add(c)
+    out.push(c)
+  }
+  return out
 }
 
 /**
@@ -120,7 +147,13 @@ export function selectJournalByCodes(
 }
 
 function normalizeCode(c: string): string {
-  return String(c || '').trim().toUpperCase()
+  // 与 table-memory 一致：召回时 A0001 与 J0001 视为同一细行编码
+  const raw = String(c || '').trim().toUpperCase()
+  const am = raw.match(/^AM0*(\d+)$/)
+  if (am) return `AM${String(parseInt(am[1], 10) || 0).padStart(4, '0')}`
+  const aj = raw.match(/^[AJ]0*(\d+)$/)
+  if (aj) return `J${String(parseInt(aj[1], 10) || 0).padStart(4, '0')}`
+  return raw
 }
 
 function tokenize(query: string): string[] {
@@ -169,6 +202,7 @@ export function formatRecalledJournalFull(
   }
   return (
     `${jbBlock}【召回纪要 · Top-${rows.length}】\n` +
+    `${DEFAULT_RECALL_INJECT_DIRECTIVE}\n` +
     `(历史存档，仅作背景参考，请勿复述或重演)\n${body}`
   )
 }
@@ -266,32 +300,39 @@ export function applyRecallTemplate(
 }
 
 /**
- * 构建召回 LLM 任务 messages（可选二次 API 精确 Top-K）。
- * 顺序：system 任务 →（可选）system 破限 → user 任务
- * 主推演心法的 jailbreak 不会自动进来；破限只认本函数的 jailbreak 参数。
- * 占位：{{topK}} {{query}} {{previousPlot}} {{indexText}}
+ * 构建召回 LLM messages — 参考「疯狂原始人 纯召回」多轮选码：
+ * system 角色 → assistant 接话 → user 上下文包 →（可选破限）→ user 开召
+ * 主推演心法 jailbreak 不会自动进来。
+ * 占位：{{topK}} {{query}} {{previousPlot}} {{indexText}} {{background}}
  */
 export function buildRecallMessages(input: {
   query: string
   previousPlot?: string
   indexText: string
   topK: number
+  /** 背景/设定摘要（对应纯召回 $1） */
+  background?: string
   /** 自定义 system；空/缺省 → 默认 */
   systemPrompt?: string | null
   /** 自定义 user 模板；空/缺省 → 默认 */
   userTemplate?: string | null
   /**
-   * 破限正文；非空则插入独立 system（在任务 system 之后、user 之前）。
-   * 这是召回支路专用挂点，与 ST 心法 jailbreak 分离。
+   * 破限正文；非空则插入独立 system。
    */
   jailbreakPrompt?: string | null
-}): Array<{ role: 'system' | 'user'; content: string }> {
+  /**
+   * simple：仅 system+user（旧密匣双段）
+   * multi：纯召回多轮（默认）
+   */
+  mode?: 'simple' | 'multi'
+}): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> {
   const k = Math.max(1, input.topK)
   const vars = {
     topK: k,
-    query: (input.query || '').slice(0, 400) || '（无）',
-    previousPlot: (input.previousPlot || '').slice(0, 800) || '（无）',
+    query: (input.query || '').slice(0, 500) || '（无）',
+    previousPlot: (input.previousPlot || '').slice(0, 1200) || '（无）',
     indexText: input.indexText || '(无索引)',
+    background: (input.background || '').slice(0, 800) || '（无额外背景）',
   }
   const sysRaw =
     typeof input.systemPrompt === 'string' && input.systemPrompt.trim()
@@ -301,53 +342,106 @@ export function buildRecallMessages(input: {
     typeof input.userTemplate === 'string' && input.userTemplate.trim()
       ? input.userTemplate
       : DEFAULT_RECALL_USER_TEMPLATE
-  const msgs: Array<{ role: 'system' | 'user'; content: string }> = [
-    { role: 'system', content: applyRecallTemplate(sysRaw, vars) },
-  ]
+  const sys = applyRecallTemplate(sysRaw, vars)
+  const userBody = applyRecallTemplate(userRaw, vars)
   const jb =
     typeof input.jailbreakPrompt === 'string' ? input.jailbreakPrompt.trim() : ''
+
+  // 用户在密匣只改了短 system/user 时，仍可用 simple 双段
+  const mode =
+    input.mode ||
+    (sysRaw === DEFAULT_RECALL_SYSTEM_PROMPT && userRaw === DEFAULT_RECALL_USER_TEMPLATE
+      ? 'multi'
+      : 'simple')
+
+  if (mode === 'simple') {
+    const msgs: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+      { role: 'system', content: sys },
+    ]
+    if (jb) msgs.push({ role: 'system', content: applyRecallTemplate(jb, vars) })
+    msgs.push({ role: 'user', content: userBody })
+    return msgs
+  }
+
+  // multi：疯狂原始人式多轮
+  const msgs: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+    { role: 'system', content: sys },
+    { role: 'assistant', content: DEFAULT_RECALL_ASSISTANT_ACK },
+    { role: 'user', content: '以下为本宗设定与历史信息（索引 + 前文 + 本轮输入）。' },
+    { role: 'user', content: userBody },
+  ]
   if (jb) {
+    // 破限插在上下文后、开召前
     msgs.push({ role: 'system', content: applyRecallTemplate(jb, vars) })
   }
-  msgs.push({ role: 'user', content: applyRecallTemplate(userRaw, vars) })
+  msgs.push({
+    role: 'user',
+    content: `现在请按照要求立刻检索与掌门本轮输入相关的纪要编码（目标约 ${k} 条，不足则全列）。只输出 thought + recall，不要写剧情。`,
+  })
   return msgs
 }
 
-/** 可选：调用 LLM 做精确召回，失败则回退关键词 */
+/** 发话前精确召回：LLM 选码，失败/空结果回退关键词；可重试 */
 export async function runIndexRecall(input: {
   state?: TableMemoryState
   query: string
   previousPlot?: string
+  background?: string
   scheduler: TableMemorySchedulerSettings
-  postChat?: (messages: Array<{ role: 'system' | 'user'; content: string }>) => Promise<string>
+  postChat?: (
+    messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
+  ) => Promise<string>
 }): Promise<{
   codes: string[]
   rows: JournalRowView[]
   method: 'llm' | 'keyword'
   injection: string
+  attempts: number
+  error?: string
 }> {
   const s = input.state || loadTableMemory()
   const sch = input.scheduler
   const indexText = buildJournalIndexText(s, { maxEntries: sch.recallIndexTop })
   let codes: string[] = []
   let method: 'llm' | 'keyword' = 'keyword'
+  let attempts = 1
+  let error: string | undefined
 
-  if (input.postChat && sch.recallEnabled) {
+  if (input.postChat && sch.recallEnabled && listJournalRows(s).length > 0) {
     try {
       const messages = buildRecallMessages({
         query: input.query,
         previousPlot: input.previousPlot,
+        background: input.background,
         indexText,
         topK: sch.recallTopK,
         systemPrompt: sch.recallSystemPrompt,
         userTemplate: sch.recallUserTemplate,
         jailbreakPrompt: sch.recallJailbreakPrompt,
+        mode: 'multi',
       })
-      const text = await input.postChat(messages)
-      codes = parseRecallTag(text)
+      const loop = await withRetry(
+        async () => {
+          const text = await input.postChat!(messages)
+          const parsed = parseRecallTag(text)
+          return { text, codes: parsed }
+        },
+        {
+          maxAttempts: DEFAULT_API_MAX_ATTEMPTS,
+          shouldRetry: (r, _a) => {
+            if (!r.codes.length) return true
+            return false
+          },
+        },
+      )
+      attempts = loop.attempts
+      codes = loop.result.codes
       if (codes.length) method = 'llm'
-    } catch {
-      codes = []
+    } catch (e) {
+      error = String((e as Error)?.message || e)
+      if (!isRetryableFailureMessage(error)) {
+        /* keep keyword fallback */
+      }
     }
   }
 
@@ -357,11 +451,39 @@ export async function runIndexRecall(input: {
     recallCodes: codes.length ? codes : undefined,
     scheduler: sch,
   })
-  const rows = codes.length
-    ? selectJournalByCodes(s, codes)
-    : selectJournalByKeyword(s, input.query, sch.recallTopK)
+  const rows =
+    codes.length > 0
+      ? (() => {
+          const byCode = selectJournalByCodes(s, codes)
+          // LLM 选码不足 Top-K 时关键词补齐
+          if (byCode.length >= sch.recallTopK) return byCode.slice(0, sch.recallTopK)
+          const extra = selectJournalByKeyword(s, input.query, sch.recallTopK)
+          const have = new Set(byCode.map((r) => r.record.id))
+          for (const r of extra) {
+            if (byCode.length >= sch.recallTopK) break
+            if (!have.has(r.record.id)) {
+              byCode.push(r)
+              have.add(r.record.id)
+            }
+          }
+          return byCode
+        })()
+      : selectJournalByKeyword(s, input.query, sch.recallTopK)
 
-  return { codes, rows, method, injection }
+  // 回写最近召回码，供面板/调试
+  if (s.meta) {
+    s.meta.lastRecallCodes = rows.map((r) => r.indexCode).filter(Boolean)
+    saveTableMemory(s)
+  }
+
+  return {
+    codes: rows.map((r) => r.indexCode).filter(Boolean),
+    rows,
+    method,
+    injection,
+    attempts,
+    error,
+  }
 }
 
 /** 供测试：列名工具 re-export */

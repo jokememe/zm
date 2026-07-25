@@ -1348,8 +1348,8 @@ function onTagsInput(value: string) {
           </label>
         </div>
         <p class="tj-hint" style="margin-top: 0.5rem">
-          召回方式：不写 SQL。注入 = 实体表 + 纪要索引(~50) + Top-K 全文(~20)，
-          对齐 shujuku 索引召回；隐藏楼层后靠表与小结，不靠整段 raw。
+          召回：发话前先走记忆 API 多轮选码（参考「纯召回」预设），失败再关键词 Top-K。
+          注入 = 实体表 + 纪要索引 + 选中全文；不写 SQL，不靠整段 raw。
         </p>
       </div>
 
@@ -1784,10 +1784,12 @@ function onTagsInput(value: string) {
             不要指望主预设自动带过来。
           </p>
           <p class="sched-field__help" style="margin-bottom: 0.55rem">
-            占位符（发送前替换）：
+            默认多轮结构对齐「疯狂原始人 纯召回」；占位符（发送前替换）：
             <code v-pre>{{topK}}</code>
             ·
             <code v-pre>{{query}}</code>
+            ·
+            <code v-pre>{{background}}</code>
             ·
             <code v-pre>{{previousPlot}}</code>
             ·

@@ -13,14 +13,20 @@ import {
 } from '@/composables/table-memory'
 import { buildMemoryTraceMessages } from '@/composables/table-memory-prompts'
 import { syncTableMemoryFromGame } from '@/composables/table-memory-sync'
+import {
+  DEFAULT_API_MAX_ATTEMPTS,
+  isRetryableFailureMessage,
+  withRetry,
+  withRetryHint,
+} from '@/composables/api-retry'
 
 export type MemoryTraceTarget = 'memory' | 'secondary' | 'primary'
 
 export type MemoryTraceOutcome =
-  | { status: 'skipped'; reason: string }
-  | { status: 'empty'; text: string }
-  | { status: 'applied'; count: number; text: string }
-  | { status: 'failed'; error: string; text?: string }
+  | { status: 'skipped'; reason: string; attempts?: number }
+  | { status: 'empty'; text: string; attempts?: number }
+  | { status: 'applied'; count: number; text: string; attempts?: number }
+  | { status: 'failed'; error: string; text?: string; attempts?: number }
 
 function channelReady(ch?: SideApiChannel | null): boolean {
   if (!ch?.enabled) return false
@@ -73,10 +79,11 @@ export function buildMemoryTraceRequestBody(input: {
     typeof input.temperature === 'number' && Number.isFinite(input.temperature)
       ? input.temperature
       : 0.2
+  // shujuku 单条纪要≥300字 + 实体增量，默认抬高 max_tokens
   const maxTokens =
     typeof input.maxTokens === 'number' && Number.isFinite(input.maxTokens)
       ? Math.max(256, Math.round(input.maxTokens))
-      : 1200
+      : 2200
   return {
     messages,
     body: {
@@ -163,21 +170,45 @@ export async function runMemoryTrace(input: {
     maxTokens: ep.maxTokens,
   })
 
-  const res = await input.postChat({ target, body })
-  if (!res.ok) {
-    return { status: 'failed', error: res.error }
-  }
+  // 网络失败 / 空 Memory / 解析 0 行 → 轻量重试（记忆 API 正道写纪要）
+  const loop = await withRetry(
+    async () => {
+      const res = await input.postChat({ target, body })
+      if (!res.ok) {
+        return { status: 'failed' as const, error: res.error }
+      }
+      const text = String(res.text || '')
+      if (!hasMemoryTag(text)) {
+        return { status: 'empty' as const, text }
+      }
+      const applied = applyAssistantMemoryTags(text)
+      if (!applied.success || applied.count <= 0) {
+        return { status: 'empty' as const, text }
+      }
+      return { status: 'applied' as const, count: applied.count, text }
+    },
+    {
+      maxAttempts: DEFAULT_API_MAX_ATTEMPTS,
+      shouldRetry: (r) => {
+        if (r.status === 'failed') {
+          return isRetryableFailureMessage(r.error || '')
+        }
+        // 空包常为模型偶发，重试一次
+        if (r.status === 'empty') return true
+        return false
+      },
+    },
+  )
 
-  const text = String(res.text || '')
-  if (!hasMemoryTag(text)) {
-    return { status: 'empty', text }
+  const out = loop.result
+  if (out.status === 'failed') {
+    return {
+      ...out,
+      error: withRetryHint(out.error, loop.attempts),
+      attempts: loop.attempts,
+    }
   }
-
-  const applied = applyAssistantMemoryTags(text)
-  if (!applied.success || applied.count <= 0) {
-    return { status: 'empty', text }
-  }
-  return { status: 'applied', count: applied.count, text }
+  return { ...out, attempts: loop.attempts }
 }
 
 /** 供 UI 展示：当前注入预览 */

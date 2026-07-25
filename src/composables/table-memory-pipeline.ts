@@ -7,6 +7,7 @@
 import type { AppSettings, ChatMessage } from '@/sillytavern/types'
 import {
   createDefaultMeta,
+  isSimilarJournalText,
   loadTableMemory,
   saveTableMemory,
   type TableMemoryState,
@@ -126,8 +127,13 @@ export async function runTableMemoryPipeline(
         newFloor,
       ]
       s2.meta.lastScheduleReason = plan.reason
-      // 若本回 sum 可写入纪要细行
-      maybeAppendJournalFromSum(s2, input.sum, newFloor)
+      // sum 兜底写纪要：仅当本轮 Memory 填表未产出纪要类内容，避免与 #纪要表 叠行
+      const fillWroteJournal =
+        fill.status === 'applied' &&
+        /#\s*纪要表|纪要表\s*\n|plot_journal/i.test(fill.text || '')
+      if (!fillWroteJournal) {
+        maybeAppendJournalFromSum(s2, input.sum, newFloor)
+      }
       saveTableMemory(s2)
     }
   }
@@ -150,7 +156,8 @@ export async function runTableMemoryPipeline(
                 messages,
                 stream: false,
                 temperature: 0.2,
-                max_tokens: 2000,
+                // 合并行目标 300～400 字×条数，需足够空间
+                max_tokens: 3200,
               },
             })
             if (!res.ok) throw new Error(res.error)
@@ -241,7 +248,7 @@ function buildBatchContext(
     .map((m) => String(m.content || '').slice(0, 800))
   const maintext =
     mains.length > 1
-      ? mains.join('\n---\n').slice(0, 2400)
+      ? mains.join('\n---\n').slice(0, 3600)
       : fallback.maintext || String(asst?.content || '')
   return {
     userText,
@@ -250,7 +257,12 @@ function buildBatchContext(
   }
 }
 
-/** 从 sum 自动追加一条细纪要（无 Memory 时仍有索引原料） */
+/**
+ * 从 sum 追加细纪要 — 仅作 Memory 填表失败时的弱兜底。
+ * shujuku 要求纪要≥300 字客观流水；短 sum 会污染表感，故：
+ * - 过短/套话不写
+ * - 正文仍短时只写入并标在概要侧，纪要字段尽量保留 sum 原文（不强行注水）
+ */
 export function maybeAppendJournalFromSum(
   s: TableMemoryState,
   sum: string | undefined,
@@ -258,25 +270,39 @@ export function maybeAppendJournalFromSum(
 ): boolean {
   const text = String(sum || '').trim()
   if (!text) return false
+  // 短 sum 不再落纪要表（避免「一句话 J 表」毁掉 shujuku 手感）
+  if (text.length < 40) return false
+  if (/^(无|无事|略|同上|本回无|暂无)/.test(text)) return false
   const table = s.tables.find((t) => t.id === 'plot_journal')
   if (!table) return false
   if (!s.meta) s.meta = createDefaultMeta()
+  if (!s.records[table.id]) s.records[table.id] = []
+
+  const dup = s.records[table.id].some((r) => {
+    const mark = String(r.values?.['标记'] || '').trim()
+    if (mark === 'auto_merged') return false
+    const body = String(r.values?.['纪要'] || '').trim()
+    const summary = String(r.values?.['概要'] || '').trim()
+    return (
+      isSimilarJournalText(text, body) ||
+      isSimilarJournalText(text, summary) ||
+      isSimilarJournalText(text.slice(0, 48), summary)
+    )
+  })
+  if (dup) return false
+
   const n = Math.max(1, s.meta.nextIndexCode || 1)
   const code = `J${String(n).padStart(4, '0')}`
   s.meta.nextIndexCode = n + 1
-  if (!s.records[table.id]) s.records[table.id] = []
-  // 去重：相同 sum 不重复写
-  const exists = s.records[table.id].some(
-    (r) => String(r.values?.['纪要'] || '').trim() === text,
-  )
-  if (exists) return false
+  const summary = text.length <= 30 ? text : text.slice(0, 30)
   s.records[table.id].push({
     id: `record_j_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
     values: {
       编码索引: code,
-      概要: text.slice(0, 48),
+      概要: summary,
       时间跨度: `楼${aiFloor}`,
       地点: '',
+      // 弱兜底：无法凭空扩到 300 字，保留事实句，待下轮正式填表/合并消化
       纪要: text,
       标记: '',
     },

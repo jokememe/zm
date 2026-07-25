@@ -33,21 +33,26 @@ beforeEach(() => {
   clearTableMemory()
 })
 
-describe('yuzuki prompt contracts (shipped)', () => {
+describe('yuzuki + shujuku prompt contracts (shipped)', () => {
   it('buildTableDefinitionsText lists default tables with primary keys', () => {
     const text = buildTableDefinitionsText()
     expect(text).toContain('#角色档案')
     expect(text).toContain('角色名(主键)')
     expect(text).toContain('#物品追踪')
     expect(text).toContain('#世界设定')
+    expect(text).toContain('#纪要表')
+    expect(text).toMatch(/300/)
   })
 
-  it('buildTraceRealtimePrompt requires Memory wrapper and incremental rules', () => {
+  it('buildTraceRealtimePrompt requires Memory wrapper and shujuku journal rules', () => {
     const p = buildTraceRealtimePrompt()
     expect(p).toContain('<Memory>')
     expect(p).toMatch(/主键|\[\]/)
     expect(p).toContain('数据库结构定义')
     expect(p).toContain('#角色档案')
+    expect(p).toMatch(/第三方|客观/)
+    expect(p).toMatch(/禁止.*升华|结尾禁止|禁.*升华/)
+    expect(p).toMatch(/300/)
   })
 
   it('buildMemoryTraceMessages injects world state + trace + turn texts', () => {
@@ -68,12 +73,14 @@ describe('yuzuki prompt contracts (shipped)', () => {
     expect(joined).toContain('接见赤焰谷使者')
     expect(joined).toContain('<Memory>')
     expect(joined).toContain('当前世界状态参考')
+    expect(joined).toMatch(/剧情正文/)
   })
 
-  it('main format hint contains Memory instructions', () => {
+  it('main format hint contains Memory + journal length rules', () => {
     const h = buildMainFormatMemoryHint()
     expect(h).toContain('<Memory>')
     expect(h).toContain('#角色档案')
+    expect(h).toMatch(/300/)
   })
 })
 

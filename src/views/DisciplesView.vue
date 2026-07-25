@@ -5,12 +5,28 @@ import TabsBar from '@/components/ui/TabsBar.vue'
 import { useModal } from '@/composables/useModal'
 import { useTianji } from '@/composables/useTianji'
 import { useGameState } from '@/composables/useGameState'
+import { useToast } from '@/composables/useToast'
 
 const tab = ref('all')
 const q = ref('')
 const { open } = useModal()
 const { injectContext } = useTianji()
-const { focusTianji, disciples } = useGameState()
+const { focusTianji, disciples, removeDisciple } = useGameState()
+const toast = useToast()
+
+function onRemove(d: { id: string; name: string }, ev?: Event) {
+  ev?.stopPropagation()
+  if (
+    !confirm(
+      `确定将「${d.name}」从名册除名？\n关系、继位观察、灵田指派与表格记忆中的同名行会一并清理。此操作不可自动恢复。`,
+    )
+  ) {
+    return
+  }
+  const r = removeDisciple(d.id)
+  if (r.ok) toast.success('已除名', r.name || d.name)
+  else toast.error('除名失败', r.error || '未知错误')
+}
 
 const tabs = computed(() => [
   { id: 'all', label: '全部', count: disciples.value.length },
@@ -147,7 +163,7 @@ function resolveSpouse(id?: string) {
               >{{ d.status }}</span>
             </td>
             <td>{{ resolveSpouse(d.spouse) ?? '—' }}</td>
-            <td>
+            <td class="ops-cell">
               <button
                 :id="`btn-disciple-open-${d.id}`"
                 class="btn btn-ghost btn-sm"
@@ -155,6 +171,15 @@ function resolveSpouse(id?: string) {
                 @click.stop="open('disciple-detail', { discipleId: d.id })"
               >
                 详情
+              </button>
+              <button
+                :id="`btn-disciple-remove-${d.id}`"
+                class="btn btn-ghost btn-sm btn-danger-text"
+                type="button"
+                title="从名册除名"
+                @click.stop="onRemove(d)"
+              >
+                除名
               </button>
             </td>
           </tr>
@@ -165,6 +190,19 @@ function resolveSpouse(id?: string) {
 </template>
 
 <style scoped>
+.ops-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  justify-content: flex-end;
+  white-space: nowrap;
+}
+.btn-danger-text {
+  color: #a04555 !important;
+}
+.btn-danger-text:hover {
+  background: rgba(160, 69, 85, 0.1);
+}
 .toolbar {
   display: flex;
   flex-wrap: wrap;

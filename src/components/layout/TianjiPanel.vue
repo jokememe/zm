@@ -34,6 +34,9 @@ const {
   lastMemoryTrace,
   lastMemoryTraceKind,
   memoryTracing,
+  lastRecallTrace,
+  lastRecallTraceKind,
+  recalling,
   settings,
   showSettings,
   showLorebooks,
@@ -45,8 +48,8 @@ const {
 } = useTianji()
 const toast = useToast()
 
-/** 推演中或局面分析中，禁止连发 */
-const busy = computed(() => typing.value || settling.value)
+/** 推演中 / 局面分析 / 发话前召回，禁止连发 */
+const busy = computed(() => typing.value || settling.value || recalling.value)
 
 const input = ref('')
 const listRef = ref<HTMLElement | null>(null)
@@ -268,6 +271,18 @@ async function onPresetClose() {
       >
         <template v-if="settling">局面分析进行中…</template>
         <template v-else>局面：{{ lastSettlement }}</template>
+      </p>
+      <p
+        v-if="recalling || lastRecallTrace"
+        class="tianji-settle"
+        :class="{
+          'tianji-settle--ok': lastRecallTraceKind === 'ok',
+          'tianji-settle--fail': lastRecallTraceKind === 'fail',
+          'tianji-settle--info': lastRecallTraceKind === 'info' || recalling,
+        }"
+      >
+        <template v-if="recalling">纪要召回选码中…</template>
+        <template v-else>召回：{{ lastRecallTrace }}</template>
       </p>
       <p
         v-if="memoryTracing || lastMemoryTrace"

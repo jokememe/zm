@@ -238,6 +238,44 @@ function isFiniteNumber(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v)
 }
 
+/** 改名场景：模型常用的「旧名」字段 */
+function pickFormerName(raw: Record<string, unknown>): string {
+  for (const key of [
+    'formerName',
+    'oldName',
+    'fromName',
+    'renameFrom',
+    '原名',
+    '旧名',
+    '曾用名',
+    '原姓名',
+  ] as const) {
+    const v = raw[key]
+    if (typeof v === 'string' && v.trim()) return v.trim()
+  }
+  return ''
+}
+
+function discipleFieldsFromRaw(
+  raw: Record<string, unknown>,
+): Partial<Disciple> {
+  const p: Partial<Disciple> = {}
+  if (raw.gender === '男' || raw.gender === '女') p.gender = raw.gender
+  if (typeof raw.age === 'number') p.age = raw.age
+  if (typeof raw.realm === 'string') p.realm = raw.realm
+  if (typeof raw.aptitude === 'string') p.aptitude = raw.aptitude
+  if (typeof raw.role === 'string') p.role = raw.role
+  if (typeof raw.loyalty === 'number') p.loyalty = raw.loyalty
+  if (typeof raw.mood === 'string') p.mood = raw.mood
+  if (Array.isArray(raw.talent)) p.talent = raw.talent.map(String)
+  if (typeof raw.status === 'string' && DISCIPLE_STATUS.has(raw.status as Disciple['status'])) {
+    p.status = raw.status as Disciple['status']
+  }
+  if (typeof raw.master === 'string') p.master = raw.master
+  if (typeof raw.spouse === 'string') p.spouse = raw.spouse
+  return p
+}
+
 /** 模型常用的 name 别名字段（弟子 / 势力 / 城池） */
 function pickNameAlias(raw: Record<string, unknown>): string {
   for (const key of [
@@ -291,19 +329,63 @@ export function sanitizeWorldDelta(delta: WorldDelta): WorldDelta {
       const name = pickNameAlias(raw)
       // 没有可写姓名的 add 无法入册，丢弃这一条；不截断「第 4、5 个有名新人」
       if (!name) continue
-      const next: Extract<WorldOp, { op: 'disciple.add' }> = { op: 'disciple.add', name }
-      if (raw.gender === '男' || raw.gender === '女') next.gender = raw.gender
-      if (typeof raw.age === 'number') next.age = raw.age
-      if (typeof raw.realm === 'string') next.realm = raw.realm
-      if (typeof raw.aptitude === 'string') next.aptitude = raw.aptitude
-      if (typeof raw.role === 'string') next.role = raw.role
-      if (typeof raw.loyalty === 'number') next.loyalty = raw.loyalty
-      if (typeof raw.mood === 'string') next.mood = raw.mood
-      if (Array.isArray(raw.talent)) next.talent = raw.talent.map(String)
-      if (typeof raw.status === 'string' && DISCIPLE_STATUS.has(raw.status as Disciple['status'])) {
-        next.status = raw.status as Disciple['status']
+      const former = pickFormerName(raw)
+      const fields = discipleFieldsFromRaw(raw)
+      // 改名误写成 add：收成 update，避免名册新旧并存
+      if (former && former !== name) {
+        ops.push({
+          op: 'disciple.update',
+          name: former,
+          patch: { ...fields, name },
+        })
+        continue
       }
-      if (typeof raw.master === 'string') next.master = raw.master
+      const next: Extract<WorldOp, { op: 'disciple.add' }> = { op: 'disciple.add', name }
+      Object.assign(next, fields)
+      if (former) next.formerName = former
+      ops.push(next)
+      continue
+    }
+
+    if (kind === 'disciple.update') {
+      const locator =
+        (typeof raw.id === 'string' && raw.id.trim()) ||
+        pickFormerName(raw) ||
+        pickNameAlias(raw) ||
+        (typeof raw.name === 'string' ? raw.name.trim() : '')
+      let patch =
+        raw.patch && typeof raw.patch === 'object' && !Array.isArray(raw.patch)
+          ? { ...(raw.patch as Record<string, unknown>) }
+          : ({} as Record<string, unknown>)
+      // 模型常把改名写成顶层 name=新名、无 patch
+      const newNameFromPatch =
+        typeof patch.name === 'string' ? String(patch.name).trim() : ''
+      const topName = pickNameAlias(raw)
+      const former = pickFormerName(raw)
+      if (!Object.keys(patch).length && topName && former && topName !== former) {
+        patch = { name: topName, ...discipleFieldsFromRaw(raw) }
+      } else if (
+        topName &&
+        former &&
+        topName !== former &&
+        !newNameFromPatch
+      ) {
+        patch = { ...patch, name: topName }
+      }
+      // 把顶层字段并进 patch（除定位）
+      const extra = discipleFieldsFromRaw(raw)
+      for (const [k, v] of Object.entries(extra)) {
+        if (patch[k] === undefined) patch[k] = v
+      }
+      if (!Object.keys(patch).length) continue
+      const next: Extract<WorldOp, { op: 'disciple.update' }> = {
+        op: 'disciple.update',
+        patch: patch as Extract<WorldOp, { op: 'disciple.update' }>['patch'],
+      }
+      if (typeof raw.id === 'string' && raw.id.trim()) next.id = raw.id.trim()
+      else if (former) next.name = former
+      else if (locator) next.name = locator
+      if (former) next.formerName = former
       ops.push(next)
       continue
     }
@@ -434,9 +516,56 @@ export function sanitizeWorldDelta(delta: WorldDelta): WorldDelta {
 
   return {
     resources,
-    ops,
+    ops: collapseDiscipleRemoveAddRenames(ops),
     summary: delta.summary !== undefined ? String(delta.summary) : undefined,
   }
+}
+
+/**
+ * 同批「remove 旧名 + add 新名」收成一条改名 update（模型常拆成两步导致双开）。
+ */
+function collapseDiscipleRemoveAddRenames(ops: WorldOp[]): WorldOp[] {
+  const used = new Set<number>()
+  const extra: WorldOp[] = []
+  for (let i = 0; i < ops.length; i++) {
+    if (ops[i].op !== 'disciple.remove') continue
+    const oldName = String(
+      (ops[i] as { name?: string; id?: string }).name ||
+        (ops[i] as { id?: string }).id ||
+        '',
+    ).trim()
+    if (!oldName) continue
+    for (let j = 0; j < ops.length; j++) {
+      if (i === j || used.has(j) || ops[j].op !== 'disciple.add') continue
+      const add = ops[j] as Extract<WorldOp, { op: 'disciple.add' }>
+      const newName = String(add.name || '').trim()
+      if (!newName || newName === oldName) continue
+      used.add(i)
+      used.add(j)
+      extra.push({
+        op: 'disciple.update',
+        name: oldName,
+        formerName: oldName,
+        patch: {
+          name: newName,
+          gender: add.gender,
+          age: add.age,
+          realm: add.realm,
+          aptitude: add.aptitude,
+          role: add.role,
+          loyalty: add.loyalty,
+          mood: add.mood,
+          talent: add.talent,
+          status: add.status,
+          master: add.master,
+        },
+      })
+      break
+    }
+  }
+  if (!used.size) return ops
+  const rest = ops.filter((_, idx) => !used.has(idx))
+  return [...rest, ...extra]
 }
 
 /**
@@ -454,10 +583,12 @@ function validateOneOp(op: WorldOp & { op?: string }, snap: WorldSnapshot, index
       if (op.gender !== undefined && !GENDERS.has(op.gender)) return `${prefix}: gender 非法`
       if (op.status !== undefined && !DISCIPLE_STATUS.has(op.status)) return `${prefix}: status 非法`
       if (op.loyalty !== undefined && !isFiniteNumber(op.loyalty)) return `${prefix}: loyalty 须为数字`
+      // 同名已在册：不在此报错，由 demoteDuplicateDiscipleAdd 收成 update
       return null
     }
     case 'disciple.update': {
-      const r = resolveByIdOrName(snap.disciples, op.id, op.name, '弟子')
+      const locateName = op.formerName || op.name
+      const r = resolveByIdOrName(snap.disciples, op.id, locateName, '弟子')
       if (r.error) return `${prefix}: ${r.error}`
       if (!op.patch || !isPlainObject(op.patch)) return `${prefix}: patch 必填`
       if (op.patch.status !== undefined && !DISCIPLE_STATUS.has(op.patch.status)) {
@@ -708,6 +839,67 @@ function snapWithPendingNames(
 }
 
 /**
+ * 弟子已在册却又 disciple.add → 收成 update，避免改名/重复收徒双开行。
+ */
+function demoteDuplicateDiscipleAdd(
+  op: WorldOp,
+  snap: WorldSnapshot,
+): { op: WorldOp; demoted: boolean } {
+  if (op.op !== 'disciple.add') return { op, demoted: false }
+  const name = String(op.name || '').trim()
+  if (!name) return { op, demoted: false }
+  const former = String(op.formerName || '').trim()
+  if (former && former !== name) {
+    const hit = snap.disciples.find((d) => d.name === former || d.id === former)
+    if (hit) {
+      return {
+        op: {
+          op: 'disciple.update',
+          id: hit.id,
+          name: hit.name,
+          patch: {
+            name,
+            gender: op.gender,
+            age: op.age,
+            realm: op.realm,
+            aptitude: op.aptitude,
+            role: op.role,
+            loyalty: op.loyalty,
+            mood: op.mood,
+            talent: op.talent,
+            status: op.status,
+            master: op.master,
+          },
+        },
+        demoted: true,
+      }
+    }
+  }
+  const existing = snap.disciples.find((d) => d.name === name)
+  if (!existing) return { op, demoted: false }
+  return {
+    op: {
+      op: 'disciple.update',
+      id: existing.id,
+      name: existing.name,
+      patch: {
+        gender: op.gender,
+        age: op.age,
+        realm: op.realm,
+        aptitude: op.aptitude,
+        role: op.role,
+        loyalty: op.loyalty,
+        mood: op.mood,
+        talent: op.talent,
+        status: op.status,
+        master: op.master,
+      },
+    },
+    demoted: true,
+  }
+}
+
+/**
  * 活世界：模型常对「正文新实体」误用 update。
  * 若按 id/name 找不到实体，且带了 name，则提升为 add（patch 字段并入）。
  */
@@ -849,6 +1041,10 @@ export function validateWorldDelta(delta: WorldDelta, snap: WorldSnapshot): Vali
   // 同包内连续 add 后，后续 op 应看到已入册名（防同名双 add）
   const pendingFactionNames = new Set(snap.factions.map((f) => f.name))
   const pendingCityNames = new Set(snap.cities.map((c) => c.name))
+  /** 本批弟子「当前有效名」（改名后更新），防同批重复 add */
+  const pendingDiscipleNames = new Set(snap.disciples.map((d) => d.name))
+  /** id → 当前名，便于 demote */
+  const discipleByName = new Map(snap.disciples.map((d) => [d.name, d]))
 
   for (let i = 0; i < opsIn.length; i++) {
     if (kept.length >= MAX_OPS) {
@@ -861,14 +1057,58 @@ export function validateWorldDelta(delta: WorldDelta, snap: WorldSnapshot): Vali
     }
     let op = opsIn[i] as WorldOp & { op?: string }
     const validateSnap = snapWithPendingNames(snap, pendingFactionNames, pendingCityNames)
+
     const promo = promoteUnknownUpdateToAdd(op as WorldOp, validateSnap)
     if (promo.promoted) {
       warnings.push(`ops[${i}] 未在册实体，已将 update 提升为 add`)
       op = promo.op as WorldOp & { op?: string }
     }
 
+    // 弟子 add 撞名 / 带 formerName → update
+    if (op.op === 'disciple.add') {
+      const demo = demoteDuplicateDiscipleAdd(op, {
+        ...validateSnap,
+        disciples: [
+          ...validateSnap.disciples,
+          // 本批已占用的新名也视为在册
+          ...[...pendingDiscipleNames]
+            .filter((n) => !validateSnap.disciples.some((d) => d.name === n))
+            .map((n) => {
+              const known = discipleByName.get(n)
+              return (
+                known || {
+                  id: `pending-${n}`,
+                  name: n,
+                  gender: '男' as const,
+                  age: 16,
+                  realm: '',
+                  aptitude: '',
+                  role: '',
+                  loyalty: 0,
+                  mood: '',
+                  talent: [] as string[],
+                  status: '在宗' as const,
+                  avatarHue: 0,
+                }
+              )
+            }),
+        ],
+      })
+      if (demo.demoted) {
+        warnings.push(`ops[${i}] 弟子已在册或属改名，add 已收成 update`)
+        op = demo.op as WorldOp & { op?: string }
+      }
+    }
+
+    // update 定位：formerName 优先
+    if (op.op === 'disciple.update' && op.formerName && !op.id) {
+      op = { ...op, name: op.formerName }
+    }
+
     const err = validateOneOp(op, validateSnap, i)
     if (err) {
+      // 改名：name 写成了新名、找不到人 → 若 patch 无 name 且 former 可定位则已处理；
+      // 若 locator 是新名但旧名仍在册，尝试用「唯一可能的旧人」不猜。跳过并警告。
       errors.push(err)
       warnings.push(`已跳过：${err}`)
       continue
@@ -876,6 +1116,36 @@ export function validateWorldDelta(delta: WorldDelta, snap: WorldSnapshot): Vali
     kept.push(op as WorldOp)
     if (op.op === 'faction.add' && op.name) pendingFactionNames.add(String(op.name).trim())
     if (op.op === 'city.add' && op.name) pendingCityNames.add(String(op.name).trim())
+    if (op.op === 'disciple.add' && op.name) {
+      pendingDiscipleNames.add(String(op.name).trim())
+      discipleByName.set(String(op.name).trim(), {
+        id: `pending-${op.name}`,
+        name: String(op.name).trim(),
+        gender: '男',
+        age: 16,
+        realm: '',
+        aptitude: '',
+        role: '',
+        loyalty: 0,
+        mood: '',
+        talent: [],
+        status: '在宗',
+        avatarHue: 0,
+      })
+    }
+    if (op.op === 'disciple.update') {
+      const oldN = String(op.formerName || op.name || '').trim()
+      const newN = op.patch?.name != null ? String(op.patch.name).trim() : ''
+      if (newN && oldN && newN !== oldN) {
+        pendingDiscipleNames.delete(oldN)
+        pendingDiscipleNames.add(newN)
+        const prev = discipleByName.get(oldN) || snap.disciples.find((d) => d.name === oldN)
+        if (prev) {
+          discipleByName.delete(oldN)
+          discipleByName.set(newN, { ...prev, name: newN })
+        }
+      }
+    }
   }
 
   const cleaned: WorldDelta = {
@@ -909,6 +1179,33 @@ function nextId(prefix: string): string {
   return `${prefix}-gen-${genSeq}-${Date.now().toString(36)}`
 }
 
+/** 弟子改名后：关系 / 宝物持有 / 继位名单 / 锻器工匠 等引用一并改 */
+function rewritePersonNameRefs(
+  snap: WorldSnapshot,
+  oldName: string,
+  newName: string,
+): void {
+  if (!oldName || !newName || oldName === newName) return
+  for (const e of snap.relationEdges || []) {
+    if (e.from === oldName) e.from = newName
+    if (e.to === oldName) e.to = newName
+  }
+  for (const t of snap.treasures || []) {
+    if (t.owner === oldName) t.owner = newName
+  }
+  for (const g of snap.forgeQueue || []) {
+    if (g.craftsman === oldName) g.craftsman = newName
+  }
+  for (const h of snap.heirs || []) {
+    if (h.name === oldName) h.name = newName
+  }
+  for (const m of snap.manuals || []) {
+    if (Array.isArray(m.readers)) {
+      /* readers 若是数字则跳过；部分实现是人名列表 */
+    }
+  }
+}
+
 export function applyWorldDeltaToSnapshot(
   delta: WorldDelta,
   snap: WorldSnapshot,
@@ -935,9 +1232,27 @@ export function applyWorldDeltaToSnapshot(
   for (const op of delta.ops ?? []) {
     switch (op.op) {
       case 'disciple.add': {
+        const newName = String(op.name).trim()
+        // 安全网：同名已在册则改 update，不双开
+        const existed = next.disciples.find((d) => d.name === newName)
+        if (existed) {
+          if (op.gender === '男' || op.gender === '女') existed.gender = op.gender
+          if (typeof op.age === 'number') existed.age = clamp(op.age, 1, 200)
+          if (op.realm) existed.realm = op.realm
+          if (op.aptitude) existed.aptitude = op.aptitude
+          if (op.role) existed.role = op.role
+          if (typeof op.loyalty === 'number') existed.loyalty = clamp(op.loyalty, 0, 100)
+          if (op.mood) existed.mood = op.mood
+          if (Array.isArray(op.talent)) existed.talent = op.talent.map(String)
+          if (op.status && DISCIPLE_STATUS.has(op.status)) existed.status = op.status
+          if (op.master) existed.master = op.master
+          lines.push(`弟子 ${existed.name} 已在册，已合并更新`)
+          changed = true
+          break
+        }
         const d: Disciple = {
           id: nextId('d'),
-          name: String(op.name).trim(),
+          name: newName,
           gender: op.gender === '女' ? '女' : '男',
           age: typeof op.age === 'number' ? clamp(op.age, 1, 200) : 16,
           realm: op.realm || '炼气一层',
@@ -956,11 +1271,24 @@ export function applyWorldDeltaToSnapshot(
         break
       }
       case 'disciple.update': {
-        const r = resolveByIdOrName(next.disciples, op.id, op.name, '弟子')
+        const locate = op.formerName || op.name
+        const r = resolveByIdOrName(next.disciples, op.id, locate, '弟子')
         if (!r.item || !op.patch) break
         const before = r.item.name
         const p = op.patch
-        if (p.name !== undefined) r.item.name = String(p.name)
+        if (p.name !== undefined) {
+          const nn = String(p.name).trim()
+          if (nn && nn !== before) {
+            // 若新名已有另一人，合并到旧档并去掉冲突行
+            const clash = next.disciples.find((d) => d.id !== r.item!.id && d.name === nn)
+            if (clash) {
+              next.disciples = next.disciples.filter((d) => d.id !== clash.id)
+            }
+            r.item.name = nn
+            rewritePersonNameRefs(next, before, nn)
+            lines.push(`弟子改名 ${before} → ${nn}`)
+          }
+        }
         if (p.gender === '男' || p.gender === '女') r.item.gender = p.gender
         if (typeof p.age === 'number') r.item.age = clamp(p.age, 1, 200)
         if (p.realm !== undefined) r.item.realm = String(p.realm)
@@ -972,7 +1300,9 @@ export function applyWorldDeltaToSnapshot(
         if (p.status && DISCIPLE_STATUS.has(p.status)) r.item.status = p.status
         if (p.master !== undefined) r.item.master = String(p.master)
         if (p.spouse !== undefined) r.item.spouse = String(p.spouse)
-        lines.push(`弟子 ${before} 状态更新`)
+        if (!(p.name !== undefined && String(p.name).trim() && String(p.name).trim() !== before)) {
+          lines.push(`弟子 ${before} 状态更新`)
+        }
         changed = true
         break
       }

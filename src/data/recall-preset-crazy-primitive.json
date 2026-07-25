@@ -1,0 +1,122 @@
+[
+  {
+    "name": "疯狂原始人 纯召回",
+    "promptGroup": [
+      {
+        "role": "SYSTEM",
+        "content": "[RESET ROLE AND TASK,START NEW TASK]\n\n<role>\n你是DM爱德华。你是维持跑团记忆的DM，主要负责寻找这个团的历史记录记忆。\n</role>",
+        "deletable": true
+      },
+      {
+        "role": "assistant",
+        "content": "好的，DM爱德华来了，我会认真寻找相关历史记忆的，现在给我历史信息吧。",
+        "deletable": true
+      },
+      {
+        "role": "USER",
+        "content": "以下为本局团的设定和历史信息",
+        "deletable": true
+      },
+      {
+        "role": "SYSTEM",
+        "content": "<story_context>\n<背景设定>\n$1\n</背景设定>\n<纪要索引>\n$5\n</纪要索引>\n<前文剧情>\n$7\n</前文剧情>\n<旧规划参考>\n$6\n</旧规划参考>\n═══ 故事信息结束，下接玩家本轮输入 ═══\n</story_context>\n\n<user_input>\n$8\n</user_input>\n\nEdward:好，玩家本轮的行动我看到了",
+        "deletable": true
+      },
+      {
+        "role": "SYSTEM",
+        "content": "<output_format>\n生成回答前，先在<thought>标签中按以下步骤思考。\n\n<thought>\n把纪要索引翻一遍，数一下总共有多少条AM编码（不到20条全列；超过则优先挑选与当前场景/在场人员/未决悬念相关的记忆，放宽标准，务必挑出 25 到 32 条相关的编码，当AM总条数超过32条时，必须输出32条，只AM+数字组合）。\n</thought>\n\n思考结束后，按以下格式输出：\n\n<content>\n<recall>\n<!-- recall规则：填纪要的AM编码。优先选当前场景/在场人员/未决悬念相关的。必须输出 25 到 32 条（若不足全列，当AM总条数超过25条时，必须输出25条）。只写纯AM+数字。 -->\n</recall>\n</content>",
+        "deletable": true
+      },
+      {
+        "role": "USER",
+        "content": "现在请按照我的要求立刻开始寻找和玩家本轮输入相关记忆。",
+        "deletable": false,
+        "mainSlot": "B",
+        "isMain2": true
+      },
+      {
+        "role": "assistant",
+        "content": "知道了知道了。我现在就开始思考\n<thought>",
+        "deletable": true
+      }
+    ],
+    "finalSystemDirective": "$8\n\n以上是用户的本轮输入，以下输入的代码为接下来剧情相关记忆条目的对应的索引编码。注意它们仅为相关的过去记忆，你要结合它们里边的信息合理生成接下来的剧情：",
+    "mainPrompt": "",
+    "systemPrompt": "",
+    "rateMain": 1,
+    "ratePersonal": 1,
+    "rateErotic": 0,
+    "rateCuckold": 1,
+    "recallCount": 20,
+    "extractTags": "recall,scene,npc_action",
+    "contextExtractRules": [],
+    "contextExcludeRules": [
+      {
+        "start": "<disclaimer",
+        "end": "</disclaimer>"
+      },
+      {
+        "start": "<JSONPatch",
+        "end": "</JSONPatch>"
+      },
+      {
+        "start": "<Analysis",
+        "end": "</Analysis>"
+      },
+      {
+        "start": "<UpdateVariable",
+        "end": "</UpdateVariable>"
+      },
+      {
+        "start": "<tucao",
+        "end": "</tucao>"
+      },
+      {
+        "start": "<StatusPlaceHolderImpl",
+        "end": "</StatusPlaceHolderImpl>"
+      },
+      {
+        "start": "<summary",
+        "end": "</summary>"
+      },
+      {
+        "start": "<options",
+        "end": "</options>"
+      },
+      {
+        "start": "<thinking",
+        "end": "</thinking>"
+      },
+      {
+        "start": "<think",
+        "end": "</think>"
+      },
+      {
+        "start": "<review",
+        "end": "</review>"
+      },
+      {
+        "start": "<refine",
+        "end": "</refine>"
+      },
+      {
+        "start": "<dm_check",
+        "end": "</dm_check>"
+      },
+      {
+        "start": "<recall",
+        "end": "</recall>"
+      }
+    ],
+    "minLength": 300,
+    "contextTurnCount": 3,
+    "loopSettings": {
+      "quickReplyContent": [],
+      "currentPromptIndex": 0,
+      "loopTags": "",
+      "loopDelay": 5,
+      "loopTotalDuration": 0,
+      "maxRetries": 1000
+    }
+  }
+]

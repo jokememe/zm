@@ -65,8 +65,10 @@ function buildSystemEntries(extra?: {
   contextDetail?: string | null
   /** 关闭表格记忆时不注入世界状态表（仍可保留 sum 层） */
   tableMemoryEnabled?: boolean
-  /** 本回用户输入，供纪要 Top-K 关键词召回 */
+  /** 本回用户输入，供纪要 Top-K / LLM 召回 */
   recallQuery?: string | null
+  /** 发话前 LLM 选中的编码（有则优先于纯关键词） */
+  recallCodes?: string[] | null
 }): LorebookEntry[] {
   loadMemoryBank()
   const tableOn = extra?.tableMemoryEnabled !== false
@@ -83,6 +85,9 @@ function buildSystemEntries(extra?: {
         TABLE_WORLD_STATE_ENTRY_ID,
         formatWorldStateInjection(undefined, {
           query: extra?.recallQuery || undefined,
+          recallCodes: extra?.recallCodes?.length
+            ? [...extra.recallCodes]
+            : undefined,
         }),
         '系统自动 · 表格世界状态（实体+纪要索引+Top-K召回）',
         4,
@@ -97,6 +102,7 @@ export async function ensureAndRefreshSystemLorebook(extra?: {
   contextDetail?: string | null
   tableMemoryEnabled?: boolean
   recallQuery?: string | null
+  recallCodes?: string[] | null
 }): Promise<Lorebook> {
   const systemEntries = buildSystemEntries(extra)
   const all = await getLorebooks()

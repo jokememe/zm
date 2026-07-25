@@ -102,13 +102,14 @@ export const DEFAULT_MEMORY_TABLES: MemoryTableDef[] = [
     columns: ['#主线', '#支线'],
   },
   /**
-   * 纪要表 — 对齐 shujuku「纪要表/总结表」：
-   * 每回合可追加细行；超阈值后合并为 auto_merged 粗行；索引召回只读概要+编码。
+   * 纪要表 — 对齐 shujuku@mov5.5：
+   * 轮次客观日志（细行 J）；合并 auto_merged（AM）；
+   * 纪要≥约300字第三方事实、概要≤30字；索引召回只读概要+编码。
    */
   {
     id: 'plot_journal',
     name: '纪要表',
-    columns: ['编码索引', '概要', '时间跨度', '地点', '纪要', '标记'],
+    columns: ['编码索引', '时间跨度', '地点', '纪要', '概要', '标记'],
   },
 ]
 
@@ -167,6 +168,44 @@ export function normalizeName(value: string): string {
     .replace(/\s+/g, '')
     .trim()
     .toLowerCase()
+}
+
+/**
+ * 纪要编码规范化：
+ * - 原版 shujuku / 模型习惯常用 A0001 作细行索引
+ * - 本仓统一细行为 Jxxxx、合并行为 AMxxxx
+ * - A#### → J####，避免 A/J 交替双轨；已是 J/AM 则只做大写补零
+ */
+export function normalizeJournalIndexCode(code: string): string {
+  const raw = String(code || '').trim().toUpperCase()
+  if (!raw) return ''
+  const am = raw.match(/^AM0*(\d+)$/i)
+  if (am) return `AM${String(parseInt(am[1], 10) || 0).padStart(4, '0')}`
+  const aj = raw.match(/^[AJ]0*(\d+)$/i)
+  if (aj) return `J${String(parseInt(aj[1], 10) || 0).padStart(4, '0')}`
+  return raw
+}
+
+/** 纪要正文指纹：去空白标点，供近似去重 */
+export function journalBodyFingerprint(text: string): string {
+  return String(text || '')
+    .normalize('NFKC')
+    .replace(/\s+/g, '')
+    .replace(/[，。；、：:！!？?·•|｜\-—_（）()【】\[\]「」""'']/g, '')
+    .toLowerCase()
+}
+
+/** 两条纪要是否同事件（精确 / 包含 / 前缀重叠） */
+export function isSimilarJournalText(a: string, b: string): boolean {
+  const na = journalBodyFingerprint(a)
+  const nb = journalBodyFingerprint(b)
+  if (!na || !nb) return false
+  if (na === nb) return true
+  if (na.length >= 8 && nb.length >= 8 && (na.includes(nb) || nb.includes(na))) {
+    return true
+  }
+  const n = Math.min(28, na.length, nb.length)
+  return n >= 12 && na.slice(0, n) === nb.slice(0, n)
 }
 
 export function getPrimaryColumnName(table: MemoryTableDef): string {
@@ -348,16 +387,9 @@ export function applyMemoryRow(
   }
 
   // 纪要表：每条细行独立插入（主键=编码索引）；同编码则合并字段
+  // A#### 归一为 J####；正文近似重复则并入已有行，避免 A/J 双轨与 sum 叠写
   if (table.id === 'plot_journal') {
     const primaryName = getPrimaryColumnName(table)
-    let primaryValue = String(row.primaryValue || '').trim()
-    if (!primaryValue) {
-      // 无主键时自动分配 Jxxxx
-      if (!s.meta) s.meta = createDefaultMeta()
-      const n = Math.max(1, s.meta.nextIndexCode || 1)
-      primaryValue = `J${String(n).padStart(4, '0')}`
-      s.meta.nextIndexCode = n + 1
-    }
     const validUpdates = Object.entries(row.values || {})
       .map(([field, value]) => {
         const column = findColumn(table, field)
@@ -368,32 +400,108 @@ export function applyMemoryRow(
       })
       .filter((x): x is { column: string; value: string } => !!x)
 
-    // 允许仅主键+概要/纪要
-    let record = records.find(
-      (entry) =>
-        String(entry?.values?.[primaryName] || '').trim() === primaryValue,
-    )
+    const incomingBody =
+      validUpdates.find((u) => cleanColumnName(u.column) === '纪要')?.value ||
+      String(row.values?.['纪要'] || row.values?.['内容'] || '').trim()
+    const incomingSummary =
+      validUpdates.find((u) => cleanColumnName(u.column) === '概要')?.value ||
+      String(row.values?.['概要'] || row.values?.['概览'] || '').trim()
+    const contentProbe = incomingBody || incomingSummary
+
+    let primaryValue = normalizeJournalIndexCode(String(row.primaryValue || '').trim())
+    // 模型写了 A/J 以外的「摘要」当主键时，当作无编码，走内容去重/新号
+    if (primaryValue && !/^(J|AM)\d+$/i.test(primaryValue)) {
+      // 保留 AM/J 以外的显式编码仅当不像自然语言
+      if (/[\u4e00-\u9fff]/.test(primaryValue) || primaryValue.length > 12) {
+        primaryValue = ''
+      }
+    }
+
+    const codeMatch = (entry: MemoryRecord, code: string) => {
+      if (!code) return false
+      const existing = normalizeJournalIndexCode(
+        String(entry?.values?.[primaryName] || entry?.values?.['编码索引'] || '').trim(),
+      )
+      return existing === code
+    }
+
+    let record = primaryValue
+      ? records.find((entry) => codeMatch(entry, primaryValue))
+      : undefined
+
+    // 无匹配编码时：用正文/概要撞已有细行 → 合并而非新建（防 J 堆重复）
+    if (!record && contentProbe) {
+      const markOf = (entry: MemoryRecord) =>
+        String(entry?.values?.['标记'] || '').trim() === 'auto_merged' ||
+        /^AM\d+/i.test(String(entry?.values?.['编码索引'] || ''))
+      record = [...records].reverse().find((entry) => {
+        if (markOf(entry)) return false
+        const body = String(entry.values?.['纪要'] || entry.values?.['内容'] || '').trim()
+        const summary = String(entry.values?.['概要'] || '').trim()
+        return (
+          isSimilarJournalText(contentProbe, body) ||
+          isSimilarJournalText(contentProbe, summary) ||
+          (incomingSummary && isSimilarJournalText(incomingSummary, summary))
+        )
+      })
+      if (record) {
+        primaryValue = normalizeJournalIndexCode(
+          String(record.values?.[primaryName] || record.values?.['编码索引'] || '').trim(),
+        )
+      }
+    }
+
     if (!record) {
+      if (!primaryValue) {
+        if (!s.meta) s.meta = createDefaultMeta()
+        const n = Math.max(1, s.meta.nextIndexCode || 1)
+        primaryValue = `J${String(n).padStart(4, '0')}`
+        s.meta.nextIndexCode = n + 1
+      } else if (/^J\d+$/i.test(primaryValue) && s.meta) {
+        const num = parseInt(primaryValue.replace(/\D/g, ''), 10)
+        if (num >= (s.meta.nextIndexCode || 1)) s.meta.nextIndexCode = num + 1
+      }
       record = createRecord(table, { [primaryName]: primaryValue })
       records.push(record)
     }
+
     record.values = record.values || {}
     record.values[primaryName] = primaryValue
     record.values['编码索引'] = primaryValue
     for (const { column, value } of validUpdates) {
       const columnName = cleanColumnName(column)
+      if (columnName === '编码索引' || columnName === primaryName) continue
+      // 标记：细行写入时不要被模型乱标 auto_merged
+      if (columnName === '标记' && value === 'auto_merged' && !/^AM/i.test(primaryValue)) {
+        continue
+      }
+      const prev = String(record.values[columnName] || '').trim()
+      // 已有更长纪要时，短重复不覆盖
+      if (
+        (columnName === '纪要' || columnName === '概要') &&
+        prev &&
+        isSimilarJournalText(prev, value) &&
+        value.length < prev.length
+      ) {
+        continue
+      }
       record.values[columnName] = value
     }
-    // 从正文生成默认概要
+    // shujuku：概览与概要同义
+    if (!String(record.values['概要'] || '').trim() && row.values?.['概览']) {
+      record.values['概要'] = String(row.values['概览']).trim().slice(0, 30)
+    }
     if (!String(record.values['概要'] || '').trim()) {
       const body = String(record.values['纪要'] || '').trim()
-      if (body) record.values['概要'] = body.slice(0, 48)
+      if (body) record.values['概要'] = body.slice(0, 30)
+    } else {
+      record.values['概要'] = String(record.values['概要']).trim().slice(0, 30)
     }
     return true
   }
 
   const primaryName = getPrimaryColumnName(table)
-  const primaryValue = String(row.primaryValue || '').trim()
+  let primaryValue = String(row.primaryValue || '').trim()
   if (!primaryValue) return false
 
   const validUpdates = Object.entries(row.values || {})
@@ -408,9 +516,38 @@ export function applyMemoryRow(
 
   if (!validUpdates.length) return false
 
+  // 角色档案改名：带 原名/旧名/曾用名 时并入旧行，不新建
+  const formerName =
+    table.id === 'character_profile'
+      ? String(
+          row.values?.['原名'] ||
+            row.values?.['旧名'] ||
+            row.values?.['曾用名'] ||
+            row.values?.['formerName'] ||
+            '',
+        ).trim()
+      : ''
+
   let record = records.find(
     (entry) => String(entry?.values?.[primaryName] || '').trim() === primaryValue,
   )
+  if (!record && formerName) {
+    record = records.find(
+      (entry) => String(entry?.values?.[primaryName] || '').trim() === formerName,
+    )
+  }
+  // 新名行与旧名行都在：合并到旧行并删新行占位
+  if (record && formerName && primaryValue !== formerName) {
+    const dup = records.find(
+      (entry) =>
+        entry.id !== record!.id &&
+        String(entry?.values?.[primaryName] || '').trim() === primaryValue,
+    )
+    if (dup) {
+      // 保留旧行 id，删掉误建的新名行
+      s.records[table.id] = records.filter((e) => e.id !== dup.id)
+    }
+  }
   if (!record) {
     record = createRecord(table, { [primaryName]: primaryValue })
     records.push(record)
@@ -420,12 +557,47 @@ export function applyMemoryRow(
 
   for (const { column, value } of validUpdates) {
     const columnName = cleanColumnName(column)
+    if (
+      columnName === '原名' ||
+      columnName === '旧名' ||
+      columnName === '曾用名' ||
+      columnName === 'formerName'
+    ) {
+      continue
+    }
     const currentValue = String(record.values[columnName] || '').trim()
     if (isFillOnceColumn(column) && currentValue) continue
     record.values[columnName] = isAppendColumn(column)
       ? appendCellValue(record.values[columnName], value)
       : value
   }
+  return true
+}
+
+/**
+ * 弟子/角色改名时同步角色档案主键，避免旧名新名双行。
+ */
+export function renameCharacterProfileRow(
+  oldName: string,
+  newName: string,
+  s: TableMemoryState = state,
+): boolean {
+  const from = String(oldName || '').trim()
+  const to = String(newName || '').trim()
+  if (!from || !to || from === to) return false
+  const table = s.tables.find((t) => t.id === 'character_profile')
+  if (!table) return false
+  const primary = getPrimaryColumnName(table)
+  const list = s.records[table.id] || []
+  const oldRec = list.find((r) => String(r.values?.[primary] || '').trim() === from)
+  if (!oldRec) return false
+  const clash = list.find(
+    (r) => r.id !== oldRec.id && String(r.values?.[primary] || '').trim() === to,
+  )
+  if (clash) {
+    s.records[table.id] = list.filter((r) => r.id !== clash.id)
+  }
+  oldRec.values = { ...oldRec.values, [primary]: to }
   return true
 }
 
@@ -662,6 +834,90 @@ export function getTableRecordCount(
 export function clearTableRecords(tableId: string, s: TableMemoryState = state): void {
   if (!s.records) s.records = {}
   s.records[tableId] = []
+}
+
+/** 按 record.id 删除一行 */
+export function deleteTableRecord(
+  tableId: string,
+  recordId: string,
+  s: TableMemoryState = state,
+): boolean {
+  if (!s.records?.[tableId]?.length) return false
+  const before = s.records[tableId].length
+  s.records[tableId] = s.records[tableId].filter((r) => r.id !== recordId)
+  return s.records[tableId].length < before
+}
+
+/** 手改某一字段（按 record.id） */
+export function setTableRecordField(
+  tableId: string,
+  recordId: string,
+  column: string,
+  value: string,
+  s: TableMemoryState = state,
+): boolean {
+  const list = s.records?.[tableId]
+  if (!list?.length) return false
+  const rec = list.find((r) => r.id === recordId)
+  if (!rec) return false
+  const col = cleanColumnName(column)
+  if (!col) return false
+  rec.values = { ...(rec.values || {}), [col]: String(value ?? '') }
+  // 主键列与编码索引对齐（纪要表）
+  if (tableId === 'plot_journal' && (col === '编码索引' || col === getPrimaryColumnName(
+    s.tables.find((t) => t.id === tableId) || { id: '', name: '', columns: ['编码索引'] },
+  ))) {
+    const code = normalizeJournalIndexCode(String(value || '').trim()) || String(value || '').trim()
+    rec.values['编码索引'] = code
+    const primary = getPrimaryColumnName(
+      s.tables.find((t) => t.id === tableId) || { id: '', name: '', columns: ['编码索引'] },
+    )
+    rec.values[primary] = code
+  }
+  return true
+}
+
+/**
+ * 在指定表新增空行（或带初值）。
+ * 纪要表自动分配 J 编码。
+ */
+export function addTableRecord(
+  tableId: string,
+  values: Record<string, string> = {},
+  s: TableMemoryState = state,
+): MemoryRecord | null {
+  const table = s.tables.find((t) => t.id === tableId)
+  if (!table) return null
+  if (!s.records) s.records = {}
+  if (!Array.isArray(s.records[tableId])) s.records[tableId] = []
+
+  const primary = getPrimaryColumnName(table)
+  const out: Record<string, string> = {}
+  for (const column of table.columns || []) {
+    const name = cleanColumnName(column)
+    out[name] = String(values[name] ?? '')
+  }
+
+  if (tableId === 'plot_journal') {
+    if (!s.meta) s.meta = createDefaultMeta()
+    let code = normalizeJournalIndexCode(out['编码索引'] || out[primary] || '')
+    if (!code) {
+      const n = Math.max(1, s.meta.nextIndexCode || 1)
+      code = `J${String(n).padStart(4, '0')}`
+      s.meta.nextIndexCode = n + 1
+    }
+    out[primary] = code
+    out['编码索引'] = code
+  } else if (!String(out[primary] || '').trim()) {
+    out[primary] = `新建${s.records[tableId].length + 1}`
+  }
+
+  const rec: MemoryRecord = {
+    id: newRecordId(),
+    values: out,
+  }
+  s.records[tableId].push(rec)
+  return rec
 }
 
 /**

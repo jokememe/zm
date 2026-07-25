@@ -9,6 +9,9 @@ import {
   countAllRecords,
   getTableRecordCount,
   cleanColumnName,
+  addTableRecord,
+  deleteTableRecord,
+  setTableRecordField,
   type MemoryTableDef,
   type MemoryRecord,
   type TableMemoryState,
@@ -41,6 +44,10 @@ const {
   memoryTracing,
   lastMemoryTrace,
   lastMemoryTraceKind,
+  lastRecallTrace,
+  lastRecallTraceKind,
+  lastRecallCodes,
+  recalling,
   getTableMemorySchedulerStatus,
   settings: tianjiSettings,
 } = useTianji()
@@ -188,12 +195,48 @@ function onClearTable() {
   status.value = `已清空 ${t.name}`
 }
 
+/** 长文本列用 textarea（纪要/说明等） */
+function isLongField(col: string): boolean {
+  return /纪要|详细|描述|说明|内容|主线|支线|备注|性格|人际关系/.test(col)
+}
+
 function updateField(col: string, value: string) {
   const rec = selected.value
-  if (!rec) return
-  rec.values = { ...rec.values, [col]: value }
+  const tableId = activeTableId.value
+  if (!rec || !tableId) return
+  setTableRecordField(tableId, rec.id, col, value, state.value)
+  saveTableMemory(state.value)
+  // 保持选中：重新 load 后 id 不变
+  const keep = rec.id
+  state.value = loadTableMemory()
+  selectedRecordId.value = keep
+}
+
+function onAddRow() {
+  const tableId = activeTableId.value
+  if (!tableId) return
+  const rec = addTableRecord(tableId, {}, state.value)
+  if (!rec) {
+    status.value = '无法新增行'
+    return
+  }
   saveTableMemory(state.value)
   state.value = loadTableMemory()
+  selectedRecordId.value = rec.id
+  status.value = `已新增一行（可在右侧改字段）`
+}
+
+function onDeleteRow() {
+  const rec = selected.value
+  const tableId = activeTableId.value
+  if (!rec || !tableId) return
+  const label = primaryOf(rec)
+  if (!confirm(`删除「${label}」这一行？`)) return
+  deleteTableRecord(tableId, rec.id, state.value)
+  saveTableMemory(state.value)
+  state.value = loadTableMemory()
+  selectedRecordId.value = rows.value[0]?.id || null
+  status.value = `已删除 ${label}`
 }
 
 function primaryOf(rec: MemoryRecord): string {
@@ -207,7 +250,9 @@ function rowBrief(rec: MemoryRecord): string {
   return cols
     .map((c) => {
       const v = String(rec.values[c] || '').trim()
-      return v ? `${c}:${v}` : ''
+      if (!v) return ''
+      const short = v.length > 36 ? v.slice(0, 36) + '…' : v
+      return `${c}:${short}`
     })
     .filter(Boolean)
     .join(' · ')
@@ -279,6 +324,23 @@ function rowBrief(rec: MemoryRecord): string {
       >
         最近追溯：{{ lastMemoryTrace }}
       </p>
+      <p
+        v-if="recalling || lastRecallTrace"
+        class="mem__status"
+        :class="{
+          'mem__status--ok': lastRecallTraceKind === 'ok',
+          'mem__status--fail': lastRecallTraceKind === 'fail',
+        }"
+      >
+        <template v-if="recalling">发话前召回选码中…</template>
+        <template v-else>
+          最近召回：{{ lastRecallTrace }}
+          <span v-if="lastRecallCodes?.length">
+            （{{ lastRecallCodes.slice(0, 12).join(', ')
+            }}{{ lastRecallCodes.length > 12 ? '…' : '' }}）
+          </span>
+        </template>
+      </p>
 
       <template v-if="tab === 'tables'">
         <div class="mem__toolbar">
@@ -296,6 +358,17 @@ function rowBrief(rec: MemoryRecord): string {
           <button type="button" class="btn btn-ghost btn-sm" @click="onLocalMerge">
             本地合并纪要
           </button>
+          <button type="button" class="btn btn-soft btn-sm" @click="onAddRow">
+            ＋ 新增行
+          </button>
+          <button
+            type="button"
+            class="btn btn-ghost btn-sm"
+            :disabled="!selected"
+            @click="onDeleteRow"
+          >
+            删除本行
+          </button>
           <button type="button" class="btn btn-ghost btn-sm" @click="onClearTable">
             清空本表
           </button>
@@ -303,7 +376,7 @@ function rowBrief(rec: MemoryRecord): string {
             清空全部表
           </button>
           <span class="mem__hint">
-            对齐 shujuku：楼层调度 → 填表 → 纪要合并(auto_merged) → 索引 Top-K 注入。次 API 只做 settle。
+            右侧可直接改字段（失焦保存）。纪要由记忆 API 按全文写；失败会自动重试一次。
           </span>
         </div>
 
@@ -323,9 +396,14 @@ function rowBrief(rec: MemoryRecord): string {
           </aside>
 
           <div class="mem__list">
+            <div class="mem__list-head">
+              <span>{{ activeTable?.name || '表' }} · {{ rows.length }} 行</span>
+              <button type="button" class="btn btn-ghost btn-sm" @click="onAddRow">
+                ＋
+              </button>
+            </div>
             <p v-if="!rows.length" class="mem__empty">
-              本表暂无数据。点「从经营同步」写入弟子/宝物/势力，或等推演产出
-              &lt;Memory&gt;。
+              本表暂无数据。可「新增行」手改，或「从经营同步」/等记忆 API 填表。
             </p>
             <button
               v-for="r in rows"
@@ -342,10 +420,30 @@ function rowBrief(rec: MemoryRecord): string {
 
           <div class="mem__detail">
             <template v-if="selected && activeTable">
-              <h4>{{ primaryOf(selected) }}</h4>
+              <div class="mem__detail-head">
+                <h4>{{ primaryOf(selected) }}</h4>
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-sm mem__danger"
+                  @click="onDeleteRow"
+                >
+                  删除
+                </button>
+              </div>
+              <p class="mem__edit-hint">编辑后失焦即保存到本地表格记忆</p>
               <label v-for="col in columnNames" :key="col" class="mem__field">
                 <span>{{ col }}</span>
+                <textarea
+                  v-if="isLongField(col)"
+                  class="mem__textarea"
+                  :value="selected.values[col] || ''"
+                  rows="6"
+                  @change="
+                    updateField(col, ($event.target as HTMLTextAreaElement).value)
+                  "
+                />
                 <input
+                  v-else
                   :value="selected.values[col] || ''"
                   type="text"
                   @change="
@@ -354,7 +452,9 @@ function rowBrief(rec: MemoryRecord): string {
                 />
               </label>
             </template>
-            <p v-else class="mem__empty">选择左侧一行查看/编辑字段</p>
+            <p v-else class="mem__empty">
+              选择左侧一行编辑，或点「＋ 新增行」。
+            </p>
           </div>
         </div>
       </template>
@@ -430,7 +530,7 @@ function rowBrief(rec: MemoryRecord): string {
 
       <template v-else>
         <p class="mem__hint">
-          移植自 yuzuki-Memory 的 TABLE_DEFINITIONS + traceRealtime 守则；含纪要表结构。
+          实体表沿 yuzuki；纪要表/合并对齐 shujuku mov5.5（客观流水 + AM 合并）。
         </p>
         <h4 class="mem__h4">数据库结构定义</h4>
         <pre class="mem__inject">{{ schemaPreview }}</pre>
@@ -549,6 +649,46 @@ function rowBrief(rec: MemoryRecord): string {
   overflow: auto;
   max-height: 360px;
   padding: 0.25rem;
+}
+.mem__list-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.25rem 0.4rem 0.35rem;
+  font-size: 0.75rem;
+  opacity: 0.8;
+  border-bottom: 1px solid var(--border, #3a3a42);
+  margin-bottom: 0.2rem;
+}
+.mem__detail-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+.mem__detail-head h4 {
+  margin: 0;
+}
+.mem__edit-hint {
+  margin: 0 0 0.5rem;
+  font-size: 0.7rem;
+  opacity: 0.65;
+}
+.mem__danger {
+  color: #c66 !important;
+}
+.mem__textarea {
+  border: 1px solid var(--border, #3a3a42);
+  background: rgba(0, 0, 0, 0.2);
+  color: inherit;
+  border-radius: 4px;
+  padding: 0.35rem 0.45rem;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  resize: vertical;
+  min-height: 5.5rem;
+  font-family: inherit;
 }
 .mem__row {
   display: flex;
