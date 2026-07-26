@@ -87,10 +87,11 @@ describe('Tianji + system lore hooks (shipped sources)', () => {
   })
 
   it('format prompt hints model may emit Memory without dropping sum/maintext', () => {
-    expect(DEFAULT_FORMAT_PROMPT).toContain('<Memory>')
+    expect(DEFAULT_FORMAT_PROMPT.toLowerCase()).toContain('<memory>')
     expect(DEFAULT_FORMAT_PROMPT).toContain('<sum>')
     expect(DEFAULT_FORMAT_PROMPT).toContain('<maintext>')
-    expect(DEFAULT_FORMAT_PROMPT).toMatch(/角色档案|物品追踪|世界设定/)
+    // 轻量 memory 行：角色行动/关系；表结构由系统世界书注入，不在格式提示里堆「角色档案」表名
+    expect(DEFAULT_FORMAT_PROMPT).toMatch(/关系变化|角色名/)
   })
 
   it('entry ids used for constant injection are stable exports', () => {

@@ -46,7 +46,6 @@ const {
   lastMemoryTraceKind,
   lastRecallTrace,
   lastRecallTraceKind,
-  lastRecallCodes,
   recalling,
   getTableMemorySchedulerStatus,
   settings: tianjiSettings,
@@ -332,14 +331,8 @@ function rowBrief(rec: MemoryRecord): string {
           'mem__status--fail': lastRecallTraceKind === 'fail',
         }"
       >
-        <template v-if="recalling">发话前召回选码中…</template>
-        <template v-else>
-          最近召回：{{ lastRecallTrace }}
-          <span v-if="lastRecallCodes?.length">
-            （{{ lastRecallCodes.slice(0, 12).join(', ')
-            }}{{ lastRecallCodes.length > 12 ? '…' : '' }}）
-          </span>
-        </template>
+        <template v-if="recalling">角色记忆选取中…</template>
+        <template v-else>最近角色记忆：{{ lastRecallTrace }}</template>
       </p>
 
       <template v-if="tab === 'tables'">
@@ -376,7 +369,7 @@ function rowBrief(rec: MemoryRecord): string {
             清空全部表
           </button>
           <span class="mem__hint">
-            右侧可直接改字段（失焦保存）。纪要由记忆 API 按全文写；失败会自动重试一次。
+            右侧可直接改字段（失焦保存）。自动填表走主/次 API；失败会自动重试一次。
           </span>
         </div>
 
@@ -403,7 +396,7 @@ function rowBrief(rec: MemoryRecord): string {
               </button>
             </div>
             <p v-if="!rows.length" class="mem__empty">
-              本表暂无数据。可「新增行」手改，或「从经营同步」/等记忆 API 填表。
+              本表暂无数据。可「新增行」手改，或「从经营同步」/等自动填表。
             </p>
             <button
               v-for="r in rows"
@@ -478,7 +471,7 @@ function rowBrief(rec: MemoryRecord): string {
 
       <template v-else-if="tab === 'inject'">
         <p class="mem__hint">
-          注入 = 实体表 + 纪要索引 + Top-K 召回全文（对齐 shujuku，非整表硬截断）。
+          注入 = 角色图谱选取 + 冷档案闪回 + 实体表 + 纪要轻量索引（不塞纪要全文）。
         </p>
         <h4 class="mem__h4">完整注入预览</h4>
         <pre class="mem__inject">{{ injectionPreview }}</pre>
@@ -488,7 +481,7 @@ function rowBrief(rec: MemoryRecord): string {
 
       <template v-else-if="tab === 'sched'">
         <p class="mem__hint">
-          此处只读当前进度。改数字请到密匣 →「显示」→「表格记忆 · 何时填表 / 纪要合并 / 索引召回」。
+          此处只读当前进度。改数字请到密匣 →「显示」→「表格记忆 · 何时填表 / 纪要合并 / 推演注入」。
         </p>
         <div class="mem__sum" v-if="schedStatus">
           <section>
@@ -513,7 +506,7 @@ function rowBrief(rec: MemoryRecord): string {
 纪要总行：{{ journalTotal }}
 细行达到 {{ schedStatus.autoMergeThreshold }} 条时触发合并
 合并时留下最近细行：{{ schedStatus.autoMergeReserve }} 条
-推演注入：索引最多 {{ schedStatus.recallIndexTop }} 条 · 全文召回 Top-{{ schedStatus.recallTopK }}</pre>
+推演注入：纪要索引最多 {{ schedStatus.recallIndexTop }} 条 · 角色图谱本地选取（无召回 API）</pre>
           </section>
         </div>
         <p v-else class="mem__empty">调度状态不可用</p>

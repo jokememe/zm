@@ -25,7 +25,7 @@ import {
 import '@/composables/table-memory-recall'
 import { TABLE_RECALL_ENTRY_ID } from '@/composables/table-memory-recall'
 import {
-  loadMemoryGraph,
+  ensureMemoryGraphHydrated,
   selectMemoryGraphForTurn,
 } from '@/composables/memory-graph'
 import { semanticRecall, type SemanticHit } from '@/composables/memory-embed'
@@ -91,8 +91,8 @@ function buildSystemEntries(extra?: {
     makeEntry(MEM_MID_ID, formatMidMemory(), '系统自动 · 中期记忆', 2),
     makeEntry(MEM_LONG_ID, formatLongMemory(), '系统自动 · 长期记忆', 3),
   ]
-  // 人物记忆图谱：规则选取 + 冷档案闪回 + 可选语义召回
-  const graph = loadMemoryGraph()
+  // 人物记忆图谱：强制水合（旧存档补种近事）+ 规则选取 + 冷档案闪回
+  const graph = ensureMemoryGraphHydrated()
   const graphParts: string[] = []
   if (graph.nodes.length) {
     const q = [extra?.contextLabel, extra?.contextDetail, extra?.recallQuery]
@@ -131,7 +131,7 @@ function buildSystemEntries(extra?: {
             ? [...extra.recallCodes]
             : undefined,
         }),
-        '系统自动 · 表格世界状态（实体+纪要索引+Top-K召回）',
+        '系统自动 · 表格世界状态（实体+纪要轻索引）',
         4,
       ),
     )
@@ -151,7 +151,7 @@ export async function ensureAndRefreshSystemLorebook(extra?: {
 }): Promise<Lorebook> {
   // 语义召回（embedding / both 模式）
   let semanticHits: SemanticHit[] = []
-  const mode = extra?.memoryRecallMode || 'both'
+  const mode = extra?.memoryRecallMode || 'keyword'
   if ((mode === 'embedding' || mode === 'both') && extra?.api) {
     const query = extra.contextLabel || extra.recallQuery || ''
     if (query.trim()) {

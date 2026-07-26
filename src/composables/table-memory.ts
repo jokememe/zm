@@ -652,7 +652,7 @@ export function buildTableText(
 
 /**
  * 生成注入块。
- * 默认走「实体表 + 纪要索引 + Top-K 召回全文」（对齐 shujuku，非整表硬截断）。
+ * 默认走「角色图谱 + 实体表 + 纪要轻索引」。
  * 传入 maxChars 且 forceLegacy 时保留旧版全表截断（兼容旧测试）。
  */
 export function formatWorldStateInjection(

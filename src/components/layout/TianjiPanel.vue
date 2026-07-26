@@ -281,8 +281,8 @@ async function onPresetClose() {
           'tianji-settle--info': lastRecallTraceKind === 'info' || recalling,
         }"
       >
-        <template v-if="recalling">纪要召回选码中…</template>
-        <template v-else>召回：{{ lastRecallTrace }}</template>
+        <template v-if="recalling">角色记忆选取中…</template>
+        <template v-else>记忆：{{ lastRecallTrace }}</template>
       </p>
       <p
         v-if="memoryTracing || lastMemoryTrace"
