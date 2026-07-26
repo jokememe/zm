@@ -408,7 +408,7 @@ export async function runSettle(input: {
       }
       const sanitized = sanitizeWorldDelta(parsed.delta)
       // 模型常把库存绝对值当 delta → 客户端纠回相对量，防灵石翻倍
-      const { delta: fixedRes, warnings: resWarn } = normalizeResourceDeltasAgainstSnap(
+      const { resources: fixedRes, warnings: resWarn } = normalizeResourceDeltasAgainstSnap(
         sanitized.resources,
         snap0,
       )
