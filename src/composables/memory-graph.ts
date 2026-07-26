@@ -717,6 +717,49 @@ export function clearMemoryGraph(): void {
   }
 }
 
+/**
+ * 解析 <memory> 标签文本并写入图谱。
+ * 格式：每行 "角色名|做了什么|关系变化"（后两段可省略）。
+ * 零额外 API 调用，纯本地解析。
+ */
+export function ingestMemoryTag(raw: string): number {
+  const lines = (raw || '')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l && l.includes('|'))
+  if (!lines.length) return 0
+
+  const g = loadMemoryGraph()
+  const patch: MemoryGraphPatch = { nodes: [], edges: [] }
+
+  for (const line of lines) {
+    const [namePart, actionPart, relationPart] = line.split('|').map((s) => s.trim())
+    const name = (namePart || '').replace(/^\[|\]$/g, '')
+    if (!name) continue
+
+    const beat = actionPart || line
+    patch.nodes!.push({ name, kind: 'character', beat })
+
+    // 关系变化 → edge（格式："与XX结盟" / "对XX仇恨" 等）
+    if (relationPart) {
+      const m = relationPart.match(/(?:与|对|向|跟)\s*(.+?)[\s：:]*(.+)$/)
+      if (m) {
+        patch.edges!.push({
+          from: name,
+          to: m[1].trim(),
+          type: normalizeEdgeType(m[2].trim()),
+          note: beat,
+        })
+      }
+    }
+  }
+
+  if (!patch.nodes!.length) return 0
+  const next = applyMemoryGraphPatch(g, patch)
+  saveMemoryGraph(next)
+  return patch.nodes!.length
+}
+
 /** 按姓名移除节点及其关联边（除名时） */
 export function removeMemoryGraphNodeByName(name: string): MemoryGraphState {
   const g = loadMemoryGraph()

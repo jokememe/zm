@@ -24,15 +24,21 @@ import {
 // 副作用：注册索引 Top-K 注入实现
 import '@/composables/table-memory-recall'
 import { TABLE_RECALL_ENTRY_ID } from '@/composables/table-memory-recall'
+import {
+  loadMemoryGraph,
+  selectMemoryGraphForTurn,
+} from '@/composables/memory-graph'
 import { saveLorebook, getLorebooks } from '@/sillytavern/database'
 
 const LIVE_ENTRY_ID = 'live-snapshot'
+const MEM_GRAPH_ID = 'mem-graph-beats'
 
 const SYSTEM_ENTRY_IDS = new Set([
   LIVE_ENTRY_ID,
   MEM_SHORT_ID,
   MEM_MID_ID,
   MEM_LONG_ID,
+  MEM_GRAPH_ID,
   TABLE_WORLD_STATE_ENTRY_ID,
   TABLE_RECALL_ENTRY_ID,
 ])
@@ -79,6 +85,21 @@ function buildSystemEntries(extra?: {
     makeEntry(MEM_MID_ID, formatMidMemory(), '系统自动 · 中期记忆', 2),
     makeEntry(MEM_LONG_ID, formatLongMemory(), '系统自动 · 长期记忆', 3),
   ]
+  // 人物记忆图谱：按当前事务关键词选取相关角色 beats
+  const graph = loadMemoryGraph()
+  if (graph.nodes.length) {
+    const sel = selectMemoryGraphForTurn({
+      graph,
+      query: extra?.contextLabel || extra?.recallQuery || '',
+      maxNodes: 5,
+      maxChars: 1200,
+    })
+    if (sel.text.trim()) {
+      entries.push(
+        makeEntry(MEM_GRAPH_ID, `【人物记忆图谱】\n${sel.text}`, '系统自动 · 角色近事', 3.5),
+      )
+    }
+  }
   if (tableOn) {
     entries.push(
       makeEntry(

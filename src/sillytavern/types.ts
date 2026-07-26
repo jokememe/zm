@@ -253,19 +253,11 @@ export const DEFAULT_FORMAT_PROMPT = `你必须严格按照以下 XML 标签格�
 选项 B
 选项 C</option>              ← 必填；至少 2 项，每行一个
 <sum>……</sum>               ← 必填；本回合一句话总结
-【表格记忆 · yuzuki 兼容】人物/物品/设定有变时，在回复末尾追加：
-<Memory><!--
-#角色档案
-[全名]|身份：…|当前位置：…|性格：…
-#物品追踪
-[稳定名]|持有者：…|状态：完好|物品位置：…
-#世界设定
-[设定名]|类型：…|详细说明：…
---></Memory>
-规则：主键[]合并；只写变更字段；禁止空字段与别名拆条；与 <sum> 并存勿省略。
+<memory>角色名|做了什么|关系变化
+角色名|做了什么|关系变化</memory>  ← 有角色行动/关系变化时必填；每行一条，无变化可省略
 说明：气数与名册/外交/城池由系统在回合结束后自动分析并改档，不要用 <vars> 改档。正文与 <sum> 中若发生收徒、离宗、交恶、结盟、纳贡、资源增减等，须写出具体人名/势力名与结果，供自动结算抽取。`
 
-export const DEFAULT_TAGS = ['maintext', 'option', 'sum', 'vars', 'thinking', 'think'] as const;
+export const DEFAULT_TAGS = ['maintext', 'option', 'sum', 'vars', 'memory', 'thinking', 'think'] as const;
 export const DEFAULT_OPAQUE_TAGS = ['thinking', 'think'] as const;
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -310,7 +302,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoSave: true,
   autoSaveInterval: 30,
   uiMode: 'game',
-  customTags: ['maintext', 'option', 'sum', 'vars', 'thinking', 'think'],
+  customTags: ['maintext', 'option', 'sum', 'vars', 'memory', 'thinking', 'think'],
   formatPromptTemplate: DEFAULT_FORMAT_PROMPT,
   thinkingDisplay: 'fold',
   settlementMode: 'secondary_then_primary',
@@ -439,6 +431,8 @@ export interface ParsedTags {
   maintext: string;
   options: string[];
   sum: string;
+  /** <memory> 标签原文：角色名|做了什么|关系变化，每行一条 */
+  memory: string;
   varsRaw: string;
   varsCommands: VarsPatch;
   unknown: Record<string, string>;

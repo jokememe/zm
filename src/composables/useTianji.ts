@@ -72,6 +72,7 @@ import '@/composables/memory-graph'
 import {
   ensureMemoryGraphHydrated,
   selectMemoryGraphForTurn,
+  ingestMemoryTag,
 } from '@/composables/memory-graph'
 import { snapshotWorldState, restoreWorldState } from '@/composables/world-state'
 import {
@@ -943,6 +944,11 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
       tableMemoryEnabled: tableMemoryOn,
     })
     lorebooks.value = await getLorebooks()
+  }
+
+  // ★ 人物记忆图谱：从 <memory> 标签解析角色动作写入 beats
+  if (parsed.memory?.trim()) {
+    ingestMemoryTag(parsed.memory)
   }
 
   const content = hasTags

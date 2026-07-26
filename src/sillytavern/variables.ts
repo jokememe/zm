@@ -111,6 +111,7 @@ export function aggregateEvents(events: ParserEvent[]): ParsedTags {
     maintext: '',
     options: [],
     sum: '',
+    memory: '',
     varsRaw: '',
     varsCommands: { merge: {} },
     unknown: {},
@@ -120,6 +121,7 @@ export function aggregateEvents(events: ParserEvent[]): ParsedTags {
       if (ev.tag === 'thinking' || ev.tag === 'think') parsed.thinking = ev.full;
       else if (ev.tag === 'maintext') parsed.maintext = ev.full;
       else if (ev.tag === 'sum') parsed.sum = ev.full;
+      else if (ev.tag === 'memory') parsed.memory = ev.full;
       else if (ev.tag === 'vars') {
         parsed.varsRaw = ev.full;
         parsed.varsCommands = parseVarsBlock(ev.full);
