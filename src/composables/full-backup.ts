@@ -10,6 +10,7 @@ import {
   IDENTITY_STORAGE_KEY,
   MEMORY_STORAGE_KEY,
   TABLE_MEMORY_STORAGE_KEY,
+  MEMORY_GRAPH_STORAGE_KEY,
 } from '@/data/opening'
 import { API_CACHE_KEY } from '@/composables/api-cache'
 import {
@@ -28,6 +29,7 @@ export const LOCAL_BACKUP_KEYS = [
   IDENTITY_STORAGE_KEY,
   MEMORY_STORAGE_KEY,
   TABLE_MEMORY_STORAGE_KEY,
+  MEMORY_GRAPH_STORAGE_KEY,
   API_CACHE_KEY,
 ] as const
 

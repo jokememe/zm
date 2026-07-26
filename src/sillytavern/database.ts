@@ -433,7 +433,8 @@ export async function getSettings(): Promise<AppSettings | undefined> {
       autoMergeThreshold: 20,
       autoMergeReserve: 0,
       mergeBatchSize: 5,
-      recallEnabled: true,
+      // beta：图谱规则选取优先；纪要 LLM 召回默认关
+      recallEnabled: false,
       recallIndexTop: 50,
       recallTopK: 20,
       entityInjectMaxChars: 2800,
@@ -454,7 +455,8 @@ export async function getSettings(): Promise<AppSettings | undefined> {
     if (t.autoMergeThreshold === undefined) t.autoMergeThreshold = 20;
     if (t.autoMergeReserve === undefined) t.autoMergeReserve = 0;
     if (t.mergeBatchSize === undefined) t.mergeBatchSize = 5;
-    if (t.recallEnabled === undefined) t.recallEnabled = true;
+    // 缺省 false：与图谱优先策略一致；仅显式 true 时开纪要召回
+    if (t.recallEnabled === undefined) t.recallEnabled = false;
     if (t.recallIndexTop === undefined) t.recallIndexTop = 50;
     if (t.recallTopK === undefined) t.recallTopK = 20;
     if (t.entityInjectMaxChars === undefined) t.entityInjectMaxChars = 2800;

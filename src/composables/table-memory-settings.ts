@@ -26,7 +26,10 @@ export interface TableMemorySchedulerSettings {
   autoMergeReserve: number
   /** 合并调用每批打包几条细行（默认 5） */
   mergeBatchSize: number
-  /** 推演注入是否做纪要 Top-K 全文召回 */
+  /**
+   * 推演注入是否做纪要 Top-K 全文召回（含可选 LLM 选码）。
+   * 默认 false：beta 以叙事记忆图谱规则选取为主；打开后恢复旧纪要召回补充。
+   */
   recallEnabled: boolean
   /** 纪要轻量索引最多条数（默认 50） */
   recallIndexTop: number
@@ -128,7 +131,7 @@ export const DEFAULT_TABLE_MEMORY_SCHEDULER: TableMemorySchedulerSettings = {
   autoMergeThreshold: 20,
   autoMergeReserve: 0,
   mergeBatchSize: 5,
-  recallEnabled: true,
+  recallEnabled: false,
   recallIndexTop: 50,
   recallTopK: 20,
   entityInjectMaxChars: 2800,
@@ -163,7 +166,8 @@ export function resolveTableMemoryScheduler(
     autoMergeThreshold: clampInt(raw?.autoMergeThreshold, 2, 200, d.autoMergeThreshold),
     autoMergeReserve: clampInt(raw?.autoMergeReserve, 0, 100, d.autoMergeReserve),
     mergeBatchSize: clampInt(raw?.mergeBatchSize, 1, 30, d.mergeBatchSize),
-    recallEnabled: raw?.recallEnabled !== false,
+    // 默认关（图谱优先）；仅显式 true 时开纪要 LLM/关键词全文召回
+    recallEnabled: raw?.recallEnabled === true,
     recallIndexTop: clampInt(raw?.recallIndexTop, 5, 200, d.recallIndexTop),
     recallTopK: clampInt(raw?.recallTopK, 1, 80, d.recallTopK),
     entityInjectMaxChars: clampInt(

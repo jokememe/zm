@@ -72,6 +72,10 @@ import {
   getPrimaryColumnName,
 } from '@/composables/table-memory'
 import { syncTableMemoryFromGame } from '@/composables/table-memory-sync'
+import {
+  clearMemoryGraph,
+  removeMemoryGraphNodeByName,
+} from '@/composables/memory-graph'
 
 const currentView = ref<ViewId>('hall')
 const navCollapsed = ref(false)
@@ -851,6 +855,13 @@ export function useGameState() {
       /* ignore */
     }
 
+    // 叙事图谱：移除同名节点与边
+    try {
+      removeMemoryGraphNodeByName(name)
+    } catch {
+      /* ignore */
+    }
+
     persistGameSave()
     return { ok: true, name }
   }
@@ -862,6 +873,7 @@ export function useGameState() {
   function resetGameToOpening() {
     clearMemoryBank()
     clearTableMemory()
+    clearMemoryGraph()
     clearIdentity()
     clearGameSaveFromStorage()
     sectName.value = DEFAULT_SECT_NAME

@@ -776,6 +776,8 @@ export function saveTableMemory(s: TableMemoryState = state): void {
   } catch {
     /* ignore */
   }
+  // 手改/合并/同步后也刷新叙事图谱（钩子未绑定时 no-op）
+  notifyTableMemoryWritten(state)
 }
 
 export function clearTableMemory(): void {
@@ -785,6 +787,8 @@ export function clearTableMemory(): void {
   } catch {
     /* ignore */
   }
+  // 通知图谱侧可清空/重投影（钩子内会 sync；若需硬清由 clearMemoryGraph 负责）
+  notifyTableMemoryWritten(state)
 }
 
 /**
@@ -797,8 +801,28 @@ export function applyAssistantMemoryTags(text: string): {
 } {
   loadTableMemory()
   const result = applyMemoryTextToState(state, text)
-  if (result.count > 0) saveTableMemory(state)
+  if (result.count > 0) {
+    // saveTableMemory → notifyTableMemoryWritten → 图谱投影
+    saveTableMemory(state)
+  }
   return { success: result.success, count: result.count }
+}
+
+/** 表格写入后钩子：由 memory-graph 绑定，避免循环依赖 */
+let _afterTableMemoryWrite: ((s: TableMemoryState) => void) | null = null
+
+export function bindAfterTableMemoryWrite(
+  fn: (s: TableMemoryState) => void,
+): void {
+  _afterTableMemoryWrite = fn
+}
+
+export function notifyTableMemoryWritten(s: TableMemoryState = state): void {
+  try {
+    _afterTableMemoryWrite?.(s)
+  } catch {
+    /* ignore */
+  }
 }
 
 /** 按主键写入/合并一行（游戏同步与手改共用） */

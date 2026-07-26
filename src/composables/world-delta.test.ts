@@ -5,6 +5,7 @@ import {
   sanitizeWorldDelta,
   applyWorldDeltaToSnapshot,
   emptyTestSnapshot,
+  normalizeResourceDeltasAgainstSnap,
 } from './world-delta'
 import type { Disciple, Faction, CityState } from '@/types/game'
 
@@ -44,6 +45,82 @@ const baseCity = (over: Partial<CityState> = {}): CityState => ({
   governor: '张衡',
   notes: '',
   ...over,
+})
+
+describe('normalizeResourceDeltasAgainstSnap', () => {
+  it('keeps small relative deltas', () => {
+    const snap = emptyTestSnapshot({
+      resources: {
+        spiritStone: 260,
+        spiritGrain: 100,
+        herb: 10,
+        ore: 10,
+        prestige: 5,
+        destiny: 5,
+      },
+    })
+    const { resources, warnings } = normalizeResourceDeltasAgainstSnap(
+      { 灵石: -30, 声望: 1 },
+      snap,
+    )
+    expect(resources?.['灵石']).toBe(-30)
+    expect(resources?.['声望']).toBe(1)
+    expect(warnings).toEqual([])
+  })
+
+  it('drops stock-like absolute values that would double inventory', () => {
+    const snap = emptyTestSnapshot({
+      resources: {
+        spiritStone: 260,
+        spiritGrain: 100,
+        herb: 10,
+        ore: 10,
+        prestige: 5,
+        destiny: 5,
+      },
+    })
+    const { resources, warnings } = normalizeResourceDeltasAgainstSnap(
+      { 灵石: 260 },
+      snap,
+    )
+    expect(resources?.['灵石']).toBeUndefined()
+    expect(warnings.some((w) => w.includes('绝对值'))).toBe(true)
+  })
+
+  it('keeps large negative deltas (spending)', () => {
+    const snap = emptyTestSnapshot({
+      resources: {
+        spiritStone: 260,
+        spiritGrain: 100,
+        herb: 10,
+        ore: 10,
+        prestige: 5,
+        destiny: 5,
+      },
+    })
+    const { resources } = normalizeResourceDeltasAgainstSnap({ 灵石: -200 }, snap)
+    expect(resources?.['灵石']).toBe(-200)
+  })
+
+  it('keeps large positive reward far from stock (not absolute)', () => {
+    const snap = emptyTestSnapshot({
+      resources: {
+        spiritStone: 30,
+        spiritGrain: 100,
+        herb: 10,
+        ore: 10,
+        prestige: 5,
+        destiny: 5,
+      },
+    })
+    // 库存 30 时 +50 是合理奖励，不能当绝对值丢掉
+    const { resources, warnings } = normalizeResourceDeltasAgainstSnap(
+      { 灵石: 50 },
+      snap,
+    )
+    expect(resources?.['灵石']).toBe(50)
+    expect(warnings).toEqual([])
+  })
 })
 
 describe('parseSettlePayload', () => {

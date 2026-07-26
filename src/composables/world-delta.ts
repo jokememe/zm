@@ -213,6 +213,59 @@ export function parseSettlePayload(text: string): ParseSettleResult {
   }
 }
 
+/**
+ * 纠偏 resources：模型常把「当前库存」当成相对变化写出（例如库存 260 却写 {"灵石":260}）。
+ * 规则（应用前）：
+ * - 仅拦截「与当前库存非常接近的正数」（像在抄库存，而不是发奖励）
+ * - 明确保留：负数消耗、明显小于库存的正奖励、远离库存的大正数
+ * - 另对单次相对量做 ±50000 夹取，防乱写
+ */
+export function normalizeResourceDeltasAgainstSnap(
+  resources: WorldDelta['resources'] | undefined,
+  snap: WorldSnapshot,
+): { resources: WorldDelta['resources']; warnings: string[] } {
+  const out: WorldDelta['resources'] = {}
+  const warnings: string[] = []
+  if (!resources || !isPlainObject(resources)) return { resources: out, warnings }
+
+  for (const [cn, raw] of Object.entries(resources)) {
+    if (!RESOURCE_CN.has(cn)) continue
+    const key = RESOURCE_VAR_MAP[cn as ResourceVarName]
+    const cur = snap.resources[key]
+    let n: number | null = null
+    if (typeof raw === 'number' && Number.isFinite(raw)) n = raw
+    else {
+      const s = String(raw ?? '')
+        .trim()
+        .replace(/^[−–—]/, '-')
+      if (/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(s)) n = Number(s)
+    }
+    if (n === null || !Number.isFinite(n)) continue
+
+    // 与库存几乎相等 → 几乎肯定是「写成了绝对值」而非「相对 +库存」
+    // 阈值：|n-cur| ≤ max(8, cur×12%)，且 n 为正、cur≥15（小库存不误杀 +10 类）
+    const nearStock =
+      n > 0 &&
+      cur >= 15 &&
+      Math.abs(n - cur) <= Math.max(8, cur * 0.12)
+
+    if (nearStock) {
+      warnings.push(
+        `${cn} 疑似写成库存绝对值 ${n}（当前 ${cur}），已忽略以免翻倍`,
+      )
+      continue
+    }
+    // 单次回合相对变化护栏：防模型乱写 ±99999
+    const capped = Math.max(-50_000, Math.min(50_000, Math.round(n)))
+    if (capped !== Math.round(n)) {
+      warnings.push(`${cn} 相对量 ${n} 已夹到 ±50000`)
+    }
+    if (capped === 0) continue
+    ;(out as Record<string, number>)[cn] = capped
+  }
+  return { resources: out, warnings }
+}
+
 function resolveByIdOrName<T extends { id: string; name: string }>(
   list: T[],
   id?: string,

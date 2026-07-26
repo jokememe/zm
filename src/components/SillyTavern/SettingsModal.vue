@@ -1957,13 +1957,13 @@ function onTagsInput(value: string) {
       <div class="api-panel" style="margin-top: 0.85rem">
         <div class="secondary-head">
           <div>
-            <h3 class="api-panel__title">推演时注入 · 索引与召回</h3>
+            <h3 class="api-panel__title">推演时注入 · 图谱与纪要召回</h3>
             <p class="tj-hint" style="margin: 0">
-              下次推演拼装系统世界书时，不会把整本记忆硬塞进去，而是：
-              <strong>实体表（角色/物品/设定）</strong>
-              + <strong>纪要轻量索引</strong>
-              + <strong>与当前输入最相关的若干条纪要全文</strong>。
-              关闭召回后仍可注入实体表与短索引（视实现），但不再做 Top-K 精选全文。
+              默认（推荐）：
+              <strong>叙事记忆图谱</strong>（点名角色/物品/事件，零 API）
+              + <strong>实体表</strong>
+              + <strong>纪要轻量索引</strong>。
+              下方开关仅控制旧版「纪要 Top-K 全文 / 可选 LLM 选码」；关闭时不消耗召回 API。
             </p>
           </div>
           <label class="switch">

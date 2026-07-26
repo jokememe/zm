@@ -272,7 +272,7 @@ describe('index recall Top-K', () => {
     ])
   })
 
-  it('formatTableMemoryInjection includes entity + index + recall', () => {
+  it('formatTableMemoryInjection includes entity + index; journal full only when recall on', () => {
     const s = seedJournal()
     s.records['character_profile'] = [
       {
@@ -280,16 +280,25 @@ describe('index recall Top-K', () => {
         values: { 角色名: '陆承渊', 身份: '弟子', 当前位置: '山门' },
       },
     ]
-    const inj = formatTableMemoryInjection({
+    // 默认（图谱优先）：实体 + 索引 + 图谱块，不强制全文召回
+    const base = formatTableMemoryInjection({
+      state: s,
+      query: '陆承渊 赤焰谷',
+      scheduler: { ...DEFAULT_TABLE_MEMORY_SCHEDULER, recallEnabled: false, recallTopK: 5 },
+    })
+    expect(base).toContain('实体表')
+    expect(base).toContain('纪要索引')
+    expect(base).toMatch(/叙事记忆图谱|陆承渊/)
+    expect(base).not.toContain('召回纪要')
+    expect(base.length).toBeGreaterThan(100)
+
+    // 显式打开纪要召回时才有全文块
+    const withRecall = formatTableMemoryInjection({
       state: s,
       query: '赤焰谷',
-      scheduler: { ...DEFAULT_TABLE_MEMORY_SCHEDULER, recallTopK: 5 },
+      scheduler: { ...DEFAULT_TABLE_MEMORY_SCHEDULER, recallEnabled: true, recallTopK: 5 },
     })
-    expect(inj).toContain('实体表')
-    expect(inj).toContain('纪要索引')
-    expect(inj).toContain('召回纪要')
-    // 不应只是无脑全表 3500 截断
-    expect(inj.length).toBeGreaterThan(100)
+    expect(withRecall).toContain('召回纪要')
   })
 
   it('buildRecallMessages uses custom editable templates (simple)', async () => {

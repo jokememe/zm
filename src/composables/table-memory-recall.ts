@@ -34,6 +34,13 @@ import {
   isRetryableFailureMessage,
   withRetry,
 } from '@/composables/api-retry'
+import {
+  ensureMemoryGraphHydrated,
+  projectCharacterProfilesToGraph,
+  selectMemoryGraphForTurn,
+} from '@/composables/memory-graph'
+// 注册表格写入 → 图谱投影
+import '@/composables/memory-graph'
 
 export const TABLE_RECALL_ENTRY_ID = 'table-memory-recall'
 export const RECALL_TAG_PATTERN = /<recall>([\s\S]*?)<\/recall>/i
@@ -241,8 +248,8 @@ export interface RecallInjectionInput {
 }
 
 /**
- * 完整注入块：实体表 + 纪要索引 + Top-K 召回全文。
- * 不再整表 chop 3500 字硬截断。
+ * 完整注入块：叙事图谱（规则选取）+ 实体表 +（可选）纪要索引/Top-K。
+ * 默认图谱优先；纪要 LLM 选码非必需。
  */
 export function formatTableMemoryInjection(input: RecallInjectionInput = {}): string {
   const s = input.state || loadTableMemory()
@@ -251,10 +258,33 @@ export function formatTableMemoryInjection(input: RecallInjectionInput = {}): st
     maxChars: sch.entityInjectMaxChars,
   })
 
+  // 叙事记忆图谱：优先用传入 state 投影，再规则选取（零 API）
+  let graphBlock = ''
+  try {
+    let graph = ensureMemoryGraphHydrated()
+    // 注入若带了完整 table state，用其投影保证与本轮表一致（测试/离线）
+    if (input.state) {
+      graph = projectCharacterProfilesToGraph(input.state, graph)
+    }
+    const rosterNames = (s.records?.['character_profile'] || [])
+      .map((r) => String(r.values?.['角色名'] || '').trim())
+      .filter(Boolean)
+    const picked = selectMemoryGraphForTurn({
+      graph,
+      query: input.query || '',
+      rosterNames,
+      maxNodes: 4,
+      maxChars: Math.min(1800, Math.floor(sch.entityInjectMaxChars * 0.65) || 1600),
+    })
+    graphBlock = picked.text
+  } catch {
+    graphBlock = ''
+  }
+
   if (!sch.recallEnabled) {
-    // 关闭召回时：索引最近若干 + 实体
-    const index = buildJournalIndexText(s, { maxEntries: sch.recallIndexTop })
-    return [entity, index].join('\n\n')
+    // 关闭纪要召回：图谱 + 实体 + 轻量索引
+    const index = buildJournalIndexText(s, { maxEntries: Math.min(20, sch.recallIndexTop) })
+    return [graphBlock, entity, index].filter(Boolean).join('\n\n')
   }
 
   const index = buildJournalIndexText(s, { maxEntries: sch.recallIndexTop })
@@ -284,7 +314,7 @@ export function formatTableMemoryInjection(input: RecallInjectionInput = {}): st
     jailbreakPrefix: sch.recallJailbreakPrompt,
   })
 
-  return [entity, index, full].join('\n\n')
+  return [graphBlock, entity, index, full].filter(Boolean).join('\n\n')
 }
 
 /** 替换召回模板占位符 */

@@ -50,6 +50,44 @@ describe('formatSnapshotForSettle', () => {
     const s = formatSnapshotForSettle(emptyTestSnapshot())
     expect(s).toContain('灵石')
   })
+
+  it('prefers named entities from focus text in detail', () => {
+    const snap = emptyTestSnapshot({
+      disciples: [
+        {
+          id: 'd1',
+          name: '陆承渊',
+          gender: '男',
+          age: 19,
+          realm: '炼气七层',
+          aptitude: '上佳',
+          role: '内门',
+          loyalty: 80,
+          mood: '求进',
+          talent: [],
+          status: '在宗',
+          avatarHue: 1,
+        },
+        {
+          id: 'd2',
+          name: '沈白',
+          gender: '男',
+          age: 20,
+          realm: '炼气一层',
+          aptitude: '中等',
+          role: '外门',
+          loyalty: 70,
+          mood: '平静',
+          talent: [],
+          status: '在宗',
+          avatarHue: 2,
+        },
+      ],
+    })
+    const s = formatSnapshotForSettle(snap, { focusText: '沈白请命外出' })
+    expect(s).toContain('d2:沈白')
+    expect(s).toMatch(/沈白\|/)
+  })
 })
 
 describe('clipText', () => {
@@ -59,7 +97,7 @@ describe('clipText', () => {
 })
 
 describe('buildSettleMessages (NL contract, no API json_schema)', () => {
-  it('uses natural-language system + contract, not response_format schema', () => {
+  it('uses short natural-language system + contract, not response_format schema', () => {
     const msgs = buildSettleMessages({
       userText: '收陆承渊为徒',
       maintext: '山门之下，陆承渊拜入青岚。',
@@ -74,19 +112,30 @@ describe('buildSettleMessages (NL contract, no API json_schema)', () => {
     expect(msgs[1].content).toContain('【当前局面】')
     expect(msgs[1].content).toContain('收陆承渊为徒')
     expect(msgs[1].content).toContain(SETTLE_CONTRACT_HINT)
-    // 示例驱动：update 必须 patch；资源中文键
+    // 短契约仍覆盖核心 op 与资源规则
     expect(msgs[1].content).toContain('"patch"')
     expect(msgs[1].content).toContain('灵石')
     expect(msgs[1].content).toContain('disciple.add')
-    // 活世界：新势力 / 新城池必须能入库
     expect(msgs[1].content).toContain('faction.add')
     expect(msgs[1].content).toContain('city.add')
     expect(msgs[1].content).toContain('manual.add')
     expect(msgs[1].content).toContain('treasure.add')
     expect(msgs[1].content).toContain('relation.add')
-    expect(msgs[0].content).toMatch(/faction\.add|新势力|新实体/)
-    // 明确不依赖 API structured output 字段名
+    expect(msgs[0].content).toMatch(/新实体|\*\.add/)
+    // 契约应明显短于旧版长文（约 3k+）
+    expect(SETTLE_CONTRACT_HINT.length).toBeLessThan(1600)
     expect(JSON.stringify(msgs)).not.toMatch(/response_format|json_schema/)
+  })
+
+  it('appends retry hint on second attempt', () => {
+    const msgs = buildSettleMessages({
+      userText: 'x',
+      maintext: 'y',
+      sum: 'z',
+      snap: emptyTestSnapshot(),
+      retryHint: true,
+    })
+    expect(msgs[1].content).toContain('【重试】')
   })
 
   it('inserts settle jailbreak as middle system (次 API 破限挂点)', () => {

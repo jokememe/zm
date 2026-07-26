@@ -10,6 +10,12 @@ import { getSettings } from '@/sillytavern'
 import { snapshotWorldState } from '@/composables/world-state'
 import { loadMemoryBank } from '@/composables/memory-lore'
 import { runSeasonUrgents } from '@/composables/season-urgent'
+import {
+  ensureMemoryGraphHydrated,
+  formatMemoryGraphSliceBrief,
+  getMemoryGraphSlice,
+  type MemoryGraphSlice,
+} from '@/composables/memory-graph'
 const { stack, close } = useModal()
 const toast = useToast()
 const {
@@ -51,6 +57,38 @@ const event = computed(() =>
   urgentEvents.value.find((e) => e.id === p('eventId') && (e.status ?? 'open') === 'open'),
 )
 const disciple = computed(() => disciples.value.find((d) => d.id === p('discipleId')))
+
+/** 叙事记忆图谱切片（与经营名册分离） */
+const discipleMemorySlice = computed((): MemoryGraphSlice => {
+  const d = disciple.value
+  if (!d) return { node: null, edges: [], empty: true }
+  try {
+    const g = ensureMemoryGraphHydrated()
+    return getMemoryGraphSlice(g, d.name)
+  } catch {
+    return { node: null, edges: [], empty: true }
+  }
+})
+
+const discipleMemoryAttrs = computed(() => {
+  const n = discipleMemorySlice.value.node
+  if (!n) return [] as Array<{ k: string; v: string }>
+  const prefer = ['身份', '性格', '当前位置', '周围角色', '待办事项', '约定', '着装', '生理']
+  const out: Array<{ k: string; v: string }> = []
+  const seen = new Set<string>()
+  for (const k of prefer) {
+    const v = n.attrs[k]
+    if (v) {
+      out.push({ k, v })
+      seen.add(k)
+    }
+  }
+  for (const [k, v] of Object.entries(n.attrs)) {
+    if (seen.has(k) || !v || k === '人际关系') continue
+    out.push({ k, v })
+  }
+  return out
+})
 const recipe = computed(() => alchemyRecipes.value.find((a) => a.id === p('recipeId')))
 const forge = computed(() => forgeQueue.value.find((g) => g.id === p('forgeId')))
 const manual = computed(() => manuals.value.find((m) => m.id === p('manualId')))
@@ -294,6 +332,47 @@ async function doAdvanceSeason() {
         <div class="talent-row">
           <span v-for="t in disciple.talent" :key="t" class="tag tag-jade">{{ t }}</span>
         </div>
+
+        <section class="memory-graph-panel" id="disciple-memory-graph">
+          <h4 class="memory-graph-panel__title">叙事记忆</h4>
+          <p class="memory-graph-panel__hint">
+            来自正文记忆图谱（节点/关系），非经营名册关系网。
+          </p>
+          <template v-if="!discipleMemorySlice.empty && discipleMemorySlice.node">
+            <div v-if="discipleMemoryAttrs.length" class="memory-graph-attrs">
+              <div v-for="a in discipleMemoryAttrs" :key="a.k" class="memory-graph-attr">
+                <label>{{ a.k }}</label>
+                <span>{{ a.v }}</span>
+              </div>
+            </div>
+            <ul
+              v-if="discipleMemorySlice.edges.length"
+              class="memory-graph-edges"
+            >
+              <li v-for="e in discipleMemorySlice.edges.slice(0, 8)" :key="e.id">
+                <span class="memory-graph-edge-type">{{ e.type }}</span>
+                {{ e.direction === 'out' ? '→' : '←' }}
+                {{ e.otherName }}
+                <span v-if="e.note" class="muted"> · {{ e.note }}</span>
+              </li>
+            </ul>
+            <ul
+              v-if="discipleMemorySlice.node.beats?.length"
+              class="memory-graph-beats"
+            >
+              <li
+                v-for="b in discipleMemorySlice.node.beats.slice(0, 4)"
+                :key="b.id"
+              >
+                {{ b.text }}
+              </li>
+            </ul>
+          </template>
+          <p v-else class="muted memory-graph-empty">
+            尚无叙事记忆。通灵正文写入角色档案后，将显示性格、约定与关系边。
+          </p>
+        </section>
+
         <p class="muted">
           可作为外勤、管事或亲传候选。深层互动（训诫、赐丹、联姻）将通过天机卷轴叙事完成。
           若因改名残留旧名双开，可点「除名」清掉错误那一行。
@@ -313,7 +392,23 @@ async function doAdvanceSeason() {
           id="btn-disciple-to-tianji"
           class="btn btn-soft"
           type="button"
-          @click="injectContext(disciple.name, `${disciple.role}，${disciple.mood}`); focusTianji(); close()"
+          @click="
+            injectContext(
+              disciple.name,
+              [
+                disciple.role,
+                disciple.mood,
+                formatMemoryGraphSliceBrief(discipleMemorySlice) ||
+                  (discipleMemoryAttrs[0]
+                    ? `${discipleMemoryAttrs[0].k}：${discipleMemoryAttrs[0].v}`
+                    : ''),
+              ]
+                .filter(Boolean)
+                .join('，'),
+            );
+            focusTianji();
+            close()
+          "
         >
           注入天机
         </button>
@@ -715,6 +810,62 @@ async function doAdvanceSeason() {
   flex-wrap: wrap;
   gap: 0.4rem;
   justify-content: center;
+}
+
+.memory-graph-panel {
+  width: 100%;
+  text-align: left;
+  padding: 0.75rem 0.85rem;
+  border-radius: var(--radius-md, 10px);
+  background: rgba(40, 55, 48, 0.06);
+  border: 1px solid rgba(40, 55, 48, 0.1);
+}
+
+.memory-graph-panel__title {
+  margin: 0 0 0.2rem;
+  font-size: 0.95rem;
+  font-family: var(--font-display);
+}
+
+.memory-graph-panel__hint {
+  margin: 0 0 0.65rem;
+  font-size: 0.72rem;
+  color: var(--ink-muted);
+}
+
+.memory-graph-attrs {
+  display: grid;
+  gap: 0.4rem;
+  margin-bottom: 0.55rem;
+}
+
+.memory-graph-attr label {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--ink-muted);
+}
+
+.memory-graph-attr span {
+  font-size: 0.86rem;
+}
+
+.memory-graph-edges,
+.memory-graph-beats {
+  margin: 0.35rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.84rem;
+}
+
+.memory-graph-edge-type {
+  display: inline-block;
+  min-width: 2.2em;
+  color: var(--jade, #3d6b5a);
+  font-weight: 600;
+}
+
+.memory-graph-empty {
+  margin: 0;
+  font-size: 0.82rem;
 }
 
 .demand {

@@ -66,8 +66,13 @@ import { runIndexRecall } from '@/composables/table-memory-recall'
 import { resolveTableMemoryScheduler } from '@/composables/table-memory-settings'
 import { buildLiveLoreContent } from '@/composables/game-bridge'
 import { formatMidMemory, formatShortMemory } from '@/composables/memory-lore'
-// 注册索引 Top-K 注入
+// 注册索引 Top-K 注入 + 记忆图谱投影钩子
 import '@/composables/table-memory-recall'
+import '@/composables/memory-graph'
+import {
+  ensureMemoryGraphHydrated,
+  selectMemoryGraphForTurn,
+} from '@/composables/memory-graph'
 import { snapshotWorldState, restoreWorldState } from '@/composables/world-state'
 import {
   isApiConfigured,
@@ -296,14 +301,46 @@ async function syncSystemLore(
 }
 
 /**
- * 发话前纯召回：记忆 API 多轮选码 → 写入系统世界书；失败回退关键词。
- * 参考「疯狂原始人 纯召回」结构。
+ * 发话前记忆准备：
+ * - 默认：叙事图谱规则选取（零 API）
+ * - 仅当 recallEnabled 显式打开：再跑纪要 LLM/关键词选码（高级）
  */
 async function runPreTurnRecall(userText: string): Promise<string[] | null> {
   const s = settings.value
   if (!s || s.tableMemoryEnabled === false) return null
   const sch = resolveTableMemoryScheduler(s)
-  if (!sch.recallEnabled) return null
+
+  try {
+    const graph = ensureMemoryGraphHydrated()
+    const gs = useGameState()
+    const roster = [
+      ...gs.disciples.value.map((d) => d.name),
+      String(gs.masterName.value || ''),
+    ].filter(Boolean)
+    const picked = selectMemoryGraphForTurn({
+      graph,
+      query: [userText, contextInjected.value || '', contextDetail.value || ''].join(
+        '\n',
+      ),
+      rosterNames: roster,
+      maxNodes: 4,
+      maxChars: 1600,
+    })
+    if (picked.nodeCount > 0) {
+      lastRecallTraceKind.value = 'ok'
+      lastRecallTrace.value = `图谱选取 ${picked.nodeCount} 人：${picked.names.slice(0, 6).join('、')}`
+    } else {
+      lastRecallTraceKind.value = 'info'
+      lastRecallTrace.value = '图谱暂无命中节点'
+    }
+  } catch (e) {
+    console.warn('[天机] 图谱选取失败', e)
+  }
+
+  if (!sch.recallEnabled) {
+    lastRecallCodes.value = []
+    return null
+  }
 
   const session = chatSession.value
   const prevAsst = [...(session?.messages || [])]
