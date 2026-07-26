@@ -203,11 +203,11 @@ export interface AppSettings {
    */
   tableMemoryEnabled?: boolean;
   /**
-   * 记忆图谱召回模式：
-   * - 'keyword': 纯关键词匹配 + 时间过滤（零 API 调用）
-   * - 'embedding': 语义向量召回（每回合一次 /v1/embeddings）
-   * - 'both': 双路合并去重（embedding 主 + keyword 兜底）
-   * 默认 'both'。
+   * 记忆图谱召回模式（密匣 · 推演时注入可改）：
+   * - 'keyword': 点名/关系/近事 + 冷档案（零 embeddings API）
+   * - 'embedding': 语义向量召回（每回合一次 /embeddings）
+   * - 'both': 规则选取 + 语义补充
+   * 默认 'keyword'。
    */
   memoryRecallMode?: 'keyword' | 'embedding' | 'both';
   /**

@@ -1509,13 +1509,45 @@ function onTagsInput(value: string) {
           <div>
             <h3 class="api-panel__title">推演时注入 · 角色记忆图谱</h3>
             <p class="tj-hint" style="margin: 0">
-              固定路径（零强制 API）：
+              主路径（零强制 API）：
               <strong>角色图谱选取</strong>
-             （点名 / 关系 / 近事）+ <strong>冷档案闪回</strong> + 短中长总结。
+              （点名 / 关系 / 近事）+ <strong>冷档案闪回</strong> + 短中长总结。
               世界书只写【角色记忆图谱】，不写整表、不写纪要 dump。
               完整浏览：侧栏「角色记忆」。
             </p>
           </div>
+        </div>
+        <div class="sched-fields" style="margin-top: 0.75rem">
+          <label class="tj-field sched-field">
+            <span class="sched-field__title">图谱召回模式</span>
+            <span class="sched-field__key">memoryRecallMode</span>
+            <select
+              class="tj-input"
+              :value="settings.memoryRecallMode || 'keyword'"
+              @change="
+                patch({
+                  memoryRecallMode: ($event.target as HTMLSelectElement).value as
+                    | 'keyword'
+                    | 'embedding'
+                    | 'both',
+                })
+              "
+            >
+              <option value="keyword">关键词（默认 · 零 API）</option>
+              <option value="embedding">语义向量 embedding</option>
+              <option value="both">双路：embedding + 关键词兜底</option>
+            </select>
+            <p class="sched-field__help">
+              <strong>关键词</strong>：点名/关系/近事规则选取 + 冷档案闪回，不调 embeddings。
+              <strong>embedding</strong>：主 API
+              <code>/embeddings</code>
+              向量相似度补近事（写入时后台建库；失败静默回退）。
+              <strong>双路</strong>：语义补充 + 规则选取合并。
+              需主 API 支持 embeddings；模型字段可填
+              <code>text-embedding-3-small</code>
+              等，费用约一句话量级。
+            </p>
+          </label>
         </div>
       </div>
 

@@ -77,6 +77,17 @@ describe('Tianji + system lore hooks (shipped sources)', () => {
     expect(panel).toMatch(/setView\('memory-graph'\)/)
   })
 
+  it('SettingsModal 有 memoryRecallMode 入口（keyword/embedding/both）', () => {
+    const settings = readFileSync(
+      join(here, '../components/SillyTavern/SettingsModal.vue'),
+      'utf8',
+    )
+    expect(settings).toMatch(/memoryRecallMode/)
+    expect(settings).toMatch(/value="keyword"/)
+    expect(settings).toMatch(/value="embedding"/)
+    expect(settings).toMatch(/value="both"/)
+  })
+
   it('format prompt hints model may emit Memory without dropping sum/maintext', () => {
     expect(DEFAULT_FORMAT_PROMPT.toLowerCase()).toContain('<memory>')
     expect(DEFAULT_FORMAT_PROMPT).toContain('<sum>')

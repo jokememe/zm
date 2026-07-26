@@ -39,8 +39,12 @@
 - 开局重置：`clearMemoryGraph`  
 - 全量备份：含 `MEMORY_GRAPH_STORAGE_KEY`  
 
+## 可选高级（密匣可开）
+
+- `memoryRecallMode`：`keyword`（默认）| `embedding` | `both`
+- embedding：主 API `/embeddings` + IndexedDB 向量；失败静默降级关键词
+
 ## 非目标（本期）
 
-- embedding 向量检索  
 - 力导向可视化画布  
 - 大总结压缩流水线  
