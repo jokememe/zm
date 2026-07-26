@@ -7,9 +7,7 @@ import {
   ensureMemoryGraphHydrated,
   formatMemoryGraphSliceBrief,
   getMemoryGraphSlice,
-  loadMemoryGraph,
   selectMemoryGraphForTurn,
-  syncMemoryGraphFromTableMemory,
   type MemoryGraphNode,
   type MemoryGraphState,
 } from '@/composables/memory-graph'
@@ -117,22 +115,6 @@ watch(filteredCharacters, (list) => {
   }
 })
 
-function refresh() {
-  tick.value++
-}
-
-function syncFromTables() {
-  syncMemoryGraphFromTableMemory()
-  refresh()
-  const g = loadMemoryGraph()
-  const chars = g.nodes.filter((n) => n.kind === 'character')
-  const beats = chars.reduce((s, n) => s + (n.beats?.length || 0), 0)
-  toast.success(
-    '已从表格刷新',
-    `角色 ${chars.length} · 近事 ${beats} · 边 ${g.edges.length}`,
-  )
-}
-
 function selectNode(n: MemoryGraphNode) {
   selectedId.value = n.id
 }
@@ -215,9 +197,6 @@ function cardBrief(n: MemoryGraphNode): string {
         </p>
       </div>
       <div class="section-actions">
-        <button id="btn-mg-sync" class="btn btn-soft" type="button" @click="syncFromTables">
-          <Icon name="spark" :size="16" /> 从表格刷新
-        </button>
         <button
           id="btn-mg-inject-pick"
           class="btn btn-soft"
@@ -285,7 +264,7 @@ function cardBrief(n: MemoryGraphNode): string {
       <div>
         <strong>尚无角色记忆</strong>
         <p class="muted">
-          通灵正文写入角色档案 / &lt;memory&gt; 后会自动生长；也可点「从表格刷新」投影已有表格。
+          通灵正文写入 &lt;memory&gt; 标签后会自动生长：每行「角色名|做了什么」，关系变化写入角色关系网。
         </p>
       </div>
     </div>

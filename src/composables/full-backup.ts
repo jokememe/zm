@@ -9,7 +9,6 @@ import {
   OPENING_STORAGE_KEY,
   IDENTITY_STORAGE_KEY,
   MEMORY_STORAGE_KEY,
-  TABLE_MEMORY_STORAGE_KEY,
   MEMORY_GRAPH_STORAGE_KEY,
 } from '@/data/opening'
 import { API_CACHE_KEY } from '@/composables/api-cache'
@@ -20,7 +19,6 @@ import {
   type GameSaveV1,
 } from '@/composables/game-save'
 import { loadMemoryBank } from '@/composables/memory-lore'
-import { loadTableMemory } from '@/composables/table-memory'
 
 /** 会打进备份的 localStorage 键 */
 export const LOCAL_BACKUP_KEYS = [
@@ -28,7 +26,6 @@ export const LOCAL_BACKUP_KEYS = [
   OPENING_STORAGE_KEY,
   IDENTITY_STORAGE_KEY,
   MEMORY_STORAGE_KEY,
-  TABLE_MEMORY_STORAGE_KEY,
   MEMORY_GRAPH_STORAGE_KEY,
   API_CACHE_KEY,
 ] as const
@@ -203,11 +200,6 @@ export function applyLocalBackupState(
 
   try {
     loadMemoryBank()
-  } catch {
-    /* ignore */
-  }
-  try {
-    loadTableMemory()
   } catch {
     /* ignore */
   }

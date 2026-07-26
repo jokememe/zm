@@ -27,11 +27,6 @@ import { saveLorebook, getLorebooks } from '@/sillytavern/database'
 
 const LIVE_ENTRY_ID = 'live-snapshot'
 const MEM_GRAPH_ID = 'mem-graph-beats'
-/** 旧表格世界状态 / 召回 entry，写入时剔除，不再注入 */
-const LEGACY_TABLE_ENTRY_IDS = new Set([
-  'table-world-state',
-  'table-memory-recall',
-])
 
 const SYSTEM_ENTRY_IDS = new Set([
   LIVE_ENTRY_ID,
@@ -39,7 +34,6 @@ const SYSTEM_ENTRY_IDS = new Set([
   MEM_MID_ID,
   MEM_LONG_ID,
   MEM_GRAPH_ID,
-  ...LEGACY_TABLE_ENTRY_IDS,
 ])
 
 function makeEntry(
@@ -68,7 +62,6 @@ function makeEntry(
 function buildSystemEntries(extra?: {
   contextLabel?: string | null
   contextDetail?: string | null
-  tableMemoryEnabled?: boolean
   recallQuery?: string | null
   recallCodes?: string[] | null
   semanticHits?: SemanticHit[]
@@ -125,7 +118,6 @@ function buildSystemEntries(extra?: {
 export async function ensureAndRefreshSystemLorebook(extra?: {
   contextLabel?: string | null
   contextDetail?: string | null
-  tableMemoryEnabled?: boolean
   recallQuery?: string | null
   recallCodes?: string[] | null
   memoryRecallMode?: 'keyword' | 'embedding' | 'both'

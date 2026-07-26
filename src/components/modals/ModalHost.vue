@@ -383,7 +383,7 @@ async function doAdvanceSeason() {
             </ul>
           </template>
           <p v-else class="muted memory-graph-empty">
-            尚无角色记忆。通灵正文写入角色档案或 &lt;memory&gt; 后会生长；也可在「角色记忆」从表格刷新。
+            尚无角色记忆。通灵正文写入 &lt;memory&gt; 标签后会自动生长。
           </p>
         </section>
 

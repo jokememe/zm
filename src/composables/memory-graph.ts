@@ -6,14 +6,6 @@
  */
 import { MEMORY_GRAPH_STORAGE_KEY } from '@/data/opening'
 import {
-  bindAfterTableMemoryWrite,
-  cleanColumnName,
-  loadTableMemory,
-  normalizeName,
-  type MemoryRecord,
-  type TableMemoryState,
-} from '@/composables/table-memory'
-import {
   appendArchiveBeats,
   clearMemoryArchive,
   formatArchiveFlashback,
@@ -22,13 +14,25 @@ import {
   type ArchiveBeat,
 } from '@/composables/memory-archive'
 
-// 表格 Memory 写入后自动投影图谱
-bindAfterTableMemoryWrite((s) => {
-  syncMemoryGraphFromTableMemory(s)
-})
-
 /** 热窗口：节点上保留的近事条数（更早的在冷档案） */
 const HOT_BEAT_MAX = 16
+
+// 本地姓名归一化（原来自 table-memory，解耦后自留）
+function normalizeName(value: string): string {
+  return String(value || '')
+    .normalize('NFKC')
+    .replace(/^[#*]+/, '')
+    .replace(/\s+/g, '')
+    .trim()
+    .toLowerCase()
+}
+
+function cleanColumnName(column: string): string {
+  return String(column || '')
+    .trim()
+    .replace(/^[#*]+/, '')
+    .trim()
+}
 
 export type MemoryGraphNodeKind = 'character' | 'event' | 'item' | 'place' | 'other'
 
@@ -124,20 +128,6 @@ const EDGE_TYPES = new Set<string>([
   '其他',
 ])
 
-const PROFILE_ATTR_KEYS = [
-  '年龄',
-  '性别',
-  '身份',
-  '性格',
-  '当前位置',
-  '周围角色',
-  '生理',
-  '人际关系',
-  '着装',
-  '待办事项',
-  '约定',
-] as const
-
 export function createEmptyMemoryGraph(): MemoryGraphState {
   return { version: 1, nodes: [], edges: [] }
 }
@@ -171,40 +161,6 @@ export function normalizeEdgeType(raw?: string): MemoryGraphEdgeType {
   if (/约|诺|誓/.test(t)) return '约定'
   if (t) return '人际'
   return '其他'
-}
-
-/**
- * 解析角色档案「人际关系」字段：
- * {目标}：〔关系〕 · 〔情感〕 或 目标：关系 · 情感；分号分隔多段
- */
-export function parseRelationField(text: string): Array<{
-  target: string
-  type: MemoryGraphEdgeType
-  note: string
-}> {
-  const raw = String(text || '').trim()
-  if (!raw) return []
-  const parts = raw.split(/[；;]/).map((p) => p.trim()).filter(Boolean)
-  const out: Array<{ target: string; type: MemoryGraphEdgeType; note: string }> = []
-  for (const part of parts) {
-    const m = part.match(/^\{?([^}：:]+)\}?\s*[:：]\s*([\s\S]*)$/)
-    if (!m) continue
-    const target = m[1].trim().replace(/^[〔【\[]|[〕】\]]$/g, '')
-    const rest = m[2].trim()
-    if (!target) continue
-    const segs = rest
-      .split(/[·•|｜]/)
-      .map((s) => s.replace(/^[〔【\[]|[〕】\]]$/g, '').trim())
-      .filter(Boolean)
-    const typeHint = segs[0] || '人际'
-    const note = segs.slice(1).join(' · ') || segs[0] || ''
-    out.push({
-      target,
-      type: normalizeEdgeType(typeHint),
-      note,
-    })
-  }
-  return out
 }
 
 export function findNodeByName(
@@ -345,166 +301,6 @@ export function applyMemoryGraphPatch(
   }
 
   return next
-}
-
-/**
- * 从表格记忆投影完整图谱（C）：
- * - 角色档案 → character 节点 + 人际边
- * - 物品追踪 → item 节点 + 持有边
- * - 世界设定 → place/other 节点
- * - 纪要表 → event 节点 + 点名角色边
- * 合并进 base（不抹已有 beats）。
- */
-export function projectCharacterProfilesToGraph(
-  tableState: TableMemoryState,
-  base: MemoryGraphState = createEmptyMemoryGraph(),
-): MemoryGraphState {
-  const patch: MemoryGraphPatch = { nodes: [], edges: [] }
-
-  // —— 角色 ——
-  for (const rec of tableState.records?.['character_profile'] || []) {
-    const name = primaryNameFromRecord(rec)
-    if (!name) continue
-    const attrs: Record<string, string> = {}
-    for (const key of PROFILE_ATTR_KEYS) {
-      if (key === '人际关系') continue
-      const v = String(rec.values?.[key] ?? '').trim()
-      if (v) attrs[key] = v
-    }
-    const former = String(rec.values?.['原名'] ?? '').trim()
-    patch.nodes!.push({
-      name,
-      kind: 'character',
-      attrs,
-      formerName: former || undefined,
-    })
-    const rel = String(rec.values?.['人际关系'] ?? '').trim()
-    for (const r of parseRelationField(rel)) {
-      patch.edges!.push({
-        from: name,
-        to: r.target,
-        type: r.type,
-        note: r.note,
-      })
-      // 关系写入可检索近事（进热窗口 + 冷档案）
-      const relBeat = `与${r.target}：${r.type}${r.note ? ` · ${r.note}` : ''}`
-      patch.nodes!.push({ name, beat: relBeat })
-    }
-    // 档案字段 → 角色近事，避免图谱只有属性没有「记忆」
-    const seedBeatKeys = [
-      '约定',
-      '待办事项',
-      '当前位置',
-      '周围角色',
-      '性格',
-      '身份',
-    ] as const
-    for (const key of seedBeatKeys) {
-      const v = String(rec.values?.[key] ?? attrs[key] ?? '').trim()
-      if (!v) continue
-      patch.nodes!.push({ name, beat: `${key}：${v}` })
-    }
-  }
-
-  // —— 物品 ——
-  for (const rec of tableState.records?.['item_tracking'] || []) {
-    const name =
-      String(rec.values?.['物品名称'] || rec.values?.['名称'] || '').trim() ||
-      primaryNameFromRecord(rec)
-    if (!name) continue
-    const attrs: Record<string, string> = {}
-    for (const key of ['物品描述', '物品位置', '持有者', '状态', '备注'] as const) {
-      const v = String(rec.values?.[key] ?? '').trim()
-      if (v) attrs[key] = v
-    }
-    patch.nodes!.push({ name, kind: 'item', attrs })
-    const owner = String(rec.values?.['持有者'] ?? '').trim()
-    if (owner && owner !== '无' && owner !== '库藏') {
-      patch.edges!.push({
-        from: owner,
-        to: name,
-        type: '其他',
-        note: '持有',
-      })
-    }
-  }
-
-  // —— 世界设定（地点/组织等）——
-  for (const rec of tableState.records?.['world_setting'] || []) {
-    const name =
-      String(rec.values?.['设定名'] || rec.values?.['名称'] || '').trim() ||
-      primaryNameFromRecord(rec)
-    if (!name) continue
-    const type = String(rec.values?.['类型'] ?? '').trim()
-    const kind: MemoryGraphNodeKind = /地点|城|山|谷|府|殿|洞|海|州|界/.test(type)
-      ? 'place'
-      : 'other'
-    const attrs: Record<string, string> = {}
-    for (const key of ['类型', '详细说明', '影响范围'] as const) {
-      const v = String(rec.values?.[key] ?? '').trim()
-      if (v) attrs[key] = v
-    }
-    patch.nodes!.push({ name, kind, attrs })
-  }
-
-  // —— 纪要 → 事件节点（最近若干，避免爆炸）——
-  const journals = tableState.records?.['plot_journal'] || []
-  const recentJ = journals.length > 40 ? journals.slice(journals.length - 40) : journals
-  const knownNames = new Set<string>()
-  for (const n of base.nodes) {
-    if (n.name) knownNames.add(n.name)
-  }
-  for (const np of patch.nodes || []) {
-    if (np.name) knownNames.add(np.name)
-  }
-  for (const rec of recentJ) {
-    const code = String(rec.values?.['编码索引'] || '').trim()
-    const summary = String(rec.values?.['概要'] || '').trim()
-    const body = String(rec.values?.['纪要'] || '').trim()
-    const place = String(rec.values?.['地点'] || '').trim()
-    const label = summary || code || body.slice(0, 16)
-    if (!label) continue
-    const eventName = code ? `事件·${code}·${label.slice(0, 20)}` : `事件·${label.slice(0, 24)}`
-    const attrs: Record<string, string> = {}
-    if (code) attrs['编码'] = code
-    if (summary) attrs['概要'] = summary
-    if (place) attrs['地点'] = place
-    if (body) attrs['纪要'] = body.slice(0, 200)
-    patch.nodes!.push({
-      name: eventName,
-      kind: 'event',
-      attrs,
-      beat: summary || undefined,
-    })
-    if (place) {
-      patch.nodes!.push({ name: place, kind: 'place' })
-      patch.edges!.push({ from: eventName, to: place, type: '其他', note: '发生地' })
-    }
-    // 与已知角色名连边
-    const hay = `${summary} ${body}`
-    for (const cn of knownNames) {
-      if (cn.length < 2) continue
-      if (hay.includes(cn) && !eventName.includes(cn)) {
-        patch.edges!.push({
-          from: eventName,
-          to: cn,
-          type: '其他',
-          note: '涉及',
-        })
-      }
-    }
-  }
-
-  return applyMemoryGraphPatch(base, patch)
-}
-
-function primaryNameFromRecord(rec: MemoryRecord): string {
-  const v = rec.values || {}
-  return (
-    String(v['角色名'] || v['名称'] || v['姓名'] || '').trim() ||
-    Object.values(v)[0]?.trim() ||
-    ''
-  )
 }
 
 /** 弟子详情用切片 */
@@ -988,53 +784,11 @@ export function removeMemoryGraphNodeByName(name: string): MemoryGraphState {
 }
 
 /**
- * 从当前表格记忆刷新图谱并落盘。
- * 保留已有 beats（投影只合并 attrs/边；apply 不删 beats）。
- */
-export function syncMemoryGraphFromTableMemory(
-  tableState?: TableMemoryState,
-): MemoryGraphState {
-  const tables = tableState || loadTableMemory()
-  const hasAny =
-    (tables.records?.['character_profile'] || []).length > 0 ||
-    (tables.records?.['item_tracking'] || []).length > 0 ||
-    (tables.records?.['world_setting'] || []).length > 0 ||
-    (tables.records?.['plot_journal'] || []).length > 0
-  // 表格已空：硬清图谱，避免 clearTableMemory 后残留旧节点
-  if (!hasAny) {
-    clearMemoryGraph()
-    return loadMemoryGraph()
-  }
-  const base = loadMemoryGraph()
-  const next = projectCharacterProfilesToGraph(tables, base)
-  saveMemoryGraph(next)
-  return next
-}
-
-/**
- * 确保图谱已从表格投影。
- * - 空图且有表：全量投影
- * - 已有节点但角色近事全空：强制再投影（旧存档补种档案 beats）
+ * 确保图谱已加载（内存态/持久化）。
+ * 图谱只由 <memory> 标签生长（ingestMemoryTag），不再从任何表格投影。
  */
 export function ensureMemoryGraphHydrated(): MemoryGraphState {
-  const g = loadMemoryGraph()
-  const tables = loadTableMemory()
-  const hasRows =
-    (tables.records?.['character_profile'] || []).length > 0 ||
-    (tables.records?.['item_tracking'] || []).length > 0 ||
-    (tables.records?.['world_setting'] || []).length > 0 ||
-    (tables.records?.['plot_journal'] || []).length > 0
-  if (!hasRows) return g
-  if (g.nodes.length === 0) {
-    return syncMemoryGraphFromTableMemory(tables)
-  }
-  // 旧存档：节点在、近事 0 → 再投影一次种档案字段
-  const chars = g.nodes.filter((n) => n.kind === 'character')
-  const beatTotal = chars.reduce((s, n) => s + (n.beats?.length || 0), 0)
-  if (chars.length > 0 && beatTotal === 0) {
-    return syncMemoryGraphFromTableMemory(tables)
-  }
-  return g
+  return loadMemoryGraph()
 }
 
 /** 弟子详情 / 注入天机用短摘要 */

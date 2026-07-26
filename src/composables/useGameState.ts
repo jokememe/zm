@@ -64,15 +64,6 @@ import {
 } from '@/data/opening'
 import { clearMemoryBank, seedOpeningMemory } from '@/composables/memory-lore'
 import {
-  clearTableMemory,
-  seedOpeningTableMemory,
-  loadTableMemory,
-  saveTableMemory,
-  deleteTableRecord,
-  getPrimaryColumnName,
-} from '@/composables/table-memory'
-import { syncTableMemoryFromGame } from '@/composables/table-memory-sync'
-import {
   clearMemoryGraph,
   removeMemoryGraphNodeByName,
 } from '@/composables/memory-graph'
@@ -779,8 +770,6 @@ export function useGameState() {
         difficulty: diff,
         difficultyLabel: opt.label,
       })
-      seedOpeningTableMemory()
-      syncTableMemoryFromGame()
     } catch (e) {
       console.warn('[开局] 记忆初始化失败', e)
     }
@@ -838,23 +827,6 @@ export function useGameState() {
       g.craftsman === id || g.craftsman === name ? { ...g, craftsman: null } : g,
     )
 
-    // 表格记忆：删角色档案同名行
-    try {
-      const tm = loadTableMemory()
-      const table = tm.tables.find((t) => t.id === 'character_profile')
-      if (table) {
-        const primary = getPrimaryColumnName(table)
-        const list = tm.records[table.id] || []
-        for (const rec of [...list]) {
-          const pn = String(rec.values?.[primary] || '').trim()
-          if (pn === name) deleteTableRecord(table.id, rec.id, tm)
-        }
-        saveTableMemory(tm)
-      }
-    } catch {
-      /* ignore */
-    }
-
     // 叙事图谱：移除同名节点与边
     try {
       removeMemoryGraphNodeByName(name)
@@ -872,7 +844,6 @@ export function useGameState() {
    */
   function resetGameToOpening() {
     clearMemoryBank()
-    clearTableMemory()
     clearMemoryGraph()
     clearIdentity()
     clearGameSaveFromStorage()

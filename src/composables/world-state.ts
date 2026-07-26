@@ -5,11 +5,6 @@ import type { WorldDelta, WorldSnapshot, ApplyResult } from '@/types/world'
 import type { Resources } from '@/types/game'
 import { useGameState } from '@/composables/useGameState'
 import { validateWorldDelta, applyWorldDeltaToSnapshot } from '@/composables/world-delta'
-import {
-  loadTableMemory,
-  saveTableMemory,
-  renameCharacterProfileRow,
-} from '@/composables/table-memory'
 import type { Ref } from 'vue'
 
 function unrefVal<T>(v: T | Ref<T>): T {
@@ -124,26 +119,10 @@ export function applyValidatedDelta(delta: WorldDelta): ApplyResult {
   const hasOps = (clean.ops?.length ?? 0) > 0
   if (!hasRes && !hasOps) return { lines: [], changed: false }
 
-  // 改名前快照：用于同步表格记忆角色主键
-  const nameBefore = new Map(snap.disciples.map((d) => [d.id, d.name]))
-
   const { snap: next, result } = applyWorldDeltaToSnapshot(clean, snap)
   restoreWorldState(next)
 
-  // 弟子改名 → 角色档案旧名行并入新名，避免双开
-  try {
-    const tm = loadTableMemory()
-    let dirty = false
-    for (const d of next.disciples) {
-      const old = nameBefore.get(d.id)
-      if (old && old !== d.name) {
-        if (renameCharacterProfileRow(old, d.name, tm)) dirty = true
-      }
-    }
-    if (dirty) saveTableMemory(tm)
-  } catch {
-    /* 表格记忆可选 */
-  }
-
+  // 注：角色改名后，叙事图谱同名旧节点由 removeMemoryGraphNodeByName 在除名时清理；
+  // 改名本身不自动迁移旧节点近事（已知限制，见清理方案文档风险 B）。
   return result
 }

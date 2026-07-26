@@ -4,32 +4,18 @@ import {
   createEmptyMemoryGraph,
   getMemoryGraphSlice,
   selectMemoryGraphForTurn,
-  projectCharacterProfilesToGraph,
-  parseRelationField,
   loadMemoryGraph,
   saveMemoryGraph,
   clearMemoryGraph,
   matchNamesInText,
   removeMemoryGraphNodeByName,
   formatMemoryGraphSliceBrief,
+  ingestMemoryTag,
 } from './memory-graph'
-import {
-  createDefaultTableMemoryState,
-  applyAssistantMemoryTags,
-  clearTableMemory,
-} from './table-memory'
-// 绑定表格写入 → 图谱投影
-import './memory-graph'
 
-describe('parseRelationField', () => {
-  it('parses braced relation segments', () => {
-    const r = parseRelationField('{沈青岚}：〔师徒〕 · 〔敬重〕；{赤焰谷主}：〔敌对〕 · 〔戒备〕')
-    expect(r.length).toBe(2)
-    expect(r[0].target).toBe('沈青岚')
-    expect(r[0].type).toBe('师徒')
-    expect(r[1].target).toBe('赤焰谷主')
-  })
-})
+function findName(g: ReturnType<typeof createEmptyMemoryGraph>, name: string) {
+  return g.nodes.find((n) => n.name === name)
+}
 
 describe('applyMemoryGraphPatch', () => {
   it('upserts nodes and edges', () => {
@@ -73,78 +59,31 @@ describe('applyMemoryGraphPatch', () => {
   })
 })
 
-function findName(g: ReturnType<typeof createEmptyMemoryGraph>, name: string) {
-  return g.nodes.find((n) => n.name === name)
-}
-
-describe('projectCharacterProfilesToGraph', () => {
-  it('builds character/item/event nodes and edges from tables', () => {
-    const tables = createDefaultTableMemoryState()
-    tables.records['character_profile'] = [
-      {
-        id: 'r1',
-        values: {
-          角色名: '陆承渊',
-          性格: '沉稳',
-          当前位置: '山门',
-          人际关系: '{沈青岚}：〔师徒〕 · 〔敬重〕',
-          约定: '春试前不得下山',
-        },
-      },
-    ]
-    tables.records['item_tracking'] = [
-      {
-        id: 'i1',
-        values: {
-          物品名称: '玄铁令',
-          持有者: '陆承渊',
-          状态: '完好',
-        },
-      },
-    ]
-    tables.records['plot_journal'] = [
-      {
-        id: 'j1',
-        values: {
-          编码索引: 'J0001',
-          概要: '陆承渊请命外出',
-          地点: '议事厅',
-          纪要: '陆承渊于议事厅请命，掌门沈青岚准其东行三日。',
-        },
-      },
-    ]
-    const g = projectCharacterProfilesToGraph(tables)
-    expect(getMemoryGraphSlice(g, '陆承渊').empty).toBe(false)
-    expect(g.edges.some((e) => e.type === '师徒')).toBe(true)
-    expect(g.nodes.some((n) => n.kind === 'item' && n.name === '玄铁令')).toBe(true)
-    expect(g.nodes.some((n) => n.kind === 'event')).toBe(true)
-    expect(g.nodes.some((n) => n.kind === 'place' && n.name === '议事厅')).toBe(true)
-    // 档案字段必须进近事（角色记忆可见）
-    const lu = findName(g, '陆承渊')
-    expect(lu?.beats?.some((b) => /约定|沉稳|山门|师徒/.test(b.text))).toBe(true)
-    expect((lu?.beats?.length || 0)).toBeGreaterThan(0)
-  })
-})
-
-describe('Memory tag → graph projection (shipped path)', () => {
+describe('ingestMemoryTag (shipped growth path)', () => {
   beforeEach(() => {
     clearMemoryGraph()
-    clearTableMemory()
   })
 
-  it('applyAssistantMemoryTags projects character into graph', () => {
-    const text = `<Memory><!--
-#角色档案
-[陆承渊]|性格：沉稳|当前位置：剑庐|人际关系：{沈青岚}：〔师徒〕 · 〔敬重〕|约定：春试前闭关
---></Memory>`
-    const r = applyAssistantMemoryTags(text)
-    expect(r.count).toBeGreaterThan(0)
+  it('grows character node + beat + relation edge from <memory> tag', () => {
+    const newBeats = ingestMemoryTag(
+      '陆承渊|拜入青岚宗|与沈青岚：师徒\n沈青岚|收陆承渊为徒',
+      { year: 3, season: '春' },
+    )
+    expect(newBeats.length).toBeGreaterThan(0)
     const g = loadMemoryGraph()
     const slice = getMemoryGraphSlice(g, '陆承渊')
     expect(slice.empty).toBe(false)
-    expect(slice.node?.attrs['性格']).toBe('沉稳')
+    expect(slice.node?.beats[0]?.text).toBe('拜入青岚宗')
     expect(g.edges.some((e) => e.type === '师徒')).toBe(true)
-    expect(formatMemoryGraphSliceBrief(slice)).toMatch(/沉稳|剑庐/)
+    expect(formatMemoryGraphSliceBrief(slice)).toMatch(/陆承渊|青岚/)
+  })
+
+  it('does not duplicate identical beats', () => {
+    ingestMemoryTag('陆承渊|闭关破境')
+    ingestMemoryTag('陆承渊|闭关破境')
+    const g = loadMemoryGraph()
+    const node = findName(g, '陆承渊')!
+    expect(node.beats.filter((b) => b.text === '闭关破境').length).toBe(1)
   })
 })
 

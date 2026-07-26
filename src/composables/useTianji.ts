@@ -51,20 +51,8 @@ import {
 import { ensureAndRefreshSystemLorebook } from '@/composables/system-lorebook'
 import { embedAndStoreBeats } from '@/composables/memory-embed'
 import { recordTurnSum, loadMemoryBank } from '@/composables/memory-lore'
-import {
-  applyAssistantMemoryTags,
-  hasMemoryTag,
-  loadTableMemory,
-} from '@/composables/table-memory'
-import { syncTableMemoryFromGame } from '@/composables/table-memory-sync'
+import { hasMemoryTag } from '@/composables/memory-tag'
 import { runSettle, textFromSettleCompletion } from '@/composables/settle-runner'
-import {
-  runTableMemoryPipeline,
-  getSchedulerStatus,
-} from '@/composables/table-memory-pipeline'
-import { buildMainFormatMemoryHint } from '@/composables/table-memory-prompts'
-// 注册表格注入 + 记忆图谱投影钩子
-import '@/composables/table-memory-recall'
 import '@/composables/memory-graph'
 import {
   ensureMemoryGraphHydrated,
@@ -283,7 +271,6 @@ async function syncSystemLore(
     currentYear = undefined
   }
   const book = await ensureAndRefreshSystemLorebook({
-    tableMemoryEnabled: s.tableMemoryEnabled !== false,
     contextLabel: contextInjected.value,
     contextDetail: contextDetail.value,
     recallQuery: extra?.recallQuery ?? null,
@@ -310,12 +297,6 @@ async function syncSystemLore(
  * 旧纪要 LLM 选码 / 召回 API 已拆除。
  */
 async function runPreTurnRecall(userText: string): Promise<string[] | null> {
-  const s = settings.value
-  if (!s || s.tableMemoryEnabled === false) {
-    lastRecallCodes.value = []
-    return null
-  }
-
   lastRecallCodes.value = []
   try {
     const graph = ensureMemoryGraphHydrated()
@@ -672,20 +653,11 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
   const session = chatSession.value
   if (!s || !session) throw new Error('天机未就绪')
 
-  const tableMemoryOn = s.tableMemoryEnabled !== false
-
-  // 推演前：经营底表 → 角色图谱选取（零 API）→ 刷系统世界书
-  if (tableMemoryOn) {
-    try {
-      syncTableMemoryFromGame()
-    } catch (e) {
-      console.warn('[天机] 表格记忆同步失败', e)
-    }
-    try {
-      await runPreTurnRecall(userText)
-    } catch (e) {
-      console.warn('[天机] 角色记忆选取失败', e)
-    }
+  // 推演前：角色图谱规则选取（零 API）→ 刷系统世界书
+  try {
+    await runPreTurnRecall(userText)
+  } catch (e) {
+    console.warn('[天机] 角色记忆选取失败', e)
   }
   await syncSystemLore(s, {
     recallQuery: userText,
@@ -727,13 +699,10 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
   )
   const livePreset: ChatPreset = { ...preset, settings: normalizedSettings }
 
-  // 主推演格式 = 用户模板 +（可选）yuzuki 填表契约
+  // 主推演格式 = 用户模板（角色记忆由系统世界书注入，不再附加填表契约）
   const baseFormat =
     s.formatPromptTemplate || DEFAULT_SETTINGS.formatPromptTemplate || ''
-  const memoryFormatHint = tableMemoryOn ? buildMainFormatMemoryHint() : ''
-  const formatPrompt = memoryFormatHint
-    ? `${baseFormat}\n\n${memoryFormatHint}`
-    : baseFormat
+  const formatPrompt = baseFormat
 
   const { messages: promptMessages } = assemblePrompt({
     userInput: userText + contextBlock,
@@ -826,14 +795,9 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
   // 会话气数键与游戏资源对齐（只读同步），不应用 LLM vars 补丁
   const settled = mergeSessionWithGame({})
 
-  // ★ 表格记忆：助手文中 <Memory>/<GaigaiMemory>/<tableEdit> → 主键合并
-  const memoryTagged = tableMemoryOn && hasMemoryTag(raw)
-  if (memoryTagged) {
-    applyAssistantMemoryTags(raw)
-  }
-
   // ★ 短/中/长期记忆：写入 <sum> → 系统世界书 constant 条目
-  // 表格世界状态与 sum 层一并刷新进系统世界书（assemble 前也会 sync）
+  // 角色图谱由 ingestMemoryTag 写入，下次推演前 syncSystemLore 会重读注入
+  const memoryTagged = hasMemoryTag(raw)
   if (parsed.sum?.trim() || memoryTagged) {
     if (parsed.sum?.trim()) {
       recordTurnSum(parsed.sum, { context: contextInjected.value })
@@ -841,7 +805,6 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
     await ensureAndRefreshSystemLorebook({
       contextLabel: contextInjected.value,
       contextDetail: contextDetail.value,
-      tableMemoryEnabled: tableMemoryOn,
     })
     lorebooks.value = await getLorebooks()
   }
@@ -1050,77 +1013,7 @@ export function useTianji() {
             lastSettlement.value = '本回无变更'
           }
 
-          // ★ shujuku 完整流水线：楼层调度 → 填表 → 纪要合并 → retain 清理
-          // （次 API settle 已在上面完成，与本流水线分离）
-          if (settings.value.tableMemoryEnabled !== false) {
-            memoryTracing.value = true
-            lastMemoryTraceKind.value = 'info'
-            lastMemoryTrace.value = '表格记忆流水线…'
-            try {
-              const pipe = await runTableMemoryPipeline({
-                messages: chatSession.value?.messages || [],
-                userText: text,
-                maintext: result.parsed?.maintext || result.content,
-                sum: result.parsed?.sum || '',
-                settings: settings.value,
-                postChat: postChatForSide,
-              })
-              const parts: string[] = []
-              if (!pipe.scheduled) {
-                parts.push(
-                  pipe.scheduleReason === 'not_ready'
-                    ? `调度未触发(下一触 ${pipe.nextTriggerFloor} 层)`
-                    : `调度跳过(${pipe.scheduleReason})`,
-                )
-              } else if (pipe.fill?.status === 'applied') {
-                parts.push(`填表+${pipe.fill.count}`)
-              } else if (pipe.fill?.status === 'empty') {
-                parts.push('填表无新增')
-              } else if (pipe.fill?.status === 'skipped') {
-                parts.push(
-                  pipe.fill.reason === 'memory_api_not_ready'
-                    ? '记忆API未配齐'
-                    : pipe.fill.reason === 'api_not_ready'
-                      ? '未通灵'
-                      : '填表跳过',
-                )
-              } else if (pipe.fill?.status === 'failed') {
-                parts.push(`填表失败`)
-              }
-              if (pipe.merge?.status === 'merged') {
-                parts.push(
-                  `纪要合并 -${pipe.merge.removed || 0}/+${pipe.merge.added || 0}`,
-                )
-              } else if (pipe.merge?.status === 'failed') {
-                parts.push('合并失败')
-              }
-              parts.push(`楼${pipe.lastUpdatedAiFloor}/${pipe.totalAiFloors}`)
-              lastMemoryTrace.value = parts.join(' · ')
-              lastMemoryTraceKind.value =
-                pipe.fill?.status === 'failed' || pipe.merge?.status === 'failed'
-                  ? 'fail'
-                  : pipe.fill?.status === 'applied' || pipe.merge?.status === 'merged'
-                    ? 'ok'
-                    : 'info'
-              if (settings.value) {
-                await ensureAndRefreshSystemLorebook({
-                  contextLabel: contextInjected.value,
-                  contextDetail: contextDetail.value,
-                  tableMemoryEnabled: true,
-                  recallQuery: text,
-                })
-                lorebooks.value = await getLorebooks()
-              }
-            } catch (memErr) {
-              lastMemoryTraceKind.value = 'fail'
-              lastMemoryTrace.value = String((memErr as Error).message || memErr).slice(0, 48)
-            } finally {
-              memoryTracing.value = false
-            }
-          } else {
-            lastMemoryTraceKind.value = 'info'
-            lastMemoryTrace.value = '表格记忆已关闭'
-          }
+          // 角色记忆/三期记忆已在本回合 callLlm 内写入并刷新系统世界书
 
           // 把 stateAfter 回写到本条 assistant，供删楼回滚
           if (chatSession.value) {
@@ -1660,114 +1553,13 @@ export function useTianji() {
    * 不抛错阻断开局：DB 失败时仍写入本地卷首消息。
    */
   /**
-   * 记忆锦囊手动触发：强制跑完整流水线（忽略 frequency 门闩）。
+   * 记忆锦囊手动触发：已随填表系统移除。保留函数签名以兼容 UI 调用，
+   * 现直接返回提示（角色记忆由 <memory> 标签自动生长）。
    */
   async function runManualMemoryTrace(): Promise<{ ok: boolean; message: string }> {
-    await boot()
-    if (!settings.value || settings.value.tableMemoryEnabled === false) {
-      return { ok: false, message: '表格记忆总开关已关闭' }
-    }
-    if (!settings.value || !hasApiKey(settings.value)) {
-      return { ok: false, message: '未通灵，无法追溯' }
-    }
-    const session = chatSession.value
-    if (!session?.messages?.length) {
-      return { ok: false, message: '尚无会话' }
-    }
-    let lastUser = ''
-    let lastAsst = ''
-    for (let i = session.messages.length - 1; i >= 0; i--) {
-      const m = session.messages[i]
-      if (!lastAsst && m.role === 'assistant') lastAsst = m.content
-      if (!lastUser && m.role === 'user') lastUser = m.content
-      if (lastUser && lastAsst) break
-    }
-    if (!lastAsst) return { ok: false, message: '没有可追溯的天机正文' }
-
-    memoryTracing.value = true
     lastMemoryTraceKind.value = 'info'
-    lastMemoryTrace.value = '手动流水线…'
-    try {
-      const postChat = async ({
-        target,
-        body,
-      }: {
-        target: 'memory' | 'secondary' | 'primary'
-        body: Record<string, unknown>
-      }) => {
-        const api = settings.value!.api
-        let ep: { baseUrl: string; apiKey: string; model: string }
-        if (target === 'memory' && api.memory?.enabled) {
-          ep = {
-            baseUrl: normalizeBaseUrl(api.memory.baseUrl || ''),
-            apiKey: String(api.memory.apiKey || ''),
-            model: String(api.memory.model || '').trim(),
-          }
-        } else if (target === 'secondary' && api.secondary?.enabled) {
-          ep = {
-            baseUrl: normalizeBaseUrl(api.secondary.baseUrl || ''),
-            apiKey: String(api.secondary.apiKey || ''),
-            model: String(api.secondary.model || '').trim(),
-          }
-        } else {
-          ep = {
-            baseUrl: normalizeBaseUrl(api.baseUrl || ''),
-            apiKey: String(api.apiKey || ''),
-            model: String(api.model || '').trim() || String(body.model || ''),
-          }
-        }
-        const model = ep.model || String(body.model || '')
-        const completion = await postChatCompletion({
-          baseUrl: ep.baseUrl,
-          apiKey: ep.apiKey,
-          body: { ...body, model, stream: false },
-        })
-        if (!completion.ok) {
-          return { ok: false as const, error: completion.error || '请求失败' }
-        }
-        return textFromSettleCompletion(completion.data)
-      }
-
-      const pipe = await runTableMemoryPipeline({
-        messages: session.messages,
-        userText: lastUser,
-        maintext: lastAsst,
-        sum: lastParsed.value?.sum || '',
-        settings: settings.value,
-        force: true,
-        postChat,
-      })
-      const parts: string[] = ['手动']
-      if (pipe.fill?.status === 'applied') parts.push(`填表+${pipe.fill.count}`)
-      else if (pipe.fill?.status === 'empty') parts.push('填表无新增')
-      else if (pipe.fill?.status === 'failed') parts.push(`填表失败:${pipe.fill.error}`)
-      else if (pipe.fill?.status === 'skipped') parts.push(`填表跳过:${pipe.fill.reason}`)
-      if (pipe.merge?.status === 'merged') {
-        parts.push(`合并-${pipe.merge.removed}/+${pipe.merge.added}`)
-      }
-      parts.push(`楼${pipe.lastUpdatedAiFloor}/${pipe.totalAiFloors}`)
-      lastMemoryTrace.value = parts.join(' · ')
-      lastMemoryTraceKind.value =
-        pipe.fill?.status === 'failed' ? 'fail' : pipe.fill?.status === 'applied' ? 'ok' : 'info'
-      await ensureAndRefreshSystemLorebook({
-        contextLabel: contextInjected.value,
-        contextDetail: contextDetail.value,
-        tableMemoryEnabled: true,
-        recallQuery: lastUser,
-      })
-      lorebooks.value = await getLorebooks()
-      return {
-        ok: pipe.fill?.status !== 'failed',
-        message: lastMemoryTrace.value,
-      }
-    } catch (e) {
-      const msg = String((e as Error).message || e)
-      lastMemoryTraceKind.value = 'fail'
-      lastMemoryTrace.value = msg.slice(0, 48)
-      return { ok: false, message: msg }
-    } finally {
-      memoryTracing.value = false
-    }
+    lastMemoryTrace.value = '角色记忆由正文自动生长，无需手动追溯'
+    return { ok: true, message: lastMemoryTrace.value }
   }
 
   async function startOpeningRun() {
@@ -1779,12 +1571,7 @@ export function useTianji() {
     typing.value = false
 
     loadMemoryBank()
-    loadTableMemory()
-    try {
-      syncTableMemoryFromGame()
-    } catch (e) {
-      console.warn('[天机] 开局表格记忆同步失败', e)
-    }
+
 
     const gs = useGameState()
     const seed = buildOpeningTianjiMessages(
@@ -1925,7 +1712,5 @@ export function useTianji() {
     setSessionVariables,
     startOpeningRun,
     runManualMemoryTrace,
-    getTableMemorySchedulerStatus: () =>
-      getSchedulerStatus(settings.value || ({} as AppSettings), chatSession.value?.messages || []),
   }
 }

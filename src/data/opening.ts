@@ -7,8 +7,6 @@ import { disciples as allDisciples } from '@/data/mock'
 export const OPENING_STORAGE_KEY = 'zongmen-opening-v1'
 export const IDENTITY_STORAGE_KEY = 'zongmen-identity-v1'
 export const MEMORY_STORAGE_KEY = 'zongmen-memory-v1'
-/** yuzuki 风格表格记忆（角色/物品/世界设定） */
-export const TABLE_MEMORY_STORAGE_KEY = 'zongmen-table-memory-v1'
 /** 叙事记忆图谱（节点 + 边，与经营 relationEdges 分离） */
 export const MEMORY_GRAPH_STORAGE_KEY = 'zongmen-memory-graph-v1'
 
