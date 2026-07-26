@@ -332,7 +332,7 @@ async function runPreTurnRecall(userText: string): Promise<string[] | null> {
     })
     if (picked.nodeCount > 0) {
       lastRecallTraceKind.value = 'ok'
-      lastRecallTrace.value = `图谱选取 ${picked.nodeCount} 人：${picked.names.slice(0, 6).join('、')}`
+      lastRecallTrace.value = `图谱选取 ${picked.nodeCount} 节点：${picked.names.slice(0, 6).join('、')}`
     } else {
       lastRecallTraceKind.value = 'info'
       lastRecallTrace.value = '图谱暂无命中节点'

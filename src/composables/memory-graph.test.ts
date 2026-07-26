@@ -171,6 +171,34 @@ describe('selectMemoryGraphForTurn', () => {
     const hits = matchNamesInText('陆承渊请见', ['陆', '陆承渊', '沈白'])
     expect(hits[0]).toBe('陆承渊')
   })
+
+  it('matches event/place by keyword in attrs and includes non-character', () => {
+    let g = createEmptyMemoryGraph()
+    g = applyMemoryGraphPatch(g, {
+      nodes: [
+        {
+          name: '事件·J01·剑庐夜谈',
+          kind: 'event',
+          attrs: { 概要: '剑庐夜谈议外敌', 地点: '剑庐' },
+          beat: '密议赤焰',
+        },
+        { name: '剑庐', kind: 'place', attrs: { 类型: '地点' } },
+        { name: '赤焰令', kind: 'item', attrs: { 持有者: '陆承渊' } },
+      ],
+      edges: [
+        { from: '事件·J01·剑庐夜谈', to: '剑庐', type: '其他', note: '发生地' },
+        { from: '陆承渊', to: '赤焰令', type: '其他', note: '持有' },
+      ],
+    })
+    const r = selectMemoryGraphForTurn({
+      graph: g,
+      query: '剑庐夜谈 赤焰',
+      maxNodes: 4,
+      maxChars: 1600,
+    })
+    expect(r.nodeCount).toBeGreaterThan(0)
+    expect(r.text).toMatch(/剑庐|赤焰|事件/)
+  })
 })
 
 describe('persist memory graph', () => {

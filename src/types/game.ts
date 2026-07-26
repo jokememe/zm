@@ -7,6 +7,7 @@ export type ViewId =
   | 'treasury'
   | 'disciples'
   | 'relations'
+  | 'memory-graph'
   | 'legacy'
   | 'cities'
   | 'diplomacy'

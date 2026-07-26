@@ -334,9 +334,19 @@ async function doAdvanceSeason() {
         </div>
 
         <section class="memory-graph-panel" id="disciple-memory-graph">
-          <h4 class="memory-graph-panel__title">叙事记忆</h4>
+          <div class="memory-graph-panel__head">
+            <h4 class="memory-graph-panel__title">叙事记忆</h4>
+            <button
+              type="button"
+              class="btn btn-soft btn-xs"
+              id="btn-disciple-open-memory-graph"
+              @click="setView('memory-graph'); close()"
+            >
+              打开图谱
+            </button>
+          </div>
           <p class="memory-graph-panel__hint">
-            来自正文记忆图谱（节点/关系），非经营名册关系网。
+            来自正文记忆图谱（节点/关系），非经营名册关系网。完整浏览见侧栏「叙事图谱」。
           </p>
           <template v-if="!discipleMemorySlice.empty && discipleMemorySlice.node">
             <div v-if="discipleMemoryAttrs.length" class="memory-graph-attrs">
@@ -364,12 +374,16 @@ async function doAdvanceSeason() {
                 v-for="b in discipleMemorySlice.node.beats.slice(0, 4)"
                 :key="b.id"
               >
+                <span
+                  v-if="b.year != null"
+                  class="muted"
+                >{{ b.year }}年{{ b.season || '' }} · </span>
                 {{ b.text }}
               </li>
             </ul>
           </template>
           <p v-else class="muted memory-graph-empty">
-            尚无叙事记忆。通灵正文写入角色档案后，将显示性格、约定与关系边。
+            尚无叙事记忆。通灵正文写入角色档案或 &lt;memory&gt; 后会生长；也可在「叙事图谱」从表格投影。
           </p>
         </section>
 
@@ -821,10 +835,23 @@ async function doAdvanceSeason() {
   border: 1px solid rgba(40, 55, 48, 0.1);
 }
 
+.memory-graph-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.15rem;
+}
+
 .memory-graph-panel__title {
-  margin: 0 0 0.2rem;
+  margin: 0;
   font-size: 0.95rem;
   font-family: var(--font-display);
+}
+
+.btn-xs {
+  padding: 0.2rem 0.55rem;
+  font-size: 0.75rem;
 }
 
 .memory-graph-panel__hint {

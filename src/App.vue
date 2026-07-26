@@ -18,6 +18,7 @@ import LibraryView from '@/views/LibraryView.vue'
 import TreasuryView from '@/views/TreasuryView.vue'
 import DisciplesView from '@/views/DisciplesView.vue'
 import RelationsView from '@/views/RelationsView.vue'
+import MemoryGraphView from '@/views/MemoryGraphView.vue'
 import LegacyView from '@/views/LegacyView.vue'
 import CitiesView from '@/views/CitiesView.vue'
 import DiplomacyView from '@/views/DiplomacyView.vue'
@@ -46,6 +47,7 @@ const viewMap: Record<ViewId, Component> = {
   treasury: markRaw(TreasuryView),
   disciples: markRaw(DisciplesView),
   relations: markRaw(RelationsView),
+  'memory-graph': markRaw(MemoryGraphView),
   legacy: markRaw(LegacyView),
   cities: markRaw(CitiesView),
   diplomacy: markRaw(DiplomacyView),

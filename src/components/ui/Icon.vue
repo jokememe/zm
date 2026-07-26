@@ -67,6 +67,13 @@ const box = computed(() => (typeof props.size === 'number' ? `${props.size}` : p
       <circle cx="12" cy="17" r="2.5" />
       <path d="M9 9.5l5-1.5M9 10l2.2 5M15 9l-2 6" />
     </g>
+    <g v-else-if="name === 'memory-graph'" :stroke-width="stroke" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="6" cy="7" r="2.2" />
+      <circle cx="18" cy="7" r="2.2" />
+      <circle cx="12" cy="17" r="2.2" />
+      <circle cx="12" cy="10" r="1.6" />
+      <path d="M8 7.5h6.5M16 8.2l-2.8 1.6M13.2 11.5l-0.4 3.2M10.8 11.5l0.4 3.2M8 8.2l2.8 1.6" />
+    </g>
     <g v-else-if="name === 'legacy'" :stroke-width="stroke" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
       <path d="M12 3l2.2 4.4 4.8.7-3.5 3.4.8 4.8L12 14.2 7.7 16.3l.8-4.8L5 8.1l4.8-.7L12 3z" />
       <path d="M12 16v5" />

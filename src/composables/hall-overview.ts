@@ -146,6 +146,12 @@ export function buildHallShortcuts(input: HallOverviewInput): HallShortcut[] {
       desc: `在册 ${input.disciples.length} 人`,
       icon: 'disciples',
     },
+    {
+      id: 'memory-graph',
+      label: '叙事图谱',
+      desc: '节点 · 边 · 近事',
+      icon: 'memory-graph',
+    },
     { id: 'diplomacy', label: '外交', desc: dipDesc, icon: 'diplomacy' },
     { id: 'legacy', label: '继位', desc: heir, icon: 'legacy' },
     { id: 'cities', label: '城池', desc: cityDesc, icon: 'cities' },

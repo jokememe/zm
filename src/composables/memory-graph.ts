@@ -527,7 +527,8 @@ export interface SelectGraphForTurnInput {
 }
 
 /**
- * 规则选取：点名角色 + 一跳邻接，格式化为注入块。
+ * 规则选取：点名节点（角色/事件/物品/地点）+ 一跳邻接，格式化为注入块。
+ * 无点名时优先最近更新的角色，其次其他类型节点。
  */
 export function selectMemoryGraphForTurn(input: SelectGraphForTurnInput): {
   names: string[]
@@ -539,7 +540,7 @@ export function selectMemoryGraphForTurn(input: SelectGraphForTurnInput): {
   const maxChars = Math.max(200, input.maxChars ?? 1600)
   const roster = [
     ...(input.rosterNames || []),
-    ...g.nodes.filter((n) => n.kind === 'character').map((n) => n.name),
+    ...g.nodes.map((n) => n.name),
   ]
   // 去重保序
   const rosterUniq: string[] = []
@@ -552,13 +553,54 @@ export function selectMemoryGraphForTurn(input: SelectGraphForTurnInput): {
   }
 
   let hit = matchNamesInText(input.query, rosterUniq)
-  // 无点名：取最近更新的角色节点
+
+  // 属性/近事关键词弱匹配（query 片段出现在 attrs/beats）
+  if (hit.length < maxNodes) {
+    const q = String(input.query || '').trim()
+    if (q.length >= 2) {
+      const scored = g.nodes
+        .map((n) => {
+          let score = 0
+          const hay = [
+            n.name,
+            ...Object.values(n.attrs || {}),
+            ...(n.beats || []).map((b) => b.text),
+          ].join('\n')
+          // 短词：整段包含；长 query 用分词粗扫
+          const tokens = q
+            .split(/[\s,，。；;、|]+/)
+            .map((t) => t.trim())
+            .filter((t) => t.length >= 2)
+          for (const t of tokens.slice(0, 12)) {
+            if (hay.includes(t)) score += t.length
+          }
+          return { name: n.name, score, kind: n.kind, updatedAt: n.updatedAt }
+        })
+        .filter((x) => x.score > 0)
+      scored.sort((a, b) => b.score - a.score || b.updatedAt - a.updatedAt)
+      for (const s of scored) {
+        if (hit.length >= maxNodes) break
+        if (!hit.includes(s.name)) hit.push(s.name)
+      }
+    }
+  }
+
+  // 无点名：取最近更新的角色节点，再补其他类型
   if (!hit.length) {
-    hit = [...g.nodes]
+    const chars = [...g.nodes]
       .filter((n) => n.kind === 'character')
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .slice(0, Math.min(2, maxNodes))
       .map((n) => n.name)
+    hit = chars
+    if (hit.length < maxNodes) {
+      const rest = [...g.nodes]
+        .filter((n) => n.kind !== 'character')
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .slice(0, maxNodes - hit.length)
+        .map((n) => n.name)
+      hit = [...hit, ...rest]
+    }
   }
 
   const selected = new Set<string>()
@@ -608,8 +650,34 @@ export function selectMemoryGraphForTurn(input: SelectGraphForTurnInput): {
 
 function formatNodeBlock(slice: MemoryGraphSlice): string {
   const n = slice.node!
-  const lines: string[] = [`### ${n.name}`]
-  const prefer = ['身份', '性格', '当前位置', '周围角色', '待办事项', '约定', '年龄', '性别']
+  const kindLabel =
+    n.kind === 'character'
+      ? '角色'
+      : n.kind === 'event'
+        ? '事件'
+        : n.kind === 'item'
+          ? '物品'
+          : n.kind === 'place'
+            ? '地点'
+            : '其他'
+  const lines: string[] = [`### ${n.name}〔${kindLabel}〕`]
+  const prefer = [
+    '身份',
+    '性格',
+    '当前位置',
+    '周围角色',
+    '待办事项',
+    '约定',
+    '年龄',
+    '性别',
+    '概要',
+    '编码',
+    '地点',
+    '物品描述',
+    '持有者',
+    '类型',
+    '详细说明',
+  ]
   const shown = new Set<string>()
   for (const k of prefer) {
     const v = n.attrs[k]
@@ -620,8 +688,12 @@ function formatNodeBlock(slice: MemoryGraphSlice): string {
   }
   for (const [k, v] of Object.entries(n.attrs)) {
     if (shown.has(k) || !v) continue
-    if (k === '人际关系') continue
+    if (k === '人际关系' || k === '纪要') continue
     lines.push(`- ${k}：${v}`)
+  }
+  // 事件纪要正文单独截断
+  if (n.attrs['纪要']) {
+    lines.push(`- 纪要：${String(n.attrs['纪要']).slice(0, 120)}`)
   }
   for (const e of slice.edges.slice(0, 6)) {
     const arrow = e.direction === 'out' ? '→' : '←'
@@ -629,7 +701,9 @@ function formatNodeBlock(slice: MemoryGraphSlice): string {
     lines.push(`- 关系 ${arrow} ${e.otherName}〔${e.type}〕${note}`)
   }
   for (const b of (n.beats || []).slice(0, 3)) {
-    lines.push(`- 近事：${b.text}`)
+    const cal =
+      b.year != null ? `（${b.year}年${b.season || ''}）` : ''
+    lines.push(`- 近事：${b.text}${cal}`)
   }
   return lines.join('\n')
 }
@@ -682,6 +756,8 @@ function normalizeGraphState(o: Partial<MemoryGraphState>): MemoryGraphState {
               id: String(b?.id || newId('b')),
               text: String(b?.text || ''),
               at: typeof b?.at === 'number' ? b.at : undefined,
+              year: typeof b?.year === 'number' ? b.year : undefined,
+              season: b?.season != null ? String(b.season) : undefined,
             }))
           : [],
         updatedAt: Number(n?.updatedAt) || 0,
