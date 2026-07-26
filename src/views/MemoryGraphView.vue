@@ -15,10 +15,11 @@ import {
   type MemoryGraphNodeKind,
   type MemoryGraphState,
 } from '@/composables/memory-graph'
+import { getArchiveCount, hydrateMemoryArchive } from '@/composables/memory-archive'
 import { useToast } from '@/composables/useToast'
 
 const { injectContext } = useTianji()
-const { focusTianji, disciples, masterName } = useGameState()
+const { focusTianji, disciples, masterName, calendar } = useGameState()
 const toast = useToast()
 
 /** 版本号：强制刷新（sync / 手动） */
@@ -27,6 +28,10 @@ const kindFilter = ref<'all' | MemoryGraphNodeKind>('all')
 const search = ref('')
 const selectedId = ref<string | null>(null)
 const tab = ref<'nodes' | 'edges'>('nodes')
+
+void hydrateMemoryArchive().then(() => {
+  tick.value++
+})
 
 const KIND_LABEL: Record<MemoryGraphNodeKind, string> = {
   character: '角色',
@@ -62,6 +67,7 @@ const graph = computed((): MemoryGraphState => {
 })
 
 const stats = computed(() => {
+  void tick.value
   const g = graph.value
   const byKind: Record<string, number> = {}
   for (const n of g.nodes) {
@@ -71,6 +77,7 @@ const stats = computed(() => {
     nodes: g.nodes.length,
     edges: g.edges.length,
     beats: g.nodes.reduce((s, n) => s + (n.beats?.length || 0), 0),
+    archive: getArchiveCount(),
     byKind,
   }
 })
@@ -214,8 +221,10 @@ function injectTurnPick() {
     rosterNames: roster,
     maxNodes: 5,
     maxChars: 1600,
+    currentYear: Number(calendar.year) || undefined,
+    flashbackTopK: 6,
   })
-  if (!picked.nodeCount) {
+  if (!picked.nodeCount && !picked.flashbackCount) {
     toast.warn('暂无命中', '图谱为空或无法选取')
     return
   }
@@ -226,7 +235,9 @@ function injectTurnPick() {
   focusTianji()
   toast.success(
     '已注入选取',
-    `${picked.nodeCount} 节点：${picked.names.slice(0, 6).join('、')}`,
+    `${picked.nodeCount} 节点` +
+      (picked.flashbackCount ? ` · 闪回 ${picked.flashbackCount}` : '') +
+      `：${picked.names.slice(0, 6).join('、')}`,
   )
 }
 
@@ -241,7 +252,7 @@ function kindLabel(k: MemoryGraphNodeKind) {
       <div>
         <h2><span class="ornament" />叙事图谱</h2>
         <p class="section-desc">
-          节点 · 关系边 · 近事 beats。来自正文记忆与表格投影，与经营「关系网」分离；回合前可规则选取注入天机。
+          节点 · 边 · 热近事 + 冷档案全量。有线索时可闪回旧事；与经营「关系网」分离。
         </p>
       </div>
       <div class="section-actions">
@@ -284,7 +295,11 @@ function kindLabel(k: MemoryGraphNodeKind) {
       </div>
       <div class="stat">
         <strong>{{ stats.beats }}</strong>
-        <span>近事</span>
+        <span>热近事</span>
+      </div>
+      <div class="stat">
+        <strong>{{ stats.archive }}</strong>
+        <span>冷档案</span>
       </div>
       <div class="stat kinds">
         <span

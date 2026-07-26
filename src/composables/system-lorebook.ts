@@ -79,6 +79,8 @@ function buildSystemEntries(extra?: {
   recallCodes?: string[] | null
   /** 语义召回结果（embedding/both 模式） */
   semanticHits?: SemanticHit[]
+  /** 当前游戏年（冷档案「N年前」） */
+  currentYear?: number
 }): LorebookEntry[] {
   loadMemoryBank()
   const tableOn = extra?.tableMemoryEnabled !== false
@@ -89,15 +91,20 @@ function buildSystemEntries(extra?: {
     makeEntry(MEM_MID_ID, formatMidMemory(), '系统自动 · 中期记忆', 2),
     makeEntry(MEM_LONG_ID, formatLongMemory(), '系统自动 · 长期记忆', 3),
   ]
-  // 人物记忆图谱：关键词选取 + 语义召回合并
+  // 人物记忆图谱：规则选取 + 冷档案闪回 + 可选语义召回
   const graph = loadMemoryGraph()
   const graphParts: string[] = []
   if (graph.nodes.length) {
+    const q = [extra?.contextLabel, extra?.contextDetail, extra?.recallQuery]
+      .filter(Boolean)
+      .join('\n')
     const sel = selectMemoryGraphForTurn({
       graph,
-      query: extra?.contextLabel || extra?.recallQuery || '',
+      query: q,
       maxNodes: 5,
-      maxChars: 1200,
+      maxChars: 1800,
+      currentYear: extra?.currentYear,
+      flashbackTopK: 6,
     })
     if (sel.text.trim()) graphParts.push(sel.text)
   }
@@ -140,6 +147,7 @@ export async function ensureAndRefreshSystemLorebook(extra?: {
   recallCodes?: string[] | null
   memoryRecallMode?: 'keyword' | 'embedding' | 'both'
   api?: ApiSettings
+  currentYear?: number
 }): Promise<Lorebook> {
   // 语义召回（embedding / both 模式）
   let semanticHits: SemanticHit[] = []
@@ -151,7 +159,17 @@ export async function ensureAndRefreshSystemLorebook(extra?: {
     }
   }
 
-  const systemEntries = buildSystemEntries({ ...extra, semanticHits })
+  let currentYear = extra?.currentYear
+  if (currentYear == null) {
+    try {
+      const { useGameState } = await import('@/composables/useGameState')
+      currentYear = Number(useGameState().calendar.year) || undefined
+    } catch {
+      currentYear = undefined
+    }
+  }
+
+  const systemEntries = buildSystemEntries({ ...extra, semanticHits, currentYear })
   const all = await getLorebooks()
   const existing = all.find((b) => b.id === SYSTEM_LOREBOOK_ID)
   const now = Date.now()

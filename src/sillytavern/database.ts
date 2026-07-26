@@ -164,6 +164,8 @@ export interface FullBackup {
   localState?: Record<string, string>;
   /** 经营整局对象（与 localState 中 zongmen-game-v1 冗余，便于校验） */
   gameSave?: unknown;
+  /** 叙事近事冷档案（无限记忆） */
+  memoryArchive?: unknown[];
 }
 
 export async function exportAllData(): Promise<FullBackup> {
@@ -195,6 +197,15 @@ export async function exportAllData(): Promise<FullBackup> {
     localState['zongmen-opening-v1'] = 'done';
   }
 
+  let memoryArchive: unknown[] | undefined
+  try {
+    const { exportArchiveBeats } = await import('@/composables/memory-archive')
+    const rows = await exportArchiveBeats()
+    if (rows.length) memoryArchive = rows
+  } catch {
+    /* optional */
+  }
+
   const backup: FullBackup = {
     version: DB_VERSION,
     appId: identity.appId,
@@ -206,6 +217,7 @@ export async function exportAllData(): Promise<FullBackup> {
     chats,
     localState: Object.keys(localState).length ? localState : undefined,
     gameSave: gameSave ?? undefined,
+    memoryArchive,
   };
 
   // 最终断言：若 live 有弟子但 JSON 没有，抛错，禁止导出空经营档
@@ -326,6 +338,16 @@ export async function importAllData(
     localState: (backup.localState as Record<string, string> | undefined) || {},
     gameSave: extracted ?? backup.gameSave,
   });
+
+  // 冷档案近事（无限记忆）
+  if (Array.isArray(backup.memoryArchive) && backup.memoryArchive.length) {
+    try {
+      const { importArchiveBeats } = await import('@/composables/memory-archive')
+      await importArchiveBeats(backup.memoryArchive as import('@/composables/memory-archive').ArchiveBeat[])
+    } catch (e) {
+      side.errors.push(`冷档案恢复失败：${String((e as Error).message || e).slice(0, 80)}`)
+    }
+  }
 
   const result: ImportAllResult = {
     idbRestored: true,

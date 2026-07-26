@@ -282,6 +282,12 @@ async function syncSystemLore(
   s: AppSettings,
   extra?: { recallQuery?: string | null; recallCodes?: string[] | null },
 ) {
+  let currentYear: number | undefined
+  try {
+    currentYear = Number(useGameState().calendar.year) || undefined
+  } catch {
+    currentYear = undefined
+  }
   const book = await ensureAndRefreshSystemLorebook({
     tableMemoryEnabled: s.tableMemoryEnabled !== false,
     contextLabel: contextInjected.value,
@@ -290,6 +296,7 @@ async function syncSystemLore(
     recallCodes: extra?.recallCodes ?? null,
     memoryRecallMode: s.memoryRecallMode || 'both',
     api: s.api,
+    currentYear,
   })
   const list = await getLorebooks()
   lorebooks.value = list
@@ -329,10 +336,14 @@ async function runPreTurnRecall(userText: string): Promise<string[] | null> {
       rosterNames: roster,
       maxNodes: 4,
       maxChars: 1600,
+      currentYear: Number(gs.calendar.year) || undefined,
+      flashbackTopK: 6,
     })
-    if (picked.nodeCount > 0) {
+    if (picked.nodeCount > 0 || picked.flashbackCount > 0) {
       lastRecallTraceKind.value = 'ok'
-      lastRecallTrace.value = `图谱选取 ${picked.nodeCount} 节点：${picked.names.slice(0, 6).join('、')}`
+      const fb =
+        picked.flashbackCount > 0 ? ` · 旧事闪回 ${picked.flashbackCount}` : ''
+      lastRecallTrace.value = `图谱选取 ${picked.nodeCount} 节点${fb}：${picked.names.slice(0, 6).join('、')}`
     } else {
       lastRecallTraceKind.value = 'info'
       lastRecallTrace.value = '图谱暂无命中节点'

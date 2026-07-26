@@ -1,6 +1,8 @@
 /**
- * 叙事记忆图谱（lean C）：节点 + 有向边 + 近事 beats。
- * 与经营 relationEdges 分离；可从角色档案表投影，供弟子页展示与回合前规则选取注入。
+ * 叙事记忆图谱（方案 C + 无限记忆底座）：
+ * - 热层：节点 + 边 + 每节点近况 beats（窗口）
+ * - 冷层：memory-archive 全量 beats（IndexedDB + 镜像），有线索可闪回
+ * 与经营 relationEdges 分离。
  */
 import { MEMORY_GRAPH_STORAGE_KEY } from '@/data/opening'
 import {
@@ -11,11 +13,22 @@ import {
   type MemoryRecord,
   type TableMemoryState,
 } from '@/composables/table-memory'
+import {
+  appendArchiveBeats,
+  clearMemoryArchive,
+  formatArchiveFlashback,
+  removeArchiveBeatsByNodeId,
+  searchArchiveBeats,
+  type ArchiveBeat,
+} from '@/composables/memory-archive'
 
 // 表格 Memory 写入后自动投影图谱
 bindAfterTableMemoryWrite((s) => {
   syncMemoryGraphFromTableMemory(s)
 })
+
+/** 热窗口：节点上保留的近事条数（更早的在冷档案） */
+const HOT_BEAT_MAX = 16
 
 export type MemoryGraphNodeKind = 'character' | 'event' | 'item' | 'place' | 'other'
 
@@ -257,8 +270,29 @@ export function applyMemoryGraphPatch(
     if (np.beat && String(np.beat).trim()) {
       const text = String(np.beat).trim()
       if (!node.beats.some((b) => b.text === text)) {
-        node.beats.unshift({ id: newId('b'), text, at: ts, year: np.beatYear, season: np.beatSeason })
-        if (node.beats.length > 12) node.beats = node.beats.slice(0, 12)
+        const beat = {
+          id: newId('b'),
+          text,
+          at: ts,
+          year: np.beatYear,
+          season: np.beatSeason,
+        }
+        node.beats.unshift(beat)
+        if (node.beats.length > HOT_BEAT_MAX) {
+          node.beats = node.beats.slice(0, HOT_BEAT_MAX)
+        }
+        // 冷档案：全量保留，不因热窗口丢
+        appendArchiveBeats([
+          {
+            id: beat.id,
+            nodeId: node.id,
+            nodeName: node.name,
+            text: beat.text,
+            at: beat.at || ts,
+            year: beat.year,
+            season: beat.season,
+          } satisfies ArchiveBeat,
+        ])
       }
     }
     node.updatedAt = ts
@@ -524,16 +558,27 @@ export interface SelectGraphForTurnInput {
   rosterNames?: string[]
   maxNodes?: number
   maxChars?: number
+  /** 当前游戏年（解析「N年前」+ 旧事加权） */
+  currentYear?: number
+  /** 冷档案闪回条数 */
+  flashbackTopK?: number
+  /** 冷档案闪回字数预算 */
+  flashbackMaxChars?: number
+  /** 是否启用冷档案闪回（默认 true） */
+  enableFlashback?: boolean
 }
 
 /**
- * 规则选取：点名节点（角色/事件/物品/地点）+ 一跳邻接，格式化为注入块。
- * 无点名时优先最近更新的角色，其次其他类型节点。
+ * 规则选取（无限记忆 · 有线索可想起）：
+ * 1) 点名节点 + 热层关键词 + 一跳邻接
+ * 2) 有线索时从冷档案捞旧事闪回（热窗口挤掉的细节仍可回）
+ * 3) 完全无线索：仅最近更新热节点，不扫十年冷库
  */
 export function selectMemoryGraphForTurn(input: SelectGraphForTurnInput): {
   names: string[]
   text: string
   nodeCount: number
+  flashbackCount: number
 } {
   const g = input.graph
   const maxNodes = Math.max(1, input.maxNodes ?? 4)
@@ -553,6 +598,7 @@ export function selectMemoryGraphForTurn(input: SelectGraphForTurnInput): {
   }
 
   let hit = matchNamesInText(input.query, rosterUniq)
+  const namedHits = [...hit]
 
   // 属性/近事关键词弱匹配（query 片段出现在 attrs/beats）
   if (hit.length < maxNodes) {
@@ -566,7 +612,6 @@ export function selectMemoryGraphForTurn(input: SelectGraphForTurnInput): {
             ...Object.values(n.attrs || {}),
             ...(n.beats || []).map((b) => b.text),
           ].join('\n')
-          // 短词：整段包含；长 query 用分词粗扫
           const tokens = q
             .split(/[\s,，。；;、|]+/)
             .map((t) => t.trim())
@@ -585,7 +630,9 @@ export function selectMemoryGraphForTurn(input: SelectGraphForTurnInput): {
     }
   }
 
-  // 无点名：取最近更新的角色节点，再补其他类型
+  const hadExplicitClue = hit.length > 0
+
+  // 无点名：取最近更新的角色节点，再补其他类型（不触发冷库全扫）
   if (!hit.length) {
     const chars = [...g.nodes]
       .filter((n) => n.kind === 'character')
@@ -628,9 +675,13 @@ export function selectMemoryGraphForTurn(input: SelectGraphForTurnInput): {
   }
 
   if (!order.length) {
-    return { names: [], text: '', nodeCount: 0 }
+    return { names: [], text: '', nodeCount: 0, flashbackCount: 0 }
   }
 
+  const graphBudget = Math.max(
+    200,
+    Math.floor(maxChars * (input.enableFlashback === false ? 1 : 0.62)),
+  )
   const blocks: string[] = [
     '## 叙事记忆图谱',
     '（仅作背景参考，勿复述；与经营名册关系网分离）',
@@ -641,11 +692,49 @@ export function selectMemoryGraphForTurn(input: SelectGraphForTurnInput): {
     const lines = formatNodeBlock(slice)
     blocks.push(lines)
   }
-  let text = blocks.join('\n')
+  let graphText = blocks.join('\n')
+  if (graphText.length > graphBudget) {
+    graphText = graphText.slice(0, graphBudget - 1) + '…'
+  }
+
+  // 冷档案闪回：仅当有显式线索（点名/关键词命中）或 query 含可检索 token
+  let flashbackCount = 0
+  let flashText = ''
+  if (input.enableFlashback !== false) {
+    const clueNames =
+      namedHits.length > 0
+        ? namedHits
+        : hadExplicitClue
+          ? order
+          : []
+    // 有点名或关键词命中节点时，用这些名字 + query 搜冷库
+    // 纯兜底「最近更新」不带 clueNames，search 仍可能因 token 命中返回
+    const fbHits = searchArchiveBeats({
+      query: input.query,
+      nodeNames: clueNames.length ? clueNames : hadExplicitClue ? order : undefined,
+      currentYear: input.currentYear,
+      topK: input.flashbackTopK ?? 6,
+      maxChars: input.flashbackMaxChars ?? Math.floor(maxChars * 0.38),
+    })
+    // 去掉已在热近事里完整出现的重复句
+    const hotTexts = new Set<string>()
+    for (const name of order) {
+      const n = findNodeByName(g, name)
+      for (const b of n?.beats || []) hotTexts.add(b.text)
+    }
+    const unique = fbHits.filter((h) => !hotTexts.has(h.text))
+    flashbackCount = unique.length
+    flashText = formatArchiveFlashback(
+      unique,
+      input.flashbackMaxChars ?? Math.max(200, maxChars - graphText.length),
+    )
+  }
+
+  let text = flashText ? `${graphText}\n\n${flashText}` : graphText
   if (text.length > maxChars) {
     text = text.slice(0, maxChars - 1) + '…'
   }
-  return { names: order, text, nodeCount: order.length }
+  return { names: order, text, nodeCount: order.length, flashbackCount }
 }
 
 function formatNodeBlock(slice: MemoryGraphSlice): string {
@@ -794,6 +883,7 @@ export function saveMemoryGraph(g: MemoryGraphState = graphState): void {
 export function clearMemoryGraph(): void {
   graphState = createEmptyMemoryGraph()
   graphMemoryMirror = null
+  clearMemoryArchive()
   try {
     localStorage.removeItem(MEMORY_GRAPH_STORAGE_KEY)
   } catch {
@@ -875,6 +965,7 @@ export function removeMemoryGraphNodeByName(name: string): MemoryGraphState {
   const g = loadMemoryGraph()
   const node = findNodeByName(g, name)
   if (!node) return g
+  removeArchiveBeatsByNodeId(node.id)
   const next: MemoryGraphState = {
     version: 1,
     nodes: g.nodes.filter((n) => n.id !== node.id),
