@@ -64,7 +64,7 @@ export const navItems: NavItem[] = [
   { id: 'treasury', label: '宝库', icon: 'treasury', group: '内政' },
   { id: 'disciples', label: '弟子名册', icon: 'disciples', group: '人事' },
   { id: 'relations', label: '关系网', icon: 'relations', group: '人事' },
-  { id: 'memory-graph', label: '叙事图谱', icon: 'memory-graph', group: '人事' },
+  { id: 'memory-graph', label: '角色记忆', icon: 'memory-graph', group: '人事' },
   { id: 'legacy', label: '传承继位', icon: 'legacy', group: '人事' },
   { id: 'cities', label: '城池纳贡', icon: 'cities', group: '外交' },
   { id: 'diplomacy', label: '势力外交', icon: 'diplomacy', group: '外交' },

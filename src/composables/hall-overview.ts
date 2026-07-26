@@ -148,8 +148,8 @@ export function buildHallShortcuts(input: HallOverviewInput): HallShortcut[] {
     },
     {
       id: 'memory-graph',
-      label: '叙事图谱',
-      desc: '节点 · 边 · 近事',
+      label: '角色记忆',
+      desc: '近事 · 关系 · 闪回',
       icon: 'memory-graph',
     },
     { id: 'diplomacy', label: '外交', desc: dipDesc, icon: 'diplomacy' },

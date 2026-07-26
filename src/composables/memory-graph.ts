@@ -386,10 +386,23 @@ export function projectCharacterProfilesToGraph(
         type: r.type,
         note: r.note,
       })
+      // 关系写入可检索近事（进热窗口 + 冷档案）
+      const relBeat = `与${r.target}：${r.type}${r.note ? ` · ${r.note}` : ''}`
+      patch.nodes!.push({ name, beat: relBeat })
     }
-    const pact = String(rec.values?.['约定'] ?? '').trim()
-    if (pact) {
-      patch.nodes!.push({ name, beat: `约定：${pact}` })
+    // 档案字段 → 角色近事，避免图谱只有属性没有「记忆」
+    const seedBeatKeys = [
+      '约定',
+      '待办事项',
+      '当前位置',
+      '周围角色',
+      '性格',
+      '身份',
+    ] as const
+    for (const key of seedBeatKeys) {
+      const v = String(rec.values?.[key] ?? attrs[key] ?? '').trim()
+      if (!v) continue
+      patch.nodes!.push({ name, beat: `${key}：${v}` })
     }
   }
 
@@ -707,22 +720,21 @@ export function selectMemoryGraphForTurn(input: SelectGraphForTurnInput): {
         : hadExplicitClue
           ? order
           : []
-    // 有点名或关键词命中节点时，用这些名字 + query 搜冷库
-    // 纯兜底「最近更新」不带 clueNames，search 仍可能因 token 命中返回
-    const fbHits = searchArchiveBeats({
-      query: input.query,
-      nodeNames: clueNames.length ? clueNames : hadExplicitClue ? order : undefined,
-      currentYear: input.currentYear,
-      topK: input.flashbackTopK ?? 6,
-      maxChars: input.flashbackMaxChars ?? Math.floor(maxChars * 0.38),
-    })
-    // 去掉已在热近事里完整出现的重复句
+    // 先多取，再去掉热近事重复（否则 topK 全被热层占满，旧事永远闪不回）
+    const wantFb = input.flashbackTopK ?? 6
     const hotTexts = new Set<string>()
     for (const name of order) {
       const n = findNodeByName(g, name)
       for (const b of n?.beats || []) hotTexts.add(b.text)
     }
-    const unique = fbHits.filter((h) => !hotTexts.has(h.text))
+    const fbHits = searchArchiveBeats({
+      query: input.query,
+      nodeNames: clueNames.length ? clueNames : hadExplicitClue ? order : undefined,
+      currentYear: input.currentYear,
+      topK: Math.max(wantFb * 4, 24),
+      maxChars: input.flashbackMaxChars ?? Math.floor(maxChars * 0.38),
+    })
+    const unique = fbHits.filter((h) => !hotTexts.has(h.text)).slice(0, wantFb)
     flashbackCount = unique.length
     flashText = formatArchiveFlashback(
       unique,
@@ -999,10 +1011,13 @@ export function syncMemoryGraphFromTableMemory(
   return next
 }
 
-/** 确保图谱已从表格投影过（空图且有档案/物品/设定时） */
+/**
+ * 确保图谱已从表格投影。
+ * - 空图且有表：全量投影
+ * - 已有节点但角色近事全空：强制再投影（旧存档补种档案 beats）
+ */
 export function ensureMemoryGraphHydrated(): MemoryGraphState {
   const g = loadMemoryGraph()
-  if (g.nodes.length > 0) return g
   const tables = loadTableMemory()
   const hasRows =
     (tables.records?.['character_profile'] || []).length > 0 ||
@@ -1010,7 +1025,16 @@ export function ensureMemoryGraphHydrated(): MemoryGraphState {
     (tables.records?.['world_setting'] || []).length > 0 ||
     (tables.records?.['plot_journal'] || []).length > 0
   if (!hasRows) return g
-  return syncMemoryGraphFromTableMemory(tables)
+  if (g.nodes.length === 0) {
+    return syncMemoryGraphFromTableMemory(tables)
+  }
+  // 旧存档：节点在、近事 0 → 再投影一次种档案字段
+  const chars = g.nodes.filter((n) => n.kind === 'character')
+  const beatTotal = chars.reduce((s, n) => s + (n.beats?.length || 0), 0)
+  if (chars.length > 0 && beatTotal === 0) {
+    return syncMemoryGraphFromTableMemory(tables)
+  }
+  return g
 }
 
 /** 弟子详情 / 注入天机用短摘要 */

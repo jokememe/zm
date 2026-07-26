@@ -10,9 +10,7 @@ import {
   loadMemoryGraph,
   selectMemoryGraphForTurn,
   syncMemoryGraphFromTableMemory,
-  type MemoryGraphEdge,
   type MemoryGraphNode,
-  type MemoryGraphNodeKind,
   type MemoryGraphState,
 } from '@/composables/memory-graph'
 import { getArchiveCount, hydrateMemoryArchive } from '@/composables/memory-archive'
@@ -22,32 +20,14 @@ const { injectContext } = useTianji()
 const { focusTianji, disciples, masterName, calendar } = useGameState()
 const toast = useToast()
 
-/** 版本号：强制刷新（sync / 手动） */
 const tick = ref(0)
-const kindFilter = ref<'all' | MemoryGraphNodeKind>('all')
 const search = ref('')
 const selectedId = ref<string | null>(null)
-const tab = ref<'nodes' | 'edges'>('nodes')
+const showExtras = ref(false)
 
 void hydrateMemoryArchive().then(() => {
   tick.value++
 })
-
-const KIND_LABEL: Record<MemoryGraphNodeKind, string> = {
-  character: '角色',
-  event: '事件',
-  item: '物品',
-  place: '地点',
-  other: '其他',
-}
-
-const KIND_TAG: Record<MemoryGraphNodeKind, string> = {
-  character: 'tag-moon',
-  event: 'tag-amber',
-  item: 'tag-violet',
-  place: 'tag-jade',
-  other: 'tag-rose',
-}
 
 const typeClass: Record<string, string> = {
   师徒: 'tag-moon',
@@ -66,68 +46,43 @@ const graph = computed((): MemoryGraphState => {
   return ensureMemoryGraphHydrated()
 })
 
+const characters = computed(() => {
+  return graph.value.nodes
+    .filter((n) => n.kind === 'character')
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+})
+
+const extras = computed(() => {
+  return graph.value.nodes
+    .filter((n) => n.kind !== 'character')
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+})
+
 const stats = computed(() => {
   void tick.value
   const g = graph.value
-  const byKind: Record<string, number> = {}
-  for (const n of g.nodes) {
-    byKind[n.kind] = (byKind[n.kind] || 0) + 1
-  }
+  const chars = characters.value
   return {
-    nodes: g.nodes.length,
+    characters: chars.length,
     edges: g.edges.length,
-    beats: g.nodes.reduce((s, n) => s + (n.beats?.length || 0), 0),
+    beats: chars.reduce((s, n) => s + (n.beats?.length || 0), 0),
     archive: getArchiveCount(),
-    byKind,
+    extras: extras.value.length,
   }
 })
 
-const nameById = computed(() => {
-  const m = new Map<string, string>()
-  for (const n of graph.value.nodes) m.set(n.id, n.name)
-  return m
-})
-
-const filteredNodes = computed(() => {
+const filteredCharacters = computed(() => {
   const q = search.value.trim().toLowerCase()
-  let list = [...graph.value.nodes]
-  if (kindFilter.value !== 'all') {
-    list = list.filter((n) => n.kind === kindFilter.value)
-  }
+  let list = [...characters.value]
   if (q) {
     list = list.filter((n) => {
       if (n.name.toLowerCase().includes(q)) return true
-      if (Object.values(n.attrs || {}).some((v) => String(v).toLowerCase().includes(q))) return true
+      if (Object.values(n.attrs || {}).some((v) => String(v).toLowerCase().includes(q)))
+        return true
       if ((n.beats || []).some((b) => b.text.toLowerCase().includes(q))) return true
       return false
     })
   }
-  list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
-  return list
-})
-
-const filteredEdges = computed(() => {
-  const q = search.value.trim().toLowerCase()
-  let list = [...graph.value.edges]
-  if (kindFilter.value !== 'all') {
-    const ids = new Set(
-      graph.value.nodes.filter((n) => n.kind === kindFilter.value).map((n) => n.id),
-    )
-    list = list.filter((e) => ids.has(e.from) || ids.has(e.to))
-  }
-  if (q) {
-    list = list.filter((e) => {
-      const from = nameById.value.get(e.from) || e.from
-      const to = nameById.value.get(e.to) || e.to
-      return (
-        from.toLowerCase().includes(q) ||
-        to.toLowerCase().includes(q) ||
-        e.type.toLowerCase().includes(q) ||
-        (e.note || '').toLowerCase().includes(q)
-      )
-    })
-  }
-  list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
   return list
 })
 
@@ -150,13 +105,15 @@ const selectedAttrs = computed(() => {
     .map(([k, v]) => ({ k, v: String(v) }))
 })
 
-watch(filteredNodes, (list) => {
+watch(filteredCharacters, (list) => {
   if (!list.length) {
-    selectedId.value = null
+    if (!showExtras.value) selectedId.value = null
     return
   }
   if (!selectedId.value || !list.some((n) => n.id === selectedId.value)) {
-    selectedId.value = list[0].id
+    // keep selection if it's an extra node
+    const still = graph.value.nodes.some((n) => n.id === selectedId.value)
+    if (!still) selectedId.value = list[0].id
   }
 })
 
@@ -168,28 +125,27 @@ function syncFromTables() {
   syncMemoryGraphFromTableMemory()
   refresh()
   const g = loadMemoryGraph()
-  toast.success('已从表格投影', `节点 ${g.nodes.length} · 边 ${g.edges.length}`)
+  const chars = g.nodes.filter((n) => n.kind === 'character')
+  const beats = chars.reduce((s, n) => s + (n.beats?.length || 0), 0)
+  toast.success(
+    '已从表格刷新',
+    `角色 ${chars.length} · 近事 ${beats} · 边 ${g.edges.length}`,
+  )
 }
 
 function selectNode(n: MemoryGraphNode) {
   selectedId.value = n.id
-  tab.value = 'nodes'
-}
-
-function selectEdgeEndpoint(edge: MemoryGraphEdge, which: 'from' | 'to') {
-  selectedId.value = which === 'from' ? edge.from : edge.to
-  tab.value = 'nodes'
 }
 
 function injectSelected() {
   const n = selectedNode.value
   if (!n) {
-    toast.warn('未选节点', '请先点选一个节点')
+    toast.warn('未选角色', '请先点选一个角色')
     return
   }
   const slice = getMemoryGraphSlice(graph.value, n.name)
   const brief = formatMemoryGraphSliceBrief(slice) || n.name
-  const lines: string[] = [`【叙事图谱·${KIND_LABEL[n.kind] || n.kind}】${n.name}`]
+  const lines: string[] = [`【角色记忆】${n.name}`]
   for (const a of selectedAttrs.value.slice(0, 8)) {
     lines.push(`${a.k}：${a.v}`)
   }
@@ -198,14 +154,11 @@ function injectSelected() {
       `关系 ${e.direction === 'out' ? '→' : '←'} ${e.otherName}〔${e.type}〕${e.note ? ` · ${e.note}` : ''}`,
     )
   }
-  for (const b of (n.beats || []).slice(0, 4)) {
-    const cal =
-      b.year != null
-        ? `（${b.year}年${b.season || ''}）`
-        : ''
+  for (const b of (n.beats || []).slice(0, 8)) {
+    const cal = b.year != null ? `（${b.year}年${b.season || ''}）` : ''
     lines.push(`近事：${b.text}${cal}`)
   }
-  injectContext(`叙事图谱 · ${n.name}`, lines.join('\n').slice(0, 1800) || brief)
+  injectContext(`角色记忆 · ${n.name}`, lines.join('\n').slice(0, 1800) || brief)
   focusTianji()
   toast.success('已注入天机', n.name)
 }
@@ -229,20 +182,26 @@ function injectTurnPick() {
     return
   }
   injectContext(
-    `叙事图谱 · 规则选取 ${picked.names.slice(0, 4).join('、')}`,
+    `角色记忆 · 选取 ${picked.names.slice(0, 4).join('、')}`,
     picked.text,
   )
   focusTianji()
   toast.success(
     '已注入选取',
-    `${picked.nodeCount} 节点` +
+    `${picked.nodeCount} 人` +
       (picked.flashbackCount ? ` · 闪回 ${picked.flashbackCount}` : '') +
       `：${picked.names.slice(0, 6).join('、')}`,
   )
 }
 
-function kindLabel(k: MemoryGraphNodeKind) {
-  return KIND_LABEL[k] || k
+function cardBrief(n: MemoryGraphNode): string {
+  const beats = n.beats || []
+  if (beats[0]?.text) return beats[0].text
+  return (
+    formatMemoryGraphSliceBrief(getMemoryGraphSlice(graph.value, n.name)) ||
+    Object.values(n.attrs || {}).slice(0, 2).join(' · ') ||
+    '暂无近事'
+  )
 }
 </script>
 
@@ -250,18 +209,13 @@ function kindLabel(k: MemoryGraphNodeKind) {
   <div id="view-memory-graph" class="view">
     <div class="section-head">
       <div>
-        <h2><span class="ornament" />叙事图谱</h2>
+        <h2><span class="ornament" />角色记忆</h2>
         <p class="section-desc">
-          节点 · 边 · 热近事 + 冷档案全量。有线索时可闪回旧事；与经营「关系网」分离。
+          按角色看近事与关系；热近事在节点上，更早的进冷档案。推演时按线索本地选取，不走旧召回 API。
         </p>
       </div>
       <div class="section-actions">
-        <button
-          id="btn-mg-sync"
-          class="btn btn-soft"
-          type="button"
-          @click="syncFromTables"
-        >
+        <button id="btn-mg-sync" class="btn btn-soft" type="button" @click="syncFromTables">
           <Icon name="spark" :size="16" /> 从表格刷新
         </button>
         <button
@@ -279,19 +233,15 @@ function kindLabel(k: MemoryGraphNodeKind) {
           :disabled="!selectedNode"
           @click="injectSelected"
         >
-          <Icon name="send" :size="16" /> 注入本节点
+          <Icon name="send" :size="16" /> 注入本角色
         </button>
       </div>
     </div>
 
     <div class="stats-row panel-card">
       <div class="stat">
-        <strong>{{ stats.nodes }}</strong>
-        <span>节点</span>
-      </div>
-      <div class="stat">
-        <strong>{{ stats.edges }}</strong>
-        <span>关系边</span>
+        <strong>{{ stats.characters }}</strong>
+        <span>角色</span>
       </div>
       <div class="stat">
         <strong>{{ stats.beats }}</strong>
@@ -301,114 +251,84 @@ function kindLabel(k: MemoryGraphNodeKind) {
         <strong>{{ stats.archive }}</strong>
         <span>冷档案</span>
       </div>
-      <div class="stat kinds">
-        <span
-          v-for="(label, kind) in KIND_LABEL"
-          :key="kind"
-          class="tag"
-          :class="[KIND_TAG[kind as MemoryGraphNodeKind], { dim: !(stats.byKind[kind] > 0) }]"
-        >
-          {{ label }} {{ stats.byKind[kind] || 0 }}
-        </span>
+      <div class="stat">
+        <strong>{{ stats.edges }}</strong>
+        <span>关系边</span>
+      </div>
+      <div v-if="stats.extras" class="stat">
+        <strong>{{ stats.extras }}</strong>
+        <span>物/地/事</span>
       </div>
     </div>
 
     <div class="toolbar panel-card">
-      <div class="tabs">
-        <button
-          type="button"
-          class="tab"
-          :class="{ active: tab === 'nodes' }"
-          @click="tab = 'nodes'"
-        >
-          节点 {{ filteredNodes.length }}
-        </button>
-        <button
-          type="button"
-          class="tab"
-          :class="{ active: tab === 'edges' }"
-          @click="tab = 'edges'"
-        >
-          边 {{ filteredEdges.length }}
-        </button>
-      </div>
-      <div class="filters">
-        <select v-model="kindFilter" id="mg-kind-filter" class="filter-select">
-          <option value="all">全部类型</option>
-          <option v-for="(label, kind) in KIND_LABEL" :key="kind" :value="kind">
-            {{ label }}
-          </option>
-        </select>
-        <input
-          id="mg-search"
-          v-model="search"
-          type="search"
-          class="filter-search"
-          placeholder="搜索名称、属性、近事…"
-        />
-      </div>
+      <input
+        id="mg-search"
+        v-model="search"
+        type="search"
+        class="filter-search"
+        placeholder="搜角色名、属性、近事…"
+      />
+      <button
+        v-if="stats.extras"
+        type="button"
+        class="tab"
+        :class="{ active: showExtras }"
+        @click="showExtras = !showExtras"
+      >
+        {{ showExtras ? '只看角色' : `物/地/事 ${stats.extras}` }}
+      </button>
     </div>
 
-    <div v-if="!stats.nodes" class="panel-card empty-state">
+    <div v-if="!stats.characters" class="panel-card empty-state">
       <Icon name="memory-graph" :size="28" />
       <div>
-        <strong>图谱尚空</strong>
+        <strong>尚无角色记忆</strong>
         <p class="muted">
-          通灵正文写入角色档案 / &lt;memory&gt; 标签后会自动生长；也可点「从表格刷新」投影已有表格记忆。
+          通灵正文写入角色档案 / &lt;memory&gt; 后会自动生长；也可点「从表格刷新」投影已有表格。
         </p>
       </div>
     </div>
 
     <div v-else class="mg-layout">
       <div class="mg-list stagger">
-        <template v-if="tab === 'nodes'">
+        <article
+          v-for="n in filteredCharacters"
+          :id="`mg-node-${n.id}`"
+          :key="n.id"
+          class="panel-card node-card interactive"
+          :class="{ active: selectedId === n.id }"
+          @click="selectNode(n)"
+        >
+          <header>
+            <h3>{{ n.name }}</h3>
+            <span class="tag tag-moon">角色</span>
+          </header>
+          <p class="muted line-clamp">{{ cardBrief(n) }}</p>
+          <footer>
+            <span>{{ (n.beats || []).length }} 近事</span>
+            <span>{{ getMemoryGraphSlice(graph, n.name).edges.length }} 关系</span>
+            <span v-if="n.attrs?.['身份']" class="dim">{{ n.attrs['身份'] }}</span>
+          </footer>
+        </article>
+        <p v-if="!filteredCharacters.length" class="muted pad">无匹配角色</p>
+
+        <template v-if="showExtras && extras.length">
+          <p class="list-sep muted">物 / 地 / 事</p>
           <article
-            v-for="n in filteredNodes"
+            v-for="n in extras"
             :id="`mg-node-${n.id}`"
             :key="n.id"
-            class="panel-card node-card interactive"
+            class="panel-card node-card interactive extra"
             :class="{ active: selectedId === n.id }"
             @click="selectNode(n)"
           >
             <header>
               <h3>{{ n.name }}</h3>
-              <span class="tag" :class="KIND_TAG[n.kind]">{{ kindLabel(n.kind) }}</span>
+              <span class="tag tag-amber">{{ n.kind }}</span>
             </header>
-            <p class="muted line-clamp">
-              {{
-                formatMemoryGraphSliceBrief(getMemoryGraphSlice(graph, n.name)) ||
-                Object.values(n.attrs || {}).slice(0, 2).join(' · ') ||
-                (n.beats?.[0]?.text ?? '暂无摘要')
-              }}
-            </p>
-            <footer>
-              <span>{{ (n.beats || []).length }} 近事</span>
-              <span>{{ getMemoryGraphSlice(graph, n.name).edges.length }} 边</span>
-            </footer>
+            <p class="muted line-clamp">{{ cardBrief(n) }}</p>
           </article>
-          <p v-if="!filteredNodes.length" class="muted pad">无匹配节点</p>
-        </template>
-
-        <template v-else>
-          <article
-            v-for="e in filteredEdges"
-            :id="`mg-edge-${e.id}`"
-            :key="e.id"
-            class="panel-card edge-card interactive"
-            @click="selectEdgeEndpoint(e, 'from')"
-          >
-            <div class="edge-people">
-              <button type="button" class="person-link" @click.stop="selectEdgeEndpoint(e, 'from')">
-                {{ nameById.get(e.from) || e.from }}
-              </button>
-              <span class="tag" :class="typeClass[e.type] || 'tag-rose'">{{ e.type }}</span>
-              <button type="button" class="person-link" @click.stop="selectEdgeEndpoint(e, 'to')">
-                {{ nameById.get(e.to) || e.to }}
-              </button>
-            </div>
-            <p v-if="e.note" class="muted">{{ e.note }}</p>
-          </article>
-          <p v-if="!filteredEdges.length" class="muted pad">无匹配关系边</p>
         </template>
       </div>
 
@@ -416,8 +336,8 @@ function kindLabel(k: MemoryGraphNodeKind) {
         <header class="detail-head">
           <div>
             <h3>{{ selectedNode.name }}</h3>
-            <span class="tag" :class="KIND_TAG[selectedNode.kind]">
-              {{ kindLabel(selectedNode.kind) }}
+            <span class="tag" :class="selectedNode.kind === 'character' ? 'tag-moon' : 'tag-amber'">
+              {{ selectedNode.kind === 'character' ? '角色' : selectedNode.kind }}
             </span>
           </div>
           <button class="btn btn-soft btn-sm" type="button" @click="injectSelected">
@@ -425,18 +345,21 @@ function kindLabel(k: MemoryGraphNodeKind) {
           </button>
         </header>
 
-        <section v-if="selectedAttrs.length" class="detail-block">
-          <h4>属性</h4>
-          <div class="attrs">
-            <div v-for="a in selectedAttrs" :key="a.k" class="attr">
-              <label>{{ a.k }}</label>
-              <span>{{ a.v }}</span>
-            </div>
-          </div>
+        <section v-if="selectedNode.beats?.length" class="detail-block">
+          <h4>近事（{{ selectedNode.beats.length }}）</h4>
+          <ul class="beat-list">
+            <li v-for="b in selectedNode.beats" :key="b.id">
+              <span v-if="b.year != null" class="beat-cal muted"
+                >{{ b.year }}年{{ b.season || '' }}</span
+              >
+              {{ b.text }}
+            </li>
+          </ul>
         </section>
+        <p v-else class="muted detail-block">尚无近事。点「从表格刷新」可从档案字段补种。</p>
 
         <section v-if="selectedSlice.edges.length" class="detail-block">
-          <h4>关系边（{{ selectedSlice.edges.length }}）</h4>
+          <h4>关系（{{ selectedSlice.edges.length }}）</h4>
           <ul class="edge-list">
             <li v-for="e in selectedSlice.edges" :key="e.id">
               <span class="tag" :class="typeClass[e.type] || 'tag-rose'">{{ e.type }}</span>
@@ -453,29 +376,15 @@ function kindLabel(k: MemoryGraphNodeKind) {
           </ul>
         </section>
 
-        <section v-if="selectedNode.beats?.length" class="detail-block">
-          <h4>近事（{{ selectedNode.beats.length }}）</h4>
-          <ul class="beat-list">
-            <li v-for="b in selectedNode.beats" :key="b.id">
-              <span
-                v-if="b.year != null"
-                class="beat-cal muted"
-              >{{ b.year }}年{{ b.season || '' }}</span>
-              {{ b.text }}
-            </li>
-          </ul>
+        <section v-if="selectedAttrs.length" class="detail-block">
+          <h4>档案</h4>
+          <div class="attrs">
+            <div v-for="a in selectedAttrs" :key="a.k" class="attr">
+              <label>{{ a.k }}</label>
+              <span>{{ a.v }}</span>
+            </div>
+          </div>
         </section>
-
-        <p
-          v-if="
-            !selectedAttrs.length &&
-            !selectedSlice.edges.length &&
-            !selectedNode.beats?.length
-          "
-          class="muted"
-        >
-          此节点尚无属性、边或近事。
-        </p>
       </aside>
     </div>
   </div>
@@ -516,31 +425,25 @@ function kindLabel(k: MemoryGraphNodeKind) {
   color: var(--ink-muted);
 }
 
-.stat.kinds {
-  flex-direction: row;
-  flex-wrap: wrap;
-  gap: 0.35rem;
-  flex: 1;
-  min-width: 12rem;
-}
-
-.stat.kinds .dim {
-  opacity: 0.45;
-}
-
 .toolbar {
   display: flex;
   flex-wrap: wrap;
   gap: 0.75rem;
   align-items: center;
-  justify-content: space-between;
   padding: 0.65rem 1rem;
   margin-top: 0.75rem;
 }
 
-.tabs {
-  display: flex;
-  gap: 0.35rem;
+.filter-search {
+  border: 1px solid color-mix(in srgb, var(--ink-muted) 28%, transparent);
+  background: color-mix(in srgb, var(--panel, #1a1624) 40%, transparent);
+  color: var(--ink-primary);
+  border-radius: 0.5rem;
+  padding: 0.4rem 0.65rem;
+  font-size: 0.86rem;
+  min-width: 12rem;
+  flex: 1;
+  max-width: 22rem;
 }
 
 .tab {
@@ -558,30 +461,6 @@ function kindLabel(k: MemoryGraphNodeKind) {
   border-color: color-mix(in srgb, var(--accent, #7b6bb0) 35%, transparent);
   color: var(--ink-primary);
   font-weight: 600;
-}
-
-.filters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  flex: 1;
-  justify-content: flex-end;
-}
-
-.filter-select,
-.filter-search {
-  border: 1px solid color-mix(in srgb, var(--ink-muted) 28%, transparent);
-  background: color-mix(in srgb, var(--panel, #1a1624) 40%, transparent);
-  color: var(--ink-primary);
-  border-radius: 0.5rem;
-  padding: 0.4rem 0.65rem;
-  font-size: 0.86rem;
-}
-
-.filter-search {
-  min-width: 12rem;
-  flex: 1;
-  max-width: 18rem;
 }
 
 .empty-state {
@@ -615,12 +494,21 @@ function kindLabel(k: MemoryGraphNodeKind) {
   padding-right: 0.15rem;
 }
 
-.node-card,
-.edge-card {
+.list-sep {
+  margin: 0.5rem 0 0.15rem;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+}
+
+.node-card {
   padding: 0.9rem 1rem;
   display: flex;
   flex-direction: column;
   gap: 0.45rem;
+}
+
+.node-card.extra {
+  opacity: 0.92;
 }
 
 .node-card.active {
@@ -660,12 +548,8 @@ function kindLabel(k: MemoryGraphNodeKind) {
   color: var(--ink-muted);
 }
 
-.edge-people {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.45rem;
-  flex-wrap: wrap;
+.node-card footer .dim {
+  opacity: 0.85;
 }
 
 .person-link {
@@ -683,12 +567,6 @@ function kindLabel(k: MemoryGraphNodeKind) {
 .person-link:hover {
   color: var(--accent, #9b8ad4);
   text-decoration: underline;
-}
-
-.edge-card p {
-  margin: 0;
-  font-size: 0.84rem;
-  line-height: 1.45;
 }
 
 .mg-detail {

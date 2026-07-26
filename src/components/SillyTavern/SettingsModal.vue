@@ -15,8 +15,6 @@ import {
 } from '@/sillytavern'
 import {
   resolveTableMemoryScheduler,
-  DEFAULT_RECALL_SYSTEM_PROMPT,
-  DEFAULT_RECALL_USER_TEMPLATE,
   type TableMemorySchedulerSettings,
 } from '@/composables/table-memory-settings'
 import './st-shared.css'
@@ -53,8 +51,7 @@ async function updateSettings(partial: Partial<AppSettings>) {
 const tabs = [
   { id: 'primary', label: '主 API' },
   { id: 'secondary', label: '次 API' },
-  { id: 'memory', label: '记忆 API' },
-  { id: 'recall', label: '召回 API' },
+  // 记忆 API / 召回 API 已废弃：角色图谱 + 大小总结 + 冷档案（零强制 API）
   { id: 'tags', label: '称谓' },
   { id: 'prompt', label: '格式' },
   { id: 'display', label: '显示' },
@@ -227,20 +224,6 @@ function patchSched(
   })
 }
 
-function resetRecallPrompts() {
-  const cur = resolveTableMemoryScheduler(props.settings)
-  patch({
-    tableMemoryScheduler: {
-      ...cur,
-      recallSystemPrompt: DEFAULT_RECALL_SYSTEM_PROMPT,
-      recallUserTemplate: DEFAULT_RECALL_USER_TEMPLATE,
-      // 破限不替用户塞默认越狱，只清空
-      recallJailbreakPrompt: '',
-    },
-  })
-  showToast('已恢复默认召回提示词（破限已清空）')
-}
-
 const KEEP_PRESETS = [0, 4, 8, 12, 16, 24, 32, 48, 64] as const
 const TOKEN_PRESETS = [0, 4000, 8000, 12000, 16000, 20000, 32000, 48000, 64000] as const
 
@@ -370,17 +353,6 @@ function patchSecondary(partial: Partial<typeof draftSecondary>) {
   }
 }
 
-function patchMemory(partial: Partial<typeof draftMemory>) {
-  Object.assign(draftMemory, partial)
-  // 开关即时落盘，避免只改开关却未保存
-  void flushMemory()
-}
-
-function patchRecall(partial: Partial<typeof draftRecall>) {
-  Object.assign(draftRecall, partial)
-  void flushRecall()
-}
-
 function copyPrimaryToSecondary() {
   draftSecondary.enabled = true
   draftSecondary.baseUrl = draftPrimary.baseUrl
@@ -391,68 +363,12 @@ function copyPrimaryToSecondary() {
   tab.value = 'secondary'
 }
 
-function copyPrimaryToMemory() {
-  draftMemory.enabled = true
-  draftMemory.baseUrl = draftPrimary.baseUrl
-  draftMemory.apiKey = draftPrimary.apiKey
-  draftMemory.model = draftPrimary.model
-  void flushMemory()
-  showToast('已从主 API 复制到记忆 API 并启用')
-  tab.value = 'memory'
-}
-
-function copySecondaryToMemory() {
-  draftMemory.enabled = true
-  draftMemory.baseUrl = draftSecondary.baseUrl || draftPrimary.baseUrl
-  draftMemory.apiKey = draftSecondary.apiKey || draftPrimary.apiKey
-  draftMemory.model = draftSecondary.model || draftPrimary.model
-  void flushMemory()
-  showToast('已从次 API 复制到记忆 API 并启用')
-  tab.value = 'memory'
-}
-
-function copyPrimaryToRecall() {
-  draftRecall.enabled = true
-  draftRecall.baseUrl = draftPrimary.baseUrl
-  draftRecall.apiKey = draftPrimary.apiKey
-  draftRecall.model = draftPrimary.model
-  void flushRecall()
-  showToast('已从主 API 复制到召回 API 并启用')
-  tab.value = 'recall'
-}
-
-function copyMemoryToRecall() {
-  draftRecall.enabled = true
-  draftRecall.baseUrl = draftMemory.baseUrl || draftPrimary.baseUrl
-  draftRecall.apiKey = draftMemory.apiKey || draftPrimary.apiKey
-  draftRecall.model = draftMemory.model || draftPrimary.model
-  void flushRecall()
-  showToast('已从记忆 API 复制到召回 API 并启用')
-  tab.value = 'recall'
-}
-
 const secondaryReady = computed(
   () =>
     !!draftSecondary.enabled &&
     !!draftSecondary.baseUrl.trim() &&
     !!draftSecondary.apiKey.trim() &&
     !!draftSecondary.model.trim(),
-)
-
-const memoryReady = computed(
-  () =>
-    !!draftMemory.enabled &&
-    !!draftMemory.baseUrl.trim() &&
-    !!draftMemory.apiKey.trim() &&
-    !!draftMemory.model.trim(),
-)
-
-const recallReady = computed(
-  () =>
-    !!draftRecall.enabled &&
-    !!draftRecall.baseUrl.trim() &&
-    !!draftRecall.apiKey.trim() &&
-    !!draftRecall.model.trim(),
 )
 
 const primaryReady = computed(
@@ -762,7 +678,7 @@ function onTagsInput(value: string) {
   <ModalFrame
     id="modal-tianji-settings"
     title="密匣"
-    subtitle="主 API · 次 API · 记忆 API · 推演格式 · 备份"
+    subtitle="主 API · 次 API · 推演格式 · 备份"
     width="760px"
     @close="emit('close')"
   >
@@ -788,11 +704,6 @@ function onTagsInput(value: string) {
           class="tab-dot"
           :class="secondaryReady ? 'is-on' : draftSecondary.enabled ? 'is-warn' : 'is-off'"
         />
-        <span
-          v-if="t.id === 'memory'"
-          class="tab-dot"
-          :class="memoryReady ? 'is-on' : draftMemory.enabled ? 'is-warn' : 'is-off'"
-        />
       </button>
     </div>
 
@@ -808,16 +719,6 @@ function onTagsInput(value: string) {
             secondaryReady
               ? '已就绪'
               : draftSecondary.enabled
-                ? '已开未配齐'
-                : '未启用'
-          }}
-        </span>
-        <span class="api-pill" :class="memoryReady ? 'is-on' : draftMemory.enabled ? 'is-warn' : 'is-off'">
-          记忆
-          {{
-            memoryReady
-              ? '已就绪'
-              : draftMemory.enabled
                 ? '已开未配齐'
                 : '未启用'
           }}
@@ -937,18 +838,6 @@ function onTagsInput(value: string) {
           <input type="checkbox" v-model="draftPrimary.stream" @change="flushPrimary" />
           <span>流式输出（逐字显示，需 API 支持 SSE）</span>
         </label>
-        <div class="tj-field">
-          <label>记忆召回模式</label>
-          <select
-            class="tj-input"
-            :value="props.settings.memoryRecallMode || 'both'"
-            @change="patch({ memoryRecallMode: ($event.target as HTMLSelectElement).value as any })"
-          >
-            <option value="both">双路（语义 + 关键词）</option>
-            <option value="embedding">仅语义向量</option>
-            <option value="keyword">仅关键词（零 API）</option>
-          </select>
-        </div>
         <div class="tj-row">
           <button type="button" class="btn btn-primary btn-sm" @click="flushPrimary">
             保存主 API
@@ -985,18 +874,6 @@ function onTagsInput(value: string) {
         </div>
         <button type="button" class="btn btn-soft btn-sm" @click="tab = 'secondary'">
           {{ draftSecondary.enabled ? '编辑次 API' : '配置次 API' }}
-        </button>
-      </div>
-
-      <div class="api-secondary-teaser">
-        <div>
-          <strong>记忆 API</strong>
-          <p class="tj-hint" style="margin: 0.2rem 0 0">
-            表格记忆追溯专用通道（yuzuki-Memory）。启用后只走此通道，不抢主/次 API。
-          </p>
-        </div>
-        <button type="button" class="btn btn-soft btn-sm" @click="tab = 'memory'">
-          {{ draftMemory.enabled ? '编辑记忆 API' : '配置记忆 API' }}
         </button>
       </div>
     </template>
@@ -1216,344 +1093,6 @@ function onTagsInput(value: string) {
       </div>
     </template>
 
-    <!-- 记忆 API（独立追溯通道） -->
-    <template v-else-if="tab === 'memory'">
-      <div class="api-status-bar">
-        <span class="api-pill" :class="draftMemory.enabled ? 'is-on' : 'is-off'">
-          {{ draftMemory.enabled ? '记忆 API 已启用' : '记忆 API 未启用' }}
-        </span>
-        <span class="api-pill" :class="memoryReady ? 'is-on' : 'is-warn'">
-          {{ memoryReady ? '字段已配齐' : draftMemory.enabled ? '请补全地址 / 密钥 / 模型' : '关闭时回退主/次' }}
-        </span>
-      </div>
-
-      <div class="api-panel api-panel--secondary">
-        <div class="secondary-head">
-          <div>
-            <h3 class="api-panel__title">记忆 API（表格追溯填表）</h3>
-            <p class="tj-hint" style="margin: 0">
-              每回合剧情后的「记忆追溯」与锦囊手动追溯走此通道。
-              <strong>启用并配齐后只使用记忆 API</strong>，不会静默改用主/次线；
-              未启用时兼容旧行为（次 API → 主 API）。建议小模型、温度 ≤0.3。
-            </p>
-          </div>
-          <label class="switch">
-            <input
-              type="checkbox"
-              :checked="draftMemory.enabled"
-              @change="
-                patchMemory({ enabled: ($event.target as HTMLInputElement).checked })
-              "
-            />
-            <span class="switch__ui" />
-            <span class="switch__label">{{ draftMemory.enabled ? '已启用' : '已关闭' }}</span>
-          </label>
-        </div>
-
-        <div class="tj-row" style="margin-bottom: 0.75rem">
-          <button
-            type="button"
-            class="btn btn-ghost btn-sm"
-            :disabled="!primaryReady"
-            @click="copyPrimaryToMemory"
-          >
-            从主 API 复制
-          </button>
-          <button
-            type="button"
-            class="btn btn-ghost btn-sm"
-            :disabled="!secondaryReady && !primaryReady"
-            @click="copySecondaryToMemory"
-          >
-            从次 API 复制
-          </button>
-          <button type="button" class="btn btn-primary btn-sm" @click="flushMemory">
-            保存记忆 API
-          </button>
-        </div>
-
-        <div class="tj-field">
-          <label>Base URL</label>
-          <input
-            v-model="draftMemory.baseUrl"
-            class="tj-input"
-            :disabled="!draftMemory.enabled"
-            placeholder="https://api.deepseek.com/v1 或本地 http://localhost:1234/v1"
-            autocomplete="off"
-            spellcheck="false"
-            @blur="flushMemory"
-          />
-          <p class="tj-hint">OpenAI 兼容，不要带 /chat/completions</p>
-        </div>
-        <div class="tj-field">
-          <label>API Key</label>
-          <input
-            v-model="draftMemory.apiKey"
-            class="tj-input"
-            type="password"
-            :disabled="!draftMemory.enabled"
-            placeholder="sk-...（可与主/次不同）"
-            autocomplete="off"
-            @blur="flushMemory"
-          />
-        </div>
-        <div class="tj-field">
-          <label>模型</label>
-          <input
-            v-model="draftMemory.model"
-            class="tj-input"
-            list="tj-memory-models"
-            :disabled="!draftMemory.enabled"
-            placeholder="deepseek-chat / gpt-4o-mini …"
-            autocomplete="off"
-            @blur="flushMemory"
-          />
-          <datalist id="tj-memory-models">
-            <option v-for="m in memoryModels" :key="m" :value="m" />
-          </datalist>
-        </div>
-        <div v-if="memoryModels.length && draftMemory.enabled" class="model-pick">
-          <p class="model-pick__label">
-            {{ lastFetchSource === 'remote' ? '接口返回' : '参考列表' }} · 点击选用
-          </p>
-          <div class="model-pick__list">
-            <button
-              v-for="m in memoryModels.slice(0, 80)"
-              :key="m"
-              type="button"
-              class="model-chip"
-              :class="{ 'is-on': draftMemory.model === m }"
-              @click="pickModel('memory', m)"
-            >
-              {{ m }}
-            </button>
-          </div>
-        </div>
-
-        <div class="secondary-grid">
-          <div class="tj-field">
-            <label>温度 {{ draftMemory.temperature }}</label>
-            <input
-              v-model.number="draftMemory.temperature"
-              type="range"
-              min="0"
-              max="1"
-              step="0.05"
-              :disabled="!draftMemory.enabled"
-              @change="flushMemory"
-            />
-          </div>
-          <div class="tj-field">
-            <label>最大 tokens</label>
-            <input
-              v-model.number="draftMemory.maxTokens"
-              class="tj-input"
-              type="number"
-              min="256"
-              step="128"
-              :disabled="!draftMemory.enabled"
-              @blur="flushMemory"
-            />
-          </div>
-        </div>
-
-        <div class="tj-row">
-          <button
-            type="button"
-            class="btn btn-ghost btn-sm"
-            :disabled="!draftMemory.enabled || busy === 'fetch-memory'"
-            @click="handleFetchModels('memory')"
-          >
-            拉取模型列表
-          </button>
-          <button
-            type="button"
-            class="btn btn-primary btn-sm"
-            :disabled="!draftMemory.enabled || busy === 'test-memory'"
-            @click="handleTest('memory')"
-          >
-            测试记忆 API
-          </button>
-        </div>
-      </div>
-    </template>
-
-    <!-- 召回 API（发话前纯选码） -->
-    <template v-else-if="tab === 'recall'">
-      <div class="api-status-bar">
-        <span class="api-pill" :class="draftRecall.enabled ? 'is-on' : 'is-off'">
-          {{ draftRecall.enabled ? '召回 API 已启用' : '召回 API 未启用' }}
-        </span>
-        <span class="api-pill" :class="recallReady ? 'is-on' : 'is-warn'">
-          {{
-            recallReady
-              ? '字段已配齐'
-              : draftRecall.enabled
-                ? '请补全地址 / 密钥 / 模型'
-                : '关闭时回退记忆→次→主'
-          }}
-        </span>
-      </div>
-
-      <div class="api-panel api-panel--secondary">
-        <div class="secondary-head">
-          <div>
-            <h3 class="api-panel__title">召回 API（发话前索引选码）</h3>
-            <p class="tj-hint" style="margin: 0">
-              掌门每发一句，先用此通道从纪要索引选出
-              <code>&lt;recall&gt;</code> 编码，再注入主推演。
-              <strong>启用并配齐后只打召回 API</strong>（不抢记忆填表线）；
-              未启用时兼容：记忆 → 次 → 主。建议快/便宜小模型，温度 ≤0.3。
-            </p>
-          </div>
-          <label class="switch">
-            <input
-              type="checkbox"
-              :checked="draftRecall.enabled"
-              @change="
-                patchRecall({ enabled: ($event.target as HTMLInputElement).checked })
-              "
-            />
-            <span class="switch__ui" />
-            <span class="switch__label">{{ draftRecall.enabled ? '已启用' : '已关闭' }}</span>
-          </label>
-        </div>
-
-        <div class="tj-row" style="margin-bottom: 0.75rem">
-          <button
-            type="button"
-            class="btn btn-ghost btn-sm"
-            :disabled="!primaryReady"
-            @click="copyPrimaryToRecall"
-          >
-            从主 API 复制
-          </button>
-          <button
-            type="button"
-            class="btn btn-ghost btn-sm"
-            :disabled="!memoryReady && !primaryReady"
-            @click="copyMemoryToRecall"
-          >
-            从记忆 API 复制
-          </button>
-          <button type="button" class="btn btn-primary btn-sm" @click="flushRecall">
-            保存召回 API
-          </button>
-        </div>
-
-        <div class="tj-field">
-          <label>Base URL</label>
-          <input
-            v-model="draftRecall.baseUrl"
-            class="tj-input"
-            :disabled="!draftRecall.enabled"
-            placeholder="https://…/v1 或本地 http://localhost:1234/v1"
-            autocomplete="off"
-            spellcheck="false"
-            @blur="flushRecall"
-          />
-          <p class="tj-hint">OpenAI 兼容，不要带 /chat/completions</p>
-        </div>
-        <div class="tj-field">
-          <label>API Key</label>
-          <input
-            v-model="draftRecall.apiKey"
-            class="tj-input"
-            type="password"
-            :disabled="!draftRecall.enabled"
-            placeholder="sk-...（可与主/记忆不同）"
-            autocomplete="off"
-            @blur="flushRecall"
-          />
-        </div>
-        <div class="tj-field">
-          <label>模型</label>
-          <input
-            v-model="draftRecall.model"
-            class="tj-input"
-            list="tj-recall-models"
-            :disabled="!draftRecall.enabled"
-            placeholder="小模型即可，专做选码"
-            autocomplete="off"
-            @blur="flushRecall"
-          />
-          <datalist id="tj-recall-models">
-            <option v-for="m in recallModels" :key="m" :value="m" />
-          </datalist>
-        </div>
-        <div v-if="recallModels.length && draftRecall.enabled" class="model-pick">
-          <p class="model-pick__label">
-            {{ lastFetchSource === 'remote' ? '接口返回' : '参考列表' }} · 点击选用
-          </p>
-          <div class="model-pick__list">
-            <button
-              v-for="m in recallModels.slice(0, 80)"
-              :key="m"
-              type="button"
-              class="model-chip"
-              :class="{ 'is-on': draftRecall.model === m }"
-              @click="pickModel('recall', m)"
-            >
-              {{ m }}
-            </button>
-          </div>
-        </div>
-
-        <div class="secondary-grid">
-          <div class="tj-field">
-            <label>温度 {{ draftRecall.temperature }}</label>
-            <input
-              v-model.number="draftRecall.temperature"
-              type="range"
-              min="0"
-              max="1"
-              step="0.05"
-              :disabled="!draftRecall.enabled"
-              @change="flushRecall"
-            />
-          </div>
-          <div class="tj-field">
-            <label>最大 tokens</label>
-            <input
-              v-model.number="draftRecall.maxTokens"
-              class="tj-input"
-              type="number"
-              min="256"
-              step="64"
-              :disabled="!draftRecall.enabled"
-              @blur="flushRecall"
-            />
-          </div>
-        </div>
-
-        <p class="tj-hint" style="margin: 0.75rem 0 0.5rem">
-          <strong>破限要不要？</strong>
-          纯选码多数模型<strong>不强制</strong>破限；若中转拒答、空
-          <code>recall</code>、或主文读召回纪要时缩手，再到「显示 → 表格记忆 · 索引召回」填
-          <em>召回专用破限</em>（与主心法 jailbreak 分离）。
-        </p>
-
-        <div class="tj-row">
-          <button
-            type="button"
-            class="btn btn-ghost btn-sm"
-            :disabled="!draftRecall.enabled || busy === 'fetch-recall'"
-            @click="handleFetchModels('recall')"
-          >
-            拉取模型列表
-          </button>
-          <button
-            type="button"
-            class="btn btn-primary btn-sm"
-            :disabled="!draftRecall.enabled || busy === 'test-recall'"
-            @click="handleTest('recall')"
-          >
-            测试召回 API
-          </button>
-        </div>
-      </div>
-    </template>
-
     <template v-else-if="tab === 'tags'">
       <div class="tj-field">
         <label>输出标签（须含 maintext 与 option）</label>
@@ -1650,8 +1189,8 @@ function onTagsInput(value: string) {
           </label>
         </div>
         <p class="tj-hint" style="margin-top: 0.5rem">
-          召回：发话前先走记忆 API 多轮选码（参考「纯召回」预设），失败再关键词 Top-K。
-          注入 = 实体表 + 纪要索引 + 选中全文；不写 SQL，不靠整段 raw。
+          推演注入：角色图谱选取 + 冷档案闪回 + 实体表 + 纪要轻量索引 + 短中长总结。
+          不写 SQL，不靠整段 raw，不走旧召回 API。
         </p>
       </div>
 
@@ -1762,7 +1301,7 @@ function onTagsInput(value: string) {
             <h3 class="api-panel__title">表格记忆 · 何时填表</h3>
             <p class="tj-hint" style="margin: 0">
               推演结束后，按「AI 回复楼层」决定要不要自动把剧情写入角色/物品/纪要表。
-              与局面结算（次 API）无关；填表请求走「记忆 API」，未配齐时会跳过或回退。
+              与局面结算（次 API）无关；填表请求走主/次 API（记忆专用通道已下线）。
               参数语义对齐 shujuku AutoCardUpdater，下面用白话说明每个数字的作用。
             </p>
           </div>
@@ -1836,7 +1375,7 @@ function onTagsInput(value: string) {
               @change="patchSched('maxConcurrentGroups', ($event.target as HTMLInputElement).value)"
             />
             <p class="sched-field__help">
-              上面拆出的多批，最多同时打几路记忆 API。
+              上面拆出的多批，最多同时打几路填表请求。
               <strong>1</strong> = 串行最稳（推荐本地/限流接口）；
               云端额度充足可调 2～3 加快追赶落后楼层。并发过高容易限流或写表冲突。
             </p>
@@ -1969,31 +1508,17 @@ function onTagsInput(value: string) {
       <div class="api-panel" style="margin-top: 0.85rem">
         <div class="secondary-head">
           <div>
-            <h3 class="api-panel__title">推演时注入 · 图谱与纪要召回</h3>
+            <h3 class="api-panel__title">推演时注入 · 角色记忆</h3>
             <p class="tj-hint" style="margin: 0">
-              默认（推荐）：
-              <strong>叙事记忆图谱</strong>（点名角色/物品/事件，零 API）
+              固定路径（零强制 API）：
+              <strong>角色图谱选取</strong>
+              + <strong>冷档案闪回</strong>
               + <strong>实体表</strong>
-              + <strong>纪要轻量索引</strong>。
-              下方开关仅控制旧版「纪要 Top-K 全文 / 可选 LLM 选码」；关闭时不消耗召回 API。
+              + <strong>纪要轻量索引</strong>
+              + 短中长总结。
+              旧「纪要 LLM 选码 / 召回 API / 记忆 API」已移除。
             </p>
           </div>
-          <label class="switch">
-            <input
-              type="checkbox"
-              :checked="sched.recallEnabled"
-              @change="
-                patchSched(
-                  'recallEnabled',
-                  ($event.target as HTMLInputElement).checked,
-                )
-              "
-            />
-            <span class="switch__ui" />
-            <span class="switch__label">{{
-              sched.recallEnabled ? '已开启' : '已关闭'
-            }}</span>
-          </label>
         </div>
         <div class="sched-fields">
           <label class="tj-field sched-field">
@@ -2008,25 +1533,7 @@ function onTagsInput(value: string) {
               @change="patchSched('recallIndexTop', ($event.target as HTMLInputElement).value)"
             />
             <p class="sched-field__help">
-              索引是「编码 + 一行摘要」的轻列表，先给模型扫一眼全书大纲。
-              条数多则覆盖面广、略费 token；一般 30～80。
-            </p>
-          </label>
-
-          <label class="tj-field sched-field">
-            <span class="sched-field__title">召回全文条数（Top-K）</span>
-            <span class="sched-field__key">top-k · 默认 20</span>
-            <input
-              class="tj-input limit-input"
-              type="number"
-              min="1"
-              max="80"
-              :value="sched.recallTopK"
-              @change="patchSched('recallTopK', ($event.target as HTMLInputElement).value)"
-            />
-            <p class="sched-field__help">
-              根据你本回合输入/事务关键词，从纪要里挑出最相关的 K 条<strong>全文</strong>注入。
-              K 越大细节越多，但挤占上下文；剧情复杂可 20～30，省 token 可 8～12。
+              索引是「编码 + 一行摘要」的轻列表，仅作大纲，不展开全文。
             </p>
           </label>
 
@@ -2044,117 +1551,10 @@ function onTagsInput(value: string) {
             />
             <p class="sched-field__help">
               角色档案、物品、世界设定拼进世界书时的总字符软上限。
-              弟子/宝物很多时可适当加大；上下文紧张则减小，避免挤掉近端剧情。
-            </p>
-          </label>
-
-          <label class="tj-field sched-field">
-            <span class="sched-field__title">纪要全文注入字数上限</span>
-            <span class="sched-field__key">journal chars · 默认 3200</span>
-            <input
-              class="tj-input limit-input"
-              type="number"
-              min="500"
-              max="20000"
-              step="100"
-              :value="sched.journalInjectMaxChars"
-              @change="patchSched('journalInjectMaxChars', ($event.target as HTMLInputElement).value)"
-            />
-            <p class="sched-field__help">
-              Top-K 召回的纪要正文合计字符软上限。与「召回条数」一起限制记忆块体积：
-              条数再多也会在此截断，防止单次推演 prompt 爆炸。
             </p>
           </label>
         </div>
 
-        <div class="sched-field" style="margin-top: 0.85rem">
-          <div class="sched-prompt-head">
-            <div>
-              <span class="sched-field__title">召回支路 · 提示词与破限</span>
-              <span class="sched-field__key">
-                主推演心法里的 jailbreak 不会进记忆 API；这里是召回专用挂点
-              </span>
-            </div>
-            <button type="button" class="btn btn-ghost btn-sm" @click="resetRecallPrompts">
-              恢复默认
-            </button>
-          </div>
-          <p class="sched-field__help" style="margin-bottom: 0.55rem">
-            <strong>为什么要单独做？</strong>
-            精确召回 / 纪要注入是侧路调用，不走主推演心法的 prompt_order，
-            所以心法里的「相对/越狱」挂不进这里。需要破限时请写在本页「破限」框，
-            不要指望主预设自动带过来。
-          </p>
-          <p class="sched-field__help" style="margin-bottom: 0.55rem">
-            默认多轮结构对齐「疯狂原始人 纯召回」；占位符（发送前替换）：
-            <code v-pre>{{topK}}</code>
-            ·
-            <code v-pre>{{query}}</code>
-            ·
-            <code v-pre>{{background}}</code>
-            ·
-            <code v-pre>{{previousPlot}}</code>
-            ·
-            <code v-pre>{{indexText}}</code>
-            。侧路选码须输出
-            <code>&lt;recall&gt;编码1,编码2&lt;/recall&gt;</code>
-            。
-          </p>
-
-          <label class="tj-field" style="margin-bottom: 0.65rem">
-            <span>破限（jailbreak）· 召回专用</span>
-            <textarea
-              class="tj-textarea"
-              rows="5"
-              :value="sched.recallJailbreakPrompt"
-              placeholder="空 = 不插破限。粘贴你的破限文即可；侧路会作为独立 system，注入主推演时会前缀到【召回纪要】前。"
-              @change="
-                patchSched(
-                  'recallJailbreakPrompt',
-                  ($event.target as HTMLTextAreaElement).value,
-                )
-              "
-            />
-            <p class="sched-field__help" style="margin-top: 0.35rem">
-              <strong>要不要开：</strong>纯选码通常可空；模型拒答/空 recall 时再填。
-              <strong>生效两处：</strong>
-              ① <em>召回 API</em>（或回退线）精确选码：system → 本段破限 → user；
-              ② 主推演读到的【召回纪要】块前加「档案阅读约定」。
-              与主心法 / 结算破限分离；默认空，不内置越狱。
-            </p>
-          </label>
-
-          <label class="tj-field" style="margin-bottom: 0.65rem">
-            <span>System（选码任务 · 角色设定）</span>
-            <textarea
-              class="tj-textarea"
-              rows="4"
-              :value="sched.recallSystemPrompt"
-              placeholder="空则使用内置默认"
-              @change="
-                patchSched(
-                  'recallSystemPrompt',
-                  ($event.target as HTMLTextAreaElement).value,
-                )
-              "
-            />
-          </label>
-          <label class="tj-field">
-            <span>User 模板（选码任务 · 本回）</span>
-            <textarea
-              class="tj-textarea"
-              rows="8"
-              :value="sched.recallUserTemplate"
-              placeholder="空则使用内置默认"
-              @change="
-                patchSched(
-                  'recallUserTemplate',
-                  ($event.target as HTMLTextAreaElement).value,
-                )
-              "
-            />
-          </label>
-        </div>
       </div>
 
       <p class="tj-hint">库标识：{{ storageInfo.dbName }}（与其它项目隔离）</p>

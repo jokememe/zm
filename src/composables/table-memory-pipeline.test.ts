@@ -272,7 +272,7 @@ describe('index recall Top-K', () => {
     ])
   })
 
-  it('formatTableMemoryInjection includes entity + index; journal full only when recall on', () => {
+  it('formatTableMemoryInjection is graph + entity + index (no journal full dump)', () => {
     const s = seedJournal()
     s.records['character_profile'] = [
       {
@@ -280,7 +280,6 @@ describe('index recall Top-K', () => {
         values: { 角色名: '陆承渊', 身份: '弟子', 当前位置: '山门' },
       },
     ]
-    // 默认（图谱优先）：实体 + 索引 + 图谱块，不强制全文召回
     const base = formatTableMemoryInjection({
       state: s,
       query: '陆承渊 赤焰谷',
@@ -291,14 +290,6 @@ describe('index recall Top-K', () => {
     expect(base).toMatch(/叙事记忆图谱|陆承渊/)
     expect(base).not.toContain('召回纪要')
     expect(base.length).toBeGreaterThan(100)
-
-    // 显式打开纪要召回时才有全文块
-    const withRecall = formatTableMemoryInjection({
-      state: s,
-      query: '赤焰谷',
-      scheduler: { ...DEFAULT_TABLE_MEMORY_SCHEDULER, recallEnabled: true, recallTopK: 5 },
-    })
-    expect(withRecall).toContain('召回纪要')
   })
 
   it('buildRecallMessages uses custom editable templates (simple)', async () => {

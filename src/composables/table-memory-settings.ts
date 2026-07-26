@@ -166,8 +166,8 @@ export function resolveTableMemoryScheduler(
     autoMergeThreshold: clampInt(raw?.autoMergeThreshold, 2, 200, d.autoMergeThreshold),
     autoMergeReserve: clampInt(raw?.autoMergeReserve, 0, 100, d.autoMergeReserve),
     mergeBatchSize: clampInt(raw?.mergeBatchSize, 1, 30, d.mergeBatchSize),
-    // 默认关（图谱优先）；仅显式 true 时开纪要 LLM/关键词全文召回
-    recallEnabled: raw?.recallEnabled === true,
+    // 永久关闭：旧纪要 LLM/全文召回已废弃，统一走角色图谱 + 冷档案
+    recallEnabled: false,
     recallIndexTop: clampInt(raw?.recallIndexTop, 5, 200, d.recallIndexTop),
     recallTopK: clampInt(raw?.recallTopK, 1, 80, d.recallTopK),
     entityInjectMaxChars: clampInt(

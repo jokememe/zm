@@ -335,7 +335,7 @@ async function doAdvanceSeason() {
 
         <section class="memory-graph-panel" id="disciple-memory-graph">
           <div class="memory-graph-panel__head">
-            <h4 class="memory-graph-panel__title">叙事记忆</h4>
+            <h4 class="memory-graph-panel__title">角色记忆</h4>
             <button
               type="button"
               class="btn btn-soft btn-xs"
@@ -346,7 +346,7 @@ async function doAdvanceSeason() {
             </button>
           </div>
           <p class="memory-graph-panel__hint">
-            来自正文记忆图谱（节点/关系），非经营名册关系网。完整浏览见侧栏「叙事图谱」。
+            来自正文角色图谱（近事/关系），非经营名册关系网。完整浏览见侧栏「角色记忆」。
           </p>
           <template v-if="!discipleMemorySlice.empty && discipleMemorySlice.node">
             <div v-if="discipleMemoryAttrs.length" class="memory-graph-attrs">
@@ -383,7 +383,7 @@ async function doAdvanceSeason() {
             </ul>
           </template>
           <p v-else class="muted memory-graph-empty">
-            尚无叙事记忆。通灵正文写入角色档案或 &lt;memory&gt; 后会生长；也可在「叙事图谱」从表格投影。
+            尚无角色记忆。通灵正文写入角色档案或 &lt;memory&gt; 后会生长；也可在「角色记忆」从表格刷新。
           </p>
         </section>
 

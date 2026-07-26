@@ -281,40 +281,9 @@ export function formatTableMemoryInjection(input: RecallInjectionInput = {}): st
     graphBlock = ''
   }
 
-  if (!sch.recallEnabled) {
-    // 关闭纪要召回：图谱 + 实体 + 轻量索引
-    const index = buildJournalIndexText(s, { maxEntries: Math.min(20, sch.recallIndexTop) })
-    return [graphBlock, entity, index].filter(Boolean).join('\n\n')
-  }
-
-  const index = buildJournalIndexText(s, { maxEntries: sch.recallIndexTop })
-
-  let selected: JournalRowView[]
-  if (input.recallCodes?.length) {
-    selected = selectJournalByCodes(s, input.recallCodes)
-    // 不足 Top-K 时关键词补齐
-    if (selected.length < sch.recallTopK) {
-      const extra = selectJournalByKeyword(s, input.query || '', sch.recallTopK)
-      const have = new Set(selected.map((r) => r.record.id))
-      for (const r of extra) {
-        if (selected.length >= sch.recallTopK) break
-        if (!have.has(r.record.id)) {
-          selected.push(r)
-          have.add(r.record.id)
-        }
-      }
-    }
-  } else {
-    selected = selectJournalByKeyword(s, input.query || '', sch.recallTopK)
-  }
-
-  const full = formatRecalledJournalFull(selected, {
-    maxChars: sch.journalInjectMaxChars,
-    // 主推演读档案时也需要破限挂点（与侧路选码共用同一字段）
-    jailbreakPrefix: sch.recallJailbreakPrompt,
-  })
-
-  return [graphBlock, entity, index, full].filter(Boolean).join('\n\n')
+  // 固定：角色图谱 + 实体表 + 轻量纪要索引（不再展开纪要全文 / LLM 选码）
+  const index = buildJournalIndexText(s, { maxEntries: Math.min(20, sch.recallIndexTop) })
+  return [graphBlock, entity, index].filter(Boolean).join('\n\n')
 }
 
 /** 替换召回模板占位符 */

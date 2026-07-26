@@ -63,11 +63,7 @@ import {
   getSchedulerStatus,
 } from '@/composables/table-memory-pipeline'
 import { buildMainFormatMemoryHint } from '@/composables/table-memory-prompts'
-import { runIndexRecall } from '@/composables/table-memory-recall'
-import { resolveTableMemoryScheduler } from '@/composables/table-memory-settings'
-import { buildLiveLoreContent } from '@/composables/game-bridge'
-import { formatMidMemory, formatShortMemory } from '@/composables/memory-lore'
-// 注册索引 Top-K 注入 + 记忆图谱投影钩子
+// 注册表格注入 + 记忆图谱投影钩子
 import '@/composables/table-memory-recall'
 import '@/composables/memory-graph'
 import {
@@ -82,7 +78,6 @@ import {
   mergeApiSettings,
   saveApiCache,
   normalizeBaseUrl,
-  resolveRecallApiEndpoint,
 } from '@/composables/api-cache'
 
 const TIANJI_CHAT_NAME = '天机卷轴'
@@ -294,7 +289,7 @@ async function syncSystemLore(
     contextDetail: contextDetail.value,
     recallQuery: extra?.recallQuery ?? null,
     recallCodes: extra?.recallCodes ?? null,
-    memoryRecallMode: s.memoryRecallMode || 'both',
+    memoryRecallMode: s.memoryRecallMode || 'keyword',
     api: s.api,
     currentYear,
   })
@@ -312,15 +307,17 @@ async function syncSystemLore(
 }
 
 /**
- * 发话前记忆准备：
- * - 默认：叙事图谱规则选取（零 API）
- * - 仅当 recallEnabled 显式打开：再跑纪要 LLM/关键词选码（高级）
+ * 发话前记忆准备：仅角色图谱规则选取 + 冷档案闪回（零 API）。
+ * 旧纪要 LLM 选码 / 召回 API 已拆除。
  */
 async function runPreTurnRecall(userText: string): Promise<string[] | null> {
   const s = settings.value
-  if (!s || s.tableMemoryEnabled === false) return null
-  const sch = resolveTableMemoryScheduler(s)
+  if (!s || s.tableMemoryEnabled === false) {
+    lastRecallCodes.value = []
+    return null
+  }
 
+  lastRecallCodes.value = []
   try {
     const graph = ensureMemoryGraphHydrated()
     const gs = useGameState()
@@ -342,125 +339,18 @@ async function runPreTurnRecall(userText: string): Promise<string[] | null> {
     if (picked.nodeCount > 0 || picked.flashbackCount > 0) {
       lastRecallTraceKind.value = 'ok'
       const fb =
-        picked.flashbackCount > 0 ? ` · 旧事闪回 ${picked.flashbackCount}` : ''
-      lastRecallTrace.value = `图谱选取 ${picked.nodeCount} 节点${fb}：${picked.names.slice(0, 6).join('、')}`
+        picked.flashbackCount > 0 ? ` · 旧事 ${picked.flashbackCount}` : ''
+      lastRecallTrace.value = `角色记忆 ${picked.nodeCount} 人${fb}：${picked.names.slice(0, 6).join('、')}`
     } else {
       lastRecallTraceKind.value = 'info'
-      lastRecallTrace.value = '图谱暂无命中节点'
+      lastRecallTrace.value = '角色记忆暂无命中'
     }
   } catch (e) {
-    console.warn('[天机] 图谱选取失败', e)
-  }
-
-  if (!sch.recallEnabled) {
-    lastRecallCodes.value = []
-    return null
-  }
-
-  const session = chatSession.value
-  const prevAsst = [...(session?.messages || [])]
-    .reverse()
-    .find((m) => m.role === 'assistant')
-  const previousPlot = String(prevAsst?.content || '')
-    .replace(/<[^>]+>/g, ' ')
-    .slice(0, 1200)
-  const background = [
-    buildLiveLoreContent({
-      contextLabel: contextInjected.value,
-      contextDetail: contextDetail.value,
-    }).slice(0, 600),
-    formatShortMemory().slice(0, 200),
-    formatMidMemory().slice(0, 200),
-  ]
-    .filter(Boolean)
-    .join('\n')
-
-  recalling.value = true
-  lastRecallTraceKind.value = 'info'
-  lastRecallTrace.value = '纪要召回选码中…'
-  try {
-    const result = await runIndexRecall({
-      query: userText,
-      previousPlot,
-      background,
-      scheduler: sch,
-      postChat: async (messages) => {
-        // 召回 API → 记忆 → 次 → 主；召回启用未配齐则不静默偷线
-        const ep = resolveRecallApiEndpoint(s.api)
-        if (ep.kind === 'none') {
-          throw new Error(
-            ep.reason === 'recall_enabled_but_incomplete'
-              ? '召回 API 已启用但未配齐（请补地址/密钥/模型）'
-              : '无可用召回端点',
-          )
-        }
-        const temperature =
-          typeof ep.temperature === 'number' && Number.isFinite(ep.temperature)
-            ? ep.temperature
-            : 0.2
-        const maxTokens =
-          typeof ep.maxTokens === 'number' && Number.isFinite(ep.maxTokens)
-            ? Math.max(256, Math.round(ep.maxTokens))
-            : 900
-        const completion = await postChatCompletion({
-          baseUrl: ep.baseUrl,
-          apiKey: ep.apiKey,
-          body: {
-            model: ep.model,
-            messages,
-            stream: false,
-            temperature,
-            max_tokens: maxTokens,
-          },
-        })
-        if (!completion.ok) throw new Error(completion.error || '召回请求失败')
-        const data = completion.data as {
-          choices?: Array<{ message?: { content?: string } }>
-        }
-        const extracted = textFromSettleCompletion(completion.data)
-        if (extracted.ok) return extracted.text
-        return data.choices?.[0]?.message?.content || ''
-      },
-    })
-
-    lastRecallCodes.value = result.codes
-    const epKind = resolveRecallApiEndpoint(s.api).kind
-    const via =
-      epKind === 'recall'
-        ? '召回API'
-        : epKind === 'memory'
-          ? '记忆API'
-          : epKind === 'secondary'
-            ? '次API'
-            : epKind === 'primary'
-              ? '主API'
-              : ''
-    if (result.method === 'llm' && result.codes.length) {
-      lastRecallTraceKind.value = 'ok'
-      lastRecallTrace.value =
-        `LLM选码 ${result.codes.length} 条` +
-        (via ? `·${via}` : '') +
-        (result.attempts > 1 ? `（重试${result.attempts - 1}）` : '') +
-        `：${result.codes.slice(0, 8).join(',')}${result.codes.length > 8 ? '…' : ''}`
-    } else if (result.codes.length) {
-      lastRecallTraceKind.value = 'info'
-      lastRecallTrace.value =
-        `关键词召回 ${result.codes.length} 条` +
-        (result.error ? `（LLM失败：${result.error.slice(0, 24)}）` : '')
-    } else {
-      lastRecallTraceKind.value = 'info'
-      lastRecallTrace.value = '召回无命中（索引为空或无相关）'
-    }
-    return result.codes
-  } catch (e) {
-    const msg = String((e as Error).message || e)
+    console.warn('[天机] 角色记忆选取失败', e)
     lastRecallTraceKind.value = 'fail'
-    lastRecallTrace.value = `召回失败：${msg.slice(0, 48)}（将用关键词）`
-    lastRecallCodes.value = []
-    return null
-  } finally {
-    recalling.value = false
+    lastRecallTrace.value = '角色记忆选取失败'
   }
+  return null
 }
 
 async function boot() {
@@ -785,25 +675,22 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
 
   const tableMemoryOn = s.tableMemoryEnabled !== false
 
-  // 推演前：经营底表 → 纯召回选码 → 刷系统世界书（主 API 才能读到本轮召回）
+  // 推演前：经营底表 → 角色图谱选取（零 API）→ 刷系统世界书
   if (tableMemoryOn) {
     try {
       syncTableMemoryFromGame()
     } catch (e) {
       console.warn('[天机] 表格记忆同步失败', e)
     }
-  }
-  let preRecallCodes: string[] | null = null
-  if (tableMemoryOn) {
     try {
-      preRecallCodes = await runPreTurnRecall(userText)
+      await runPreTurnRecall(userText)
     } catch (e) {
-      console.warn('[天机] 发话前召回失败', e)
+      console.warn('[天机] 角色记忆选取失败', e)
     }
   }
   await syncSystemLore(s, {
     recallQuery: userText,
-    recallCodes: preRecallCodes,
+    recallCodes: null,
   })
 
   const preset =
@@ -965,7 +852,7 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
     const gs = useGameState()
     const newBeats = ingestMemoryTag(parsed.memory, { year: gs.calendar.year, season: String(gs.calendar.season) })
     // 语义向量存储（embedding/both 模式，后台不阻塞）
-    const recallMode = settings.value?.memoryRecallMode || 'both'
+    const recallMode = settings.value?.memoryRecallMode || 'keyword'
     if (newBeats.length && recallMode !== 'keyword' && settings.value) {
       void embedAndStoreBeats(settings.value.api, newBeats)
     }

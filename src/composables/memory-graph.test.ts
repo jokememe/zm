@@ -119,6 +119,10 @@ describe('projectCharacterProfilesToGraph', () => {
     expect(g.nodes.some((n) => n.kind === 'item' && n.name === '玄铁令')).toBe(true)
     expect(g.nodes.some((n) => n.kind === 'event')).toBe(true)
     expect(g.nodes.some((n) => n.kind === 'place' && n.name === '议事厅')).toBe(true)
+    // 档案字段必须进近事（角色记忆可见）
+    const lu = findName(g, '陆承渊')
+    expect(lu?.beats?.some((b) => /约定|沉稳|山门|师徒/.test(b.text))).toBe(true)
+    expect((lu?.beats?.length || 0)).toBeGreaterThan(0)
   })
 })
 

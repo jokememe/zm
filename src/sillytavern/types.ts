@@ -317,7 +317,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   settleJailbreakPrompt: '',
   historyKeepMessages: 12,
   tableMemoryEnabled: true,
-  memoryRecallMode: 'both',
+  memoryRecallMode: 'keyword',
   historyCompress: true,
   historyMaxTokens: 12000,
   tableMemoryScheduler: {
@@ -331,7 +331,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     autoMergeThreshold: 20,
     autoMergeReserve: 0,
     mergeBatchSize: 5,
-    recallEnabled: true,
+    recallEnabled: false,
     recallIndexTop: 50,
     recallTopK: 20,
     entityInjectMaxChars: 2800,

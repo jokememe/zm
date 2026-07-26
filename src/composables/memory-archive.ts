@@ -275,11 +275,31 @@ export function parseTimeHints(
 }
 
 function tokenize(q: string): string[] {
-  return String(q || '')
+  const raw = String(q || '')
     .split(/[\s,，。；;、|！？!?\n\r「」『』《》【】（）()]+/)
     .map((t) => t.trim())
     .filter((t) => t.length >= 2)
-    .slice(0, 16)
+  // 中文连续串：补 2～4 字滑动片段，便于「想起剑庐夜谈与陆承渊」命中「剑庐夜谈」
+  const extra: string[] = []
+  for (const t of raw) {
+    if (/[\u4e00-\u9fff]{4,}/.test(t)) {
+      for (let n = 4; n >= 2; n--) {
+        for (let i = 0; i + n <= t.length; i++) {
+          const sub = t.slice(i, i + n)
+          if (/[\u4e00-\u9fff]/.test(sub)) extra.push(sub)
+        }
+      }
+    }
+  }
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const t of [...raw, ...extra]) {
+    if (seen.has(t)) continue
+    seen.add(t)
+    out.push(t)
+    if (out.length >= 24) break
+  }
+  return out
 }
 
 /**
