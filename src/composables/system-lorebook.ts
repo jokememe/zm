@@ -1,5 +1,6 @@
 /**
- * 系统世界书「宗门实况」— 局面快照 + 短/中/长期记忆（constant 常驻）
+ * 系统世界书「宗门实况」— 局面快照 + 短/中/长期 + 角色记忆图谱（constant 常驻）
+ * 记忆主路径是图谱，不再注入整表/纪要索引 dump。
  */
 import type { Lorebook, LorebookEntry } from '@/sillytavern/types'
 import {
@@ -17,14 +18,6 @@ import {
   loadMemoryBank,
 } from '@/composables/memory-lore'
 import {
-  TABLE_WORLD_STATE_ENTRY_ID,
-  formatWorldStateInjection,
-  loadTableMemory,
-} from '@/composables/table-memory'
-// 副作用：注册索引 Top-K 注入实现
-import '@/composables/table-memory-recall'
-import { TABLE_RECALL_ENTRY_ID } from '@/composables/table-memory-recall'
-import {
   ensureMemoryGraphHydrated,
   selectMemoryGraphForTurn,
 } from '@/composables/memory-graph'
@@ -34,6 +27,11 @@ import { saveLorebook, getLorebooks } from '@/sillytavern/database'
 
 const LIVE_ENTRY_ID = 'live-snapshot'
 const MEM_GRAPH_ID = 'mem-graph-beats'
+/** 旧表格世界状态 / 召回 entry，写入时剔除，不再注入 */
+const LEGACY_TABLE_ENTRY_IDS = new Set([
+  'table-world-state',
+  'table-memory-recall',
+])
 
 const SYSTEM_ENTRY_IDS = new Set([
   LIVE_ENTRY_ID,
@@ -41,8 +39,7 @@ const SYSTEM_ENTRY_IDS = new Set([
   MEM_MID_ID,
   MEM_LONG_ID,
   MEM_GRAPH_ID,
-  TABLE_WORLD_STATE_ENTRY_ID,
-  TABLE_RECALL_ENTRY_ID,
+  ...LEGACY_TABLE_ENTRY_IDS,
 ])
 
 function makeEntry(
@@ -71,27 +68,20 @@ function makeEntry(
 function buildSystemEntries(extra?: {
   contextLabel?: string | null
   contextDetail?: string | null
-  /** 关闭表格记忆时不注入世界状态表（仍可保留 sum 层） */
   tableMemoryEnabled?: boolean
-  /** 本回用户输入，供纪要 Top-K / LLM 召回 */
   recallQuery?: string | null
-  /** 发话前 LLM 选中的编码（有则优先于纯关键词） */
   recallCodes?: string[] | null
-  /** 语义召回结果（embedding/both 模式） */
   semanticHits?: SemanticHit[]
-  /** 当前游戏年（冷档案「N年前」） */
   currentYear?: number
 }): LorebookEntry[] {
   loadMemoryBank()
-  const tableOn = extra?.tableMemoryEnabled !== false
-  if (tableOn) loadTableMemory()
   const entries: LorebookEntry[] = [
     makeEntry(LIVE_ENTRY_ID, buildLiveLoreContent(extra), '系统自动 · 局面快照', 0),
     makeEntry(MEM_SHORT_ID, formatShortMemory(), '系统自动 · 短期记忆', 1),
     makeEntry(MEM_MID_ID, formatMidMemory(), '系统自动 · 中期记忆', 2),
     makeEntry(MEM_LONG_ID, formatLongMemory(), '系统自动 · 长期记忆', 3),
   ]
-  // 人物记忆图谱：强制水合（旧存档补种近事）+ 规则选取 + 冷档案闪回
+  // 唯一记忆主路径：角色图谱规则选取 + 冷档案闪回（零强制 API）
   const graph = ensureMemoryGraphHydrated()
   const graphParts: string[] = []
   if (graph.nodes.length) {
@@ -101,38 +91,31 @@ function buildSystemEntries(extra?: {
     const sel = selectMemoryGraphForTurn({
       graph,
       query: q,
-      maxNodes: 5,
-      maxChars: 1800,
+      maxNodes: 6,
+      maxChars: 2200,
       currentYear: extra?.currentYear,
-      flashbackTopK: 6,
+      flashbackTopK: 8,
     })
     if (sel.text.trim()) graphParts.push(sel.text)
   }
-  // 语义召回补充（embedding/both 模式由调用方传入）
   if (extra?.semanticHits?.length) {
     const semLines = extra.semanticHits.map(
       (h) => `· ${h.nodeName}：${h.text}${h.year ? `（${h.year}年${h.season || ''}）` : ''}`,
     )
-    graphParts.push(`【语义召回】\n${semLines.join('\n')}`)
+    graphParts.push(`【语义补充】\n${semLines.join('\n')}`)
   }
   if (graphParts.length) {
-    const combined = graphParts.join('\n').slice(0, 2000)
+    const combined = graphParts.join('\n').slice(0, 2400)
     entries.push(
-      makeEntry(MEM_GRAPH_ID, `【人物记忆图谱】\n${combined}`, '系统自动 · 角色近事', 3.5),
+      makeEntry(MEM_GRAPH_ID, `【角色记忆图谱】\n${combined}`, '系统自动 · 角色记忆', 3.5),
     )
-  }
-  if (tableOn) {
+  } else {
     entries.push(
       makeEntry(
-        TABLE_WORLD_STATE_ENTRY_ID,
-        formatWorldStateInjection(undefined, {
-          query: extra?.recallQuery || undefined,
-          recallCodes: extra?.recallCodes?.length
-            ? [...extra.recallCodes]
-            : undefined,
-        }),
-        '系统自动 · 表格世界状态（实体+纪要轻索引）',
-        4,
+        MEM_GRAPH_ID,
+        '【角色记忆图谱】\n（暂无命中节点。通灵写入角色近事或侧栏「角色记忆」从档案刷新后会生长。）',
+        '系统自动 · 角色记忆',
+        3.5,
       ),
     )
   }
@@ -179,7 +162,7 @@ export async function ensureAndRefreshSystemLorebook(extra?: {
       id: SYSTEM_LOREBOOK_ID,
       name: SYSTEM_LOREBOOK_NAME,
       description:
-        '由游戏状态自动生成：局面快照 + 短/中/长期记忆 + 表格世界状态。常驻注入，请保持启用。',
+        '由游戏状态自动生成：局面快照 + 短/中/长期记忆 + 角色记忆图谱。常驻注入，请保持启用。',
       entries: systemEntries,
       recursiveScanning: false,
       caseSensitive: false,
@@ -196,7 +179,7 @@ export async function ensureAndRefreshSystemLorebook(extra?: {
     ...existing,
     name: SYSTEM_LOREBOOK_NAME,
     description:
-      '由游戏状态自动生成：局面快照 + 短/中/长期记忆 + 表格世界状态。常驻注入，请保持启用。',
+      '由游戏状态自动生成：局面快照 + 短/中/长期记忆 + 角色记忆图谱。常驻注入，请保持启用。',
     entries: [...systemEntries, ...userEntries],
     updatedAt: now,
   }

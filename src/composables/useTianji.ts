@@ -121,7 +121,6 @@ const showSettings = ref(false)
 const showLorebooks = ref(false)
 const showPresets = ref(false)
 const showVariables = ref(false)
-const showMemory = ref(false)
 /** 记忆追溯（yuzuki trace）最近结果，供顶栏/锦囊展示 */
 const lastMemoryTrace = ref<string | null>(null)
 const lastMemoryTraceKind = ref<'ok' | 'fail' | 'info' | null>(null)
@@ -1900,7 +1899,6 @@ export function useTianji() {
     showLorebooks,
     showPresets,
     showVariables,
-    showMemory,
     injectContext,
     sendPlayer,
     chooseQuick,

@@ -1166,10 +1166,11 @@ function onTagsInput(value: string) {
       <div class="api-panel" style="margin-top: 1rem">
         <div class="secondary-head">
           <div>
-            <h3 class="api-panel__title">表格记忆（总开关）</h3>
+            <h3 class="api-panel__title">后台填表（经营数据，不是记忆）</h3>
             <p class="tj-hint" style="margin: 0">
-              开启后：主文 Memory 契约、回合追溯填表、系统世界书注入「表格世界状态」。
-              关闭后旧楼仍可压缩，但不再追溯/注入表格（短中长期 &lt;sum&gt; 仍保留）。
+              开启后：主文可写 &lt;Memory&gt; 追溯经营表（资源/名册等），供后台同步。
+              <strong>推演时注入的记忆只走「角色记忆图谱」</strong>，不会把整表/纪要当记忆塞进世界书。
+              关闭后不再追溯填表；短中长期 &lt;sum&gt; 与角色图谱仍保留。
             </p>
           </div>
           <label class="switch">
@@ -1189,8 +1190,7 @@ function onTagsInput(value: string) {
           </label>
         </div>
         <p class="tj-hint" style="margin-top: 0.5rem">
-          推演注入：角色图谱选取 + 冷档案闪回 + 实体表 + 纪要轻量索引 + 短中长总结。
-          不写 SQL，不靠整段 raw，不走旧召回 API。
+          推演记忆注入：角色图谱选取（点名/关系/近事）+ 冷档案闪回 + 短/中/长总结。零强制 API。
         </p>
       </div>
 
@@ -1298,11 +1298,10 @@ function onTagsInput(value: string) {
       <div class="api-panel" style="margin-top: 1rem">
         <div class="secondary-head">
           <div>
-            <h3 class="api-panel__title">表格记忆 · 何时填表</h3>
+            <h3 class="api-panel__title">后台填表 · 何时写表</h3>
             <p class="tj-hint" style="margin: 0">
-              推演结束后，按「AI 回复楼层」决定要不要自动把剧情写入角色/物品/纪要表。
-              与局面结算（次 API）无关；填表请求走主/次 API（记忆专用通道已下线）。
-              参数语义对齐 shujuku AutoCardUpdater，下面用白话说明每个数字的作用。
+              这是经营/档案后台写表，不是「角色记忆」。推演注入的记忆只走侧栏「角色记忆」图谱。
+              填表请求走主/次 API；可关。
             </p>
           </div>
         </div>
@@ -1508,53 +1507,16 @@ function onTagsInput(value: string) {
       <div class="api-panel" style="margin-top: 0.85rem">
         <div class="secondary-head">
           <div>
-            <h3 class="api-panel__title">推演时注入 · 角色记忆</h3>
+            <h3 class="api-panel__title">推演时注入 · 角色记忆图谱</h3>
             <p class="tj-hint" style="margin: 0">
               固定路径（零强制 API）：
               <strong>角色图谱选取</strong>
-              + <strong>冷档案闪回</strong>
-              + <strong>实体表</strong>
-              + <strong>纪要轻量索引</strong>
-              + 短中长总结。
-              旧「纪要 LLM 选码 / 召回 API / 记忆 API」已移除。
+             （点名 / 关系 / 近事）+ <strong>冷档案闪回</strong> + 短中长总结。
+              世界书只写【角色记忆图谱】，不写整表、不写纪要 dump。
+              完整浏览：侧栏「角色记忆」。
             </p>
           </div>
         </div>
-        <div class="sched-fields">
-          <label class="tj-field sched-field">
-            <span class="sched-field__title">纪要索引条数上限</span>
-            <span class="sched-field__key">index top · 默认 50</span>
-            <input
-              class="tj-input limit-input"
-              type="number"
-              min="5"
-              max="200"
-              :value="sched.recallIndexTop"
-              @change="patchSched('recallIndexTop', ($event.target as HTMLInputElement).value)"
-            />
-            <p class="sched-field__help">
-              索引是「编码 + 一行摘要」的轻列表，仅作大纲，不展开全文。
-            </p>
-          </label>
-
-          <label class="tj-field sched-field">
-            <span class="sched-field__title">实体表注入字数上限</span>
-            <span class="sched-field__key">entity chars · 默认 2800</span>
-            <input
-              class="tj-input limit-input"
-              type="number"
-              min="500"
-              max="20000"
-              step="100"
-              :value="sched.entityInjectMaxChars"
-              @change="patchSched('entityInjectMaxChars', ($event.target as HTMLInputElement).value)"
-            />
-            <p class="sched-field__help">
-              角色档案、物品、世界设定拼进世界书时的总字符软上限。
-            </p>
-          </label>
-        </div>
-
       </div>
 
       <p class="tj-hint">库标识：{{ storageInfo.dbName }}（与其它项目隔离）</p>

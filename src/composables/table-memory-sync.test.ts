@@ -119,6 +119,8 @@ describe('hooks: tianji must sync before assemble', () => {
     const src = readFileSync(join(here, 'useTianji.ts'), 'utf8')
     expect(src).toMatch(/syncTableMemoryFromGame/)
     expect(src).toMatch(/applyAssistantMemoryTags/)
-    expect(src).toMatch(/showMemory/)
+    expect(src).toMatch(/selectMemoryGraphForTurn|ensureMemoryGraphHydrated/)
+    // 记忆 UI 入口是角色图谱，不再挂表格 MemoryModal
+    expect(src).not.toMatch(/MemoryModal/)
   })
 })

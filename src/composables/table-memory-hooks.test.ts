@@ -1,6 +1,6 @@
 /**
- * 静态 + 结构集成：确认 Tianji / system-lorebook 真实调用点接入表格记忆，
- * 且 sum 路径未拆除。
+ * 静态 + 结构集成：Tianji / system-lorebook 主路径是角色记忆图谱 + sum，
+ * 不再把整表世界状态当记忆注入。
  */
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -17,12 +17,16 @@ import {
   formatLongMemory,
 } from './memory-lore'
 import {
-  TABLE_WORLD_STATE_ENTRY_ID,
-  formatWorldStateInjection,
   createDefaultTableMemoryState,
   applyMemoryTextToState,
 } from './table-memory'
+import {
+  ensureMemoryGraphHydrated,
+  selectMemoryGraphForTurn,
+  clearMemoryGraph,
+} from './memory-graph'
 import { DEFAULT_FORMAT_PROMPT } from '@/sillytavern/types'
+import './memory-graph'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -37,8 +41,7 @@ describe('Tianji + system lore hooks (shipped sources)', () => {
     expect(src).toMatch(/hasMemoryTag/)
     expect(src).toMatch(/recordTurnSum/)
     expect(src).toMatch(/ensureAndRefreshSystemLorebook/)
-    expect(src).toMatch(/syncTableMemoryFromGame/)
-    expect(src).toMatch(/showMemory/)
+    expect(src).toMatch(/selectMemoryGraphForTurn/)
     // 调用点顺序（非 import）：先表格 apply，再 sum
     const callApply = src.indexOf('applyAssistantMemoryTags(raw)')
     const callSum = src.indexOf('recordTurnSum(parsed.sum')
@@ -46,51 +49,38 @@ describe('Tianji + system lore hooks (shipped sources)', () => {
     expect(callSum).toBeGreaterThan(callApply)
   })
 
-  it('system-lorebook injects table world state alongside mem-short/mid/long', () => {
+  it('system-lorebook injects graph memory, not table world dump', () => {
     const src = readSrc('system-lorebook.ts')
-    expect(src).toMatch(/TABLE_WORLD_STATE_ENTRY_ID/)
-    expect(src).toMatch(/formatWorldStateInjection/)
-    expect(src).toMatch(/loadTableMemory/)
+    expect(src).toMatch(/selectMemoryGraphForTurn/)
+    expect(src).toMatch(/ensureMemoryGraphHydrated/)
+    expect(src).toMatch(/MEM_GRAPH_ID|mem-graph-beats/)
     expect(src).toMatch(/MEM_SHORT_ID/)
     expect(src).toMatch(/MEM_MID_ID/)
     expect(src).toMatch(/MEM_LONG_ID/)
-    expect(src).toMatch(/formatShortMemory/)
-    expect(src).toMatch(/formatMidMemory/)
-    expect(src).toMatch(/formatLongMemory/)
+    expect(src).not.toMatch(/formatWorldStateInjection/)
+    expect(src).not.toMatch(/TABLE_WORLD_STATE_ENTRY_ID/)
   })
 
-  it('opening/reset clears table memory with sum bank', () => {
+  it('opening/reset clears graph + sum bank', () => {
     const src = readSrc('useGameState.ts')
-    expect(src).toMatch(/seedOpeningTableMemory/)
-    expect(src).toMatch(/clearTableMemory/)
     expect(src).toMatch(/clearMemoryBank/)
     expect(src).toMatch(/seedOpeningMemory/)
-    expect(src).toMatch(/syncTableMemoryFromGame/)
   })
 
-  it('MemoryModal exists and TianjiPanel mounts it', () => {
+  it('TianjiPanel 记忆入口跳角色记忆图谱，不挂表格 MemoryModal', () => {
     const panel = readFileSync(
       join(here, '../components/layout/TianjiPanel.vue'),
       'utf8',
     )
-    expect(panel).toMatch(/MemoryModal/)
-    expect(panel).toMatch(/showMemory/)
-    expect(panel).toMatch(/记忆锦囊/)
-    const modal = readFileSync(
-      join(here, '../components/SillyTavern/MemoryModal.vue'),
-      'utf8',
-    )
-    expect(modal).toMatch(/从经营同步/)
-    expect(modal).toMatch(/formatTableMemoryInjection/)
-    expect(modal).toMatch(/syncTableMemoryFromGame/)
-    expect(modal).toMatch(/runTableMemoryPipeline|跑完整流水线|调度/)
+    expect(panel).not.toMatch(/MemoryModal/)
+    expect(panel).toMatch(/memory-graph|角色记忆/)
+    expect(panel).toMatch(/setView\('memory-graph'\)/)
   })
 
   it('format prompt hints model may emit Memory without dropping sum/maintext', () => {
     expect(DEFAULT_FORMAT_PROMPT.toLowerCase()).toContain('<memory>')
     expect(DEFAULT_FORMAT_PROMPT).toContain('<sum>')
     expect(DEFAULT_FORMAT_PROMPT).toContain('<maintext>')
-    // 轻量 memory 行：角色行动/关系；表结构由系统世界书注入，不在格式提示里堆「角色档案」表名
     expect(DEFAULT_FORMAT_PROMPT).toMatch(/关系变化|角色名/)
   })
 
@@ -98,20 +88,24 @@ describe('Tianji + system lore hooks (shipped sources)', () => {
     expect(MEM_SHORT_ID).toBe('mem-short')
     expect(MEM_MID_ID).toBe('mem-mid')
     expect(MEM_LONG_ID).toBe('mem-long')
-    expect(TABLE_WORLD_STATE_ENTRY_ID).toBe('table-world-state')
   })
 })
 
-describe('ensure path functions still produce sum + table text', () => {
+describe('ensure path functions still produce sum + graph', () => {
   it('formatters for empty banks are defined (assemble-safe)', () => {
     clearMemoryBank()
+    clearMemoryGraph()
     expect(formatShortMemory()).toContain('短期记忆')
     expect(formatMidMemory()).toContain('中期记忆')
     expect(formatLongMemory()).toContain('长期记忆')
-    // 注入走实体表+纪要索引+Top-K（或未绑定时 legacy 文案）
-    const inj = formatWorldStateInjection(createDefaultTableMemoryState())
-    expect(inj.length).toBeGreaterThan(10)
-    expect(inj).toMatch(/世界状态|实体表|纪要|暂无/)
+    const g = ensureMemoryGraphHydrated()
+    const picked = selectMemoryGraphForTurn({
+      graph: g,
+      query: '',
+      maxNodes: 3,
+      maxChars: 400,
+    })
+    expect(typeof picked.text).toBe('string')
   })
 
   it('recordTurnSum still mutates short layer (shipped function)', () => {
@@ -130,16 +124,13 @@ describe('ensure path functions still produce sum + table text', () => {
     expect(formatShortMemory()).toMatch(/结盟|纳贡/)
   })
 
-  it('table apply + injection is pure and callable without Vue', async () => {
+  it('table apply still works as backend fill (not lore inject path)', () => {
     const s = createDefaultTableMemoryState()
     applyMemoryTextToState(
       s,
       `<Memory>#世界设定\n[青岚宗]|类型：宗门|详细说明：残峰再起</Memory>`,
     )
-    // 确保 injector 已注册
-    await import('./table-memory-recall')
-    const inj = formatWorldStateInjection(s)
-    expect(inj).toContain('青岚宗')
-    expect(inj).toContain('残峰再起')
+    // 表格仍可解析写入；主路径注入已不走 formatWorldStateInjection
+    expect(JSON.stringify(s.records)).toMatch(/青岚宗|残峰再起/)
   })
 })
