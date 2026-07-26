@@ -34,6 +34,10 @@ export interface MemoryGraphBeat {
   id: string
   text: string
   at?: number
+  /** 游戏历法：写入时的年 */
+  year?: number
+  /** 游戏历法：写入时的季 */
+  season?: string
 }
 
 export interface MemoryGraphNode {
@@ -68,6 +72,10 @@ export interface MemoryGraphNodePatch {
   attrs?: Record<string, string>
   /** 追加近事（非替换） */
   beat?: string
+  /** beat 对应的游戏历法年 */
+  beatYear?: number
+  /** beat 对应的游戏历法季 */
+  beatSeason?: string
   /** 改名：旧名，合并到新 name */
   formerName?: string
 }
@@ -249,7 +257,7 @@ export function applyMemoryGraphPatch(
     if (np.beat && String(np.beat).trim()) {
       const text = String(np.beat).trim()
       if (!node.beats.some((b) => b.text === text)) {
-        node.beats.unshift({ id: newId('b'), text, at: ts })
+        node.beats.unshift({ id: newId('b'), text, at: ts, year: np.beatYear, season: np.beatSeason })
         if (node.beats.length > 12) node.beats = node.beats.slice(0, 12)
       }
     }
@@ -717,17 +725,26 @@ export function clearMemoryGraph(): void {
   }
 }
 
+export interface IngestedBeat {
+  id: string
+  text: string
+  nodeName: string
+  year?: number
+  season?: string
+}
+
 /**
  * 解析 <memory> 标签文本并写入图谱。
  * 格式：每行 "角色名|做了什么|关系变化"（后两段可省略）。
  * 零额外 API 调用，纯本地解析。
+ * 返回新写入的 beat 列表（供 embedding 存储）。
  */
-export function ingestMemoryTag(raw: string): number {
+export function ingestMemoryTag(raw: string, calendar?: { year: number; season: string }): IngestedBeat[] {
   const lines = (raw || '')
     .split('\n')
     .map((l) => l.trim())
     .filter((l) => l && l.includes('|'))
-  if (!lines.length) return 0
+  if (!lines.length) return []
 
   const g = loadMemoryGraph()
   const patch: MemoryGraphPatch = { nodes: [], edges: [] }
@@ -738,7 +755,13 @@ export function ingestMemoryTag(raw: string): number {
     if (!name) continue
 
     const beat = actionPart || line
-    patch.nodes!.push({ name, kind: 'character', beat })
+    patch.nodes!.push({
+      name,
+      kind: 'character',
+      beat,
+      beatYear: calendar?.year,
+      beatSeason: calendar?.season,
+    })
 
     // 关系变化 → edge（格式："与XX结盟" / "对XX仇恨" 等）
     if (relationPart) {
@@ -754,10 +777,21 @@ export function ingestMemoryTag(raw: string): number {
     }
   }
 
-  if (!patch.nodes!.length) return 0
+  if (!patch.nodes!.length) return []
   const next = applyMemoryGraphPatch(g, patch)
   saveMemoryGraph(next)
-  return patch.nodes!.length
+
+  // 收集本次新写入的 beats（从 patch 节点名反查图谱中最新 beat）
+  const result: IngestedBeat[] = []
+  for (const np of patch.nodes!) {
+    if (!np.beat) continue
+    const node = findNodeByName(next, np.name)
+    const b = node?.beats?.find((x) => x.text === np.beat)
+    if (b) {
+      result.push({ id: b.id, text: b.text, nodeName: np.name, year: b.year, season: b.season })
+    }
+  }
+  return result
 }
 
 /** 按姓名移除节点及其关联边（除名时） */

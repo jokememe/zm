@@ -937,6 +937,18 @@ function onTagsInput(value: string) {
           <input type="checkbox" v-model="draftPrimary.stream" @change="flushPrimary" />
           <span>流式输出（逐字显示，需 API 支持 SSE）</span>
         </label>
+        <div class="tj-field">
+          <label>记忆召回模式</label>
+          <select
+            class="tj-input"
+            :value="props.settings.memoryRecallMode || 'both'"
+            @change="patch({ memoryRecallMode: ($event.target as HTMLSelectElement).value as any })"
+          >
+            <option value="both">双路（语义 + 关键词）</option>
+            <option value="embedding">仅语义向量</option>
+            <option value="keyword">仅关键词（零 API）</option>
+          </select>
+        </div>
         <div class="tj-row">
           <button type="button" class="btn btn-primary btn-sm" @click="flushPrimary">
             保存主 API

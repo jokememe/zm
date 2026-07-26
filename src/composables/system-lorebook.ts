@@ -28,6 +28,8 @@ import {
   loadMemoryGraph,
   selectMemoryGraphForTurn,
 } from '@/composables/memory-graph'
+import { semanticRecall, type SemanticHit } from '@/composables/memory-embed'
+import type { ApiSettings } from '@/sillytavern/types'
 import { saveLorebook, getLorebooks } from '@/sillytavern/database'
 
 const LIVE_ENTRY_ID = 'live-snapshot'
@@ -75,6 +77,8 @@ function buildSystemEntries(extra?: {
   recallQuery?: string | null
   /** 发话前 LLM 选中的编码（有则优先于纯关键词） */
   recallCodes?: string[] | null
+  /** 语义召回结果（embedding/both 模式） */
+  semanticHits?: SemanticHit[]
 }): LorebookEntry[] {
   loadMemoryBank()
   const tableOn = extra?.tableMemoryEnabled !== false
@@ -85,8 +89,9 @@ function buildSystemEntries(extra?: {
     makeEntry(MEM_MID_ID, formatMidMemory(), '系统自动 · 中期记忆', 2),
     makeEntry(MEM_LONG_ID, formatLongMemory(), '系统自动 · 长期记忆', 3),
   ]
-  // 人物记忆图谱：按当前事务关键词选取相关角色 beats
+  // 人物记忆图谱：关键词选取 + 语义召回合并
   const graph = loadMemoryGraph()
+  const graphParts: string[] = []
   if (graph.nodes.length) {
     const sel = selectMemoryGraphForTurn({
       graph,
@@ -94,11 +99,20 @@ function buildSystemEntries(extra?: {
       maxNodes: 5,
       maxChars: 1200,
     })
-    if (sel.text.trim()) {
-      entries.push(
-        makeEntry(MEM_GRAPH_ID, `【人物记忆图谱】\n${sel.text}`, '系统自动 · 角色近事', 3.5),
-      )
-    }
+    if (sel.text.trim()) graphParts.push(sel.text)
+  }
+  // 语义召回补充（embedding/both 模式由调用方传入）
+  if (extra?.semanticHits?.length) {
+    const semLines = extra.semanticHits.map(
+      (h) => `· ${h.nodeName}：${h.text}${h.year ? `（${h.year}年${h.season || ''}）` : ''}`,
+    )
+    graphParts.push(`【语义召回】\n${semLines.join('\n')}`)
+  }
+  if (graphParts.length) {
+    const combined = graphParts.join('\n').slice(0, 2000)
+    entries.push(
+      makeEntry(MEM_GRAPH_ID, `【人物记忆图谱】\n${combined}`, '系统自动 · 角色近事', 3.5),
+    )
   }
   if (tableOn) {
     entries.push(
@@ -124,8 +138,20 @@ export async function ensureAndRefreshSystemLorebook(extra?: {
   tableMemoryEnabled?: boolean
   recallQuery?: string | null
   recallCodes?: string[] | null
+  memoryRecallMode?: 'keyword' | 'embedding' | 'both'
+  api?: ApiSettings
 }): Promise<Lorebook> {
-  const systemEntries = buildSystemEntries(extra)
+  // 语义召回（embedding / both 模式）
+  let semanticHits: SemanticHit[] = []
+  const mode = extra?.memoryRecallMode || 'both'
+  if ((mode === 'embedding' || mode === 'both') && extra?.api) {
+    const query = extra.contextLabel || extra.recallQuery || ''
+    if (query.trim()) {
+      semanticHits = await semanticRecall(extra.api, query, 6).catch(() => [])
+    }
+  }
+
+  const systemEntries = buildSystemEntries({ ...extra, semanticHits })
   const all = await getLorebooks()
   const existing = all.find((b) => b.id === SYSTEM_LOREBOOK_ID)
   const now = Date.now()

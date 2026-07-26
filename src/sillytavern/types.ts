@@ -203,6 +203,14 @@ export interface AppSettings {
    */
   tableMemoryEnabled?: boolean;
   /**
+   * 记忆图谱召回模式：
+   * - 'keyword': 纯关键词匹配 + 时间过滤（零 API 调用）
+   * - 'embedding': 语义向量召回（每回合一次 /v1/embeddings）
+   * - 'both': 双路合并去重（embedding 主 + keyword 兜底）
+   * 默认 'both'。
+   */
+  memoryRecallMode?: 'keyword' | 'embedding' | 'both';
+  /**
    * 拼装时压缩隐藏楼层：助手文只保留 maintext/sum，去掉 thinking / option / Memory 原文。
    * 远端楼进一步只留小结。默认 true（解决整段 raw 撑到数万 token）。
    */
@@ -309,6 +317,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   settleJailbreakPrompt: '',
   historyKeepMessages: 12,
   tableMemoryEnabled: true,
+  memoryRecallMode: 'both',
   historyCompress: true,
   historyMaxTokens: 12000,
   tableMemoryScheduler: {

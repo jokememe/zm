@@ -49,6 +49,7 @@ import {
   commitVariablesFromEditor,
 } from '@/composables/game-bridge'
 import { ensureAndRefreshSystemLorebook } from '@/composables/system-lorebook'
+import { embedAndStoreBeats } from '@/composables/memory-embed'
 import { recordTurnSum, loadMemoryBank } from '@/composables/memory-lore'
 import {
   applyAssistantMemoryTags,
@@ -287,6 +288,8 @@ async function syncSystemLore(
     contextDetail: contextDetail.value,
     recallQuery: extra?.recallQuery ?? null,
     recallCodes: extra?.recallCodes ?? null,
+    memoryRecallMode: s.memoryRecallMode || 'both',
+    api: s.api,
   })
   const list = await getLorebooks()
   lorebooks.value = list
@@ -948,7 +951,13 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
 
   // ★ 人物记忆图谱：从 <memory> 标签解析角色动作写入 beats
   if (parsed.memory?.trim()) {
-    ingestMemoryTag(parsed.memory)
+    const gs = useGameState()
+    const newBeats = ingestMemoryTag(parsed.memory, { year: gs.calendar.year, season: String(gs.calendar.season) })
+    // 语义向量存储（embedding/both 模式，后台不阻塞）
+    const recallMode = settings.value?.memoryRecallMode || 'both'
+    if (newBeats.length && recallMode !== 'keyword' && settings.value) {
+      void embedAndStoreBeats(settings.value.api, newBeats)
+    }
   }
 
   const content = hasTags
