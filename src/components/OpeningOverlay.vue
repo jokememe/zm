@@ -22,7 +22,7 @@ const {
   masterName: liveMaster,
   difficulty: liveDiff,
 } = useGameState()
-const { startOpeningRun } = useTianji()
+const { startOpeningRun, updateSettings } = useTianji()
 
 const step = ref(0)
 const busy = ref(false)
@@ -53,11 +53,14 @@ function prev() {
 }
 
 function commitConfig() {
+  const master = draftMaster.value.trim() || DEFAULT_MASTER_NAME
   applyOpeningConfig({
     sectName: draftSect.value.trim() || DEFAULT_SECT_NAME,
-    masterName: draftMaster.value.trim() || DEFAULT_MASTER_NAME,
+    masterName: master,
     difficulty: draftDiff.value,
   })
+  // 密匣「掌门称谓」与开局名对齐，避免推演时 {{user}} 与游戏态掌门名分叉
+  void updateSettings({ userName: master }).catch(() => {})
 }
 
 /**

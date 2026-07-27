@@ -5,6 +5,7 @@ import type { WorldDelta, WorldSnapshot, ApplyResult } from '@/types/world'
 import type { Resources } from '@/types/game'
 import { useGameState } from '@/composables/useGameState'
 import { validateWorldDelta, applyWorldDeltaToSnapshot } from '@/composables/world-delta'
+import { renameMemoryGraphNode } from '@/composables/memory-graph'
 import type { Ref } from 'vue'
 
 function unrefVal<T>(v: T | Ref<T>): T {
@@ -122,7 +123,15 @@ export function applyValidatedDelta(delta: WorldDelta): ApplyResult {
   const { snap: next, result } = applyWorldDeltaToSnapshot(clean, snap)
   restoreWorldState(next)
 
-  // 注：角色改名后，叙事图谱同名旧节点由 removeMemoryGraphNodeByName 在除名时清理；
-  // 改名本身不自动迁移旧节点近事（已知限制，见清理方案文档风险 B）。
+  // 弟子改名：记忆图谱旧名节点并入新名（近事 / 关系保留），避免新旧双节点
+  if (result.renames?.length) {
+    for (const r of result.renames) {
+      try {
+        renameMemoryGraphNode(r.from, r.to)
+      } catch {
+        /* ignore */
+      }
+    }
+  }
   return result
 }

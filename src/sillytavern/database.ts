@@ -78,26 +78,6 @@ class AppDatabase extends Dexie {
           if (s.api && s.api.secondary === undefined) {
             s.api.secondary = { enabled: false, baseUrl: '', apiKey: '', model: '' };
           }
-          if (s.api && s.api.memory === undefined) {
-            s.api.memory = {
-              enabled: false,
-              baseUrl: '',
-              apiKey: '',
-              model: '',
-              temperature: 0.2,
-              maxTokens: 1200,
-            };
-          }
-          if (s.api && s.api.recall === undefined) {
-            s.api.recall = {
-              enabled: false,
-              baseUrl: '',
-              apiKey: '',
-              model: '',
-              temperature: 0.2,
-              maxTokens: 900,
-            };
-          }
           await tx.table('settings').put(s);
         }
       });
@@ -158,7 +138,7 @@ export interface FullBackup {
   settings: AppSettings[];
   chats: ChatSession[];
   /**
-   * localStorage 切片：经营存档 / 开局 / 表格记忆 / 短中长期记忆 / API 缓存。
+   * localStorage 切片：经营存档 / 开局 / 短中长期记忆 / API 缓存。
    * main→beta 跨域名必带；旧备份可能缺此字段。
    */
   localState?: Record<string, string>;
@@ -442,7 +422,7 @@ export async function getSettings(): Promise<AppSettings | undefined> {
   } else {
     s.historyMaxTokens = Math.max(0, Math.min(500_000, Math.round(Number(s.historyMaxTokens))));
   }
-  // 表格记忆调度参数：缺省补全，与 shujuku 默认对齐
+  // 已废弃的表格记忆调度参数：仅为兼容旧存档做缺省补全，代码中无读取方
   if (!s.tableMemoryScheduler || typeof s.tableMemoryScheduler !== 'object') {
     s.tableMemoryScheduler = {
       autoUpdateThreshold: 3,

@@ -134,7 +134,7 @@ export interface ChatPreset {
 
 // ========== Settings Types ==========
 
-/** 次 API / 记忆 API / 召回 API 共用的旁路通道配置 */
+/** 次 API 旁路通道配置 */
 export interface SideApiChannel {
   enabled: boolean;
   baseUrl: string;
@@ -153,17 +153,6 @@ export interface ApiSettings {
   stream?: boolean;
   /** 局面分析 / 变量结算旁路 */
   secondary?: SideApiChannel;
-  /**
-   * 表格记忆追溯专用通道（yuzuki-Memory 独立 API）。
-   * 启用并配齐后，记忆追溯只走此通道，不抢主/次 API。
-   */
-  memory?: SideApiChannel;
-  /**
-   * 发话前纯召回选码专用通道。
-   * 启用并配齐后，索引 Top-K 选码只走此通道；
-   * 未启用时回退：记忆 → 次 → 主。
-   */
-  recall?: SideApiChannel;
 }
 
 export interface AppSettings {
@@ -197,19 +186,10 @@ export interface AppSettings {
    */
   historyKeepMessages?: number;
   /**
-   * 表格记忆总开关（yuzuki 式：追溯填表 + 世界状态注入 + 主文 Memory 契约）。
-   * 关闭后旧楼仍可被压缩，但不跑记忆 API / 不注入表格状态。
-   * 默认 true。
+   * 已废弃：表格记忆总开关（yuzuki 式填表系统已移除，记忆由三期记忆 + 角色图谱承载）。
+   * 字段仅为兼容旧存档保留，代码中无读取方。
    */
   tableMemoryEnabled?: boolean;
-  /**
-   * 记忆图谱召回模式（密匣 · 推演时注入可改）：
-   * - 'keyword': 点名/关系/近事 + 冷档案（零 embeddings API）
-   * - 'embedding': 语义向量召回（每回合一次 /embeddings）
-   * - 'both': 规则选取 + 语义补充
-   * 默认 'keyword'。
-   */
-  memoryRecallMode?: 'keyword' | 'embedding' | 'both';
   /**
    * 拼装时压缩隐藏楼层：助手文只保留 maintext/sum，去掉 thinking / option / Memory 原文。
    * 远端楼进一步只留小结。默认 true（解决整段 raw 撑到数万 token）。
@@ -217,14 +197,14 @@ export interface AppSettings {
   historyCompress?: boolean;
   /**
    * 历史消息硬预算（粗估 token，可自定义 0～500000）。
-   * 超出则丢弃更早楼层，靠世界书/表格召回。
+   * 超出则丢弃更早楼层，靠世界书/角色图谱召回。
    * 0 = 仅用预设上下文的 75%（旧行为，大上下文时极易到 6～9 万）。
    * 默认 12000。
    */
   historyMaxTokens?: number;
   /**
-   * 表格记忆调度 / 合并 / 召回 — 对齐 shujuku AutoCardUpdater。
-   * threshold=读深, frequency=每N层, batch, concurrent, skip, retain, merge, Top-K。
+   * 已废弃：表格记忆调度参数（填表系统已移除）。
+   * 字段仅为兼容旧存档保留，代码中无读取方。
    */
   tableMemoryScheduler?: {
     autoUpdateThreshold?: number;
@@ -283,22 +263,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
       temperature: 0.7,
       maxTokens: 8000,
     },
-    memory: {
-      enabled: false,
-      baseUrl: '',
-      apiKey: '',
-      model: '',
-      temperature: 0.2,
-      maxTokens: 1200,
-    },
-    recall: {
-      enabled: false,
-      baseUrl: '',
-      apiKey: '',
-      model: '',
-      temperature: 0.2,
-      maxTokens: 900,
-    },
   },
   apiMode: 'single',
   activePresetId: null,
@@ -317,7 +281,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   settleJailbreakPrompt: '',
   historyKeepMessages: 12,
   tableMemoryEnabled: true,
-  memoryRecallMode: 'keyword',
   historyCompress: true,
   historyMaxTokens: 12000,
   tableMemoryScheduler: {

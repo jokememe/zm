@@ -152,3 +152,20 @@
 
 ### 风险 B 落实说明
 - 角色改名后，旧名图谱节点不再自动迁移（原 `renameCharacterProfileRow` 已随填表删除）。当前行为：改名不迁移旧节点近事，下次 `<memory>` 会建新节点；除名走 `removeMemoryGraphNodeByName` 清理。属可接受限制（方案文档已记录）。
+
+---
+
+## 八、二次深挖：空壳召回砍除 + 改名同步（2026-07-27 同日完成）
+
+### 新诊断（比一审更狠）
+1. **`memory-embed` 是双重死链**：写入侧复用主 `api.model`（聊天模型）打 `/embeddings` 必然 400；读取侧 `recallQuery`/`contextLabel` 无任何赋值方，`semanticRecall` 永不执行。且项目无任何 embedding 专用配置入口。→ **整体砍除**（推翻一审"保留"结论）。
+2. **`api.memory` / `api.recall` 旁路通道是僵尸**：`settle-runner` 只走 primary/secondary；密匣 template 无对应面板，script 侧草稿/flush/模型拉取全为死代码；`resolveRecallApiEndpoint` 仅测试引用。→ **字段与代码一并删除**。
+3. **表格记忆文案残留**：`MemoryGraphView` 详情空态、`DisciplesView`/`ModalHost` 除名确认框仍提"表格记忆/从表格刷新"。→ **清零**。
+4. **改名不同步图谱**：掌门改名（密匣「掌门称谓」）只改 `userName`，与游戏态 `masterName` 分叉，图谱留旧名节点；弟子改名（world-delta）不迁移图谱节点（原风险 B）。→ **均已接通**。
+
+### 改动清单
+1. **删除**：`memory-embed.ts`、`api-cache-recall.test.ts`、`resolveRecallApiEndpoint`/`sideChannelReady`（api-cache.ts）、`memoryRecallMode` 字段与密匣"图谱召回模式"面板、`api.memory`/`api.recall` 通道（types/database/api-cache/useSillytavern/useTianji/SettingsModal 全部 merge 与草稿代码）。
+2. **掌门改名**：`memory-graph.ts` 新增 `renameMemoryGraphNode`（formerName 合并，近事/属性/关系保留，边按 node.id 不断）；`useGameState.ts` 新增 `renameMaster`（masterName/弟子师承/宝物持有/关系边/图谱/身份落盘）；`useTianji.updateSettings` 检测 userName 变化自动调用；`OpeningOverlay` 开局时 userName 自动对齐掌门名。
+3. **弟子改名**：`ApplyResult` 新增 `renames`；`applyWorldDeltaToSnapshot` 收集改名对；`applyValidatedDelta` 消费并调 `renameMemoryGraphNode`。
+4. **文案/注释**：三处 UI 文案与各处"表格记忆"注释清零；废弃字段（`tableMemoryEnabled`/`tableMemoryScheduler`）注释标明"仅兼容旧存档，无读取方"。
+5. **测试**：`memory-graph.test.ts` +2（renameMemoryGraphNode）；`world-delta.test.ts` +renames 断言。**261 测试全绿，`vue-tsc` exit 0，`vite build` 通过**。

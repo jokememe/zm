@@ -66,6 +66,7 @@ import { clearMemoryBank, seedOpeningMemory } from '@/composables/memory-lore'
 import {
   clearMemoryGraph,
   removeMemoryGraphNodeByName,
+  renameMemoryGraphNode,
 } from '@/composables/memory-graph'
 
 const currentView = ref<ViewId>('hall')
@@ -783,7 +784,7 @@ export function useGameState() {
 
   /**
    * 从名册除名（手改 / 清理改名残留）。
-   * 同步清关系、继位观察、灵田指派、宝物持有名、表格记忆角色行。
+   * 同步清关系、继位观察、灵田指派、宝物持有名、记忆图谱同名节点。
    */
   function removeDisciple(discipleId: string): { ok: boolean; name?: string; error?: string } {
     const id = String(discipleId || '').trim()
@@ -836,6 +837,42 @@ export function useGameState() {
 
     persistGameSave()
     return { ok: true, name }
+  }
+
+  /**
+   * 掌门改名：经营态（masterName / 弟子师承 / 宝物持有 / 关系边）与记忆图谱同步。
+   * 密匣「掌门称谓」与开局名同一真源；改名即时落盘。
+   */
+  function renameMaster(newName: string): { ok: boolean; oldName?: string; newName?: string } {
+    const next = String(newName || '').trim().slice(0, 16)
+    const prev = masterName.value
+    if (!next || next === prev) return { ok: false }
+
+    masterName.value = next
+    disciples.value = disciples.value.map((d) =>
+      d.master === prev ? { ...d, master: next } : d,
+    )
+    treasures.value = treasures.value.map((t) =>
+      t.owner === prev ? { ...t, owner: next } : t,
+    )
+    relationEdges.value = relationEdges.value.map((e) => ({
+      ...e,
+      from: e.from === prev ? next : e.from,
+      to: e.to === prev ? next : e.to,
+    }))
+    // 记忆图谱：旧名节点并入新名（近事 / 属性 / 关系保留）
+    try {
+      renameMemoryGraphNode(prev, next)
+    } catch {
+      /* ignore */
+    }
+    try {
+      saveIdentity({ sectName: sectName.value, masterName: next, difficulty: difficulty.value })
+    } catch {
+      /* ignore */
+    }
+    persistGameSave()
+    return { ok: true, oldName: prev, newName: next }
   }
 
   /**
@@ -936,6 +973,7 @@ export function useGameState() {
     assignFieldPlot,
     craftAlchemy,
     removeDisciple,
+    renameMaster,
     persistGameSave,
     forcePersistForBackup,
     liveDiscipleCount,

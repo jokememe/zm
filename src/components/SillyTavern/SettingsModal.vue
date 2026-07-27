@@ -47,7 +47,7 @@ async function updateSettings(partial: Partial<AppSettings>) {
 const tabs = [
   { id: 'primary', label: '主 API' },
   { id: 'secondary', label: '次 API' },
-  // 记忆 API / 召回 API 已废弃：角色图谱 + 大小总结 + 冷档案（零强制 API）
+  // 记忆走三期 + 角色图谱 + 冷档案（零强制 API），不再设记忆/召回专用通道
   { id: 'tags', label: '称谓' },
   { id: 'prompt', label: '格式' },
   { id: 'display', label: '显示' },
@@ -59,8 +59,6 @@ const tab = ref<TabId>('primary')
 const busy = ref<string | null>(null)
 const primaryModels = ref<string[]>([])
 const secondaryModels = ref<string[]>([])
-const memoryModels = ref<string[]>([])
-const recallModels = ref<string[]>([])
 const storageInfo = getActiveStorageInfo()
 const legacySharedDbs = ref<string[]>([])
 const allowCrossAppImport = ref(false)
@@ -82,22 +80,6 @@ const draftSecondary = reactive({
   temperature: 0.7,
   maxTokens: 8000,
 })
-const draftMemory = reactive({
-  enabled: false,
-  baseUrl: '',
-  apiKey: '',
-  model: '',
-  temperature: 0.2,
-  maxTokens: 1200,
-})
-const draftRecall = reactive({
-  enabled: false,
-  baseUrl: '',
-  apiKey: '',
-  model: '',
-  temperature: 0.2,
-  maxTokens: 900,
-})
 
 function pullDraftFromProps() {
   const api = props.settings.api
@@ -113,20 +95,6 @@ function pullDraftFromProps() {
   draftSecondary.model = sec?.model ?? ''
   draftSecondary.temperature = sec?.temperature ?? 0.7
   draftSecondary.maxTokens = sec?.maxTokens ?? 8000
-  const mem = api.memory
-  draftMemory.enabled = !!mem?.enabled
-  draftMemory.baseUrl = mem?.baseUrl ?? ''
-  draftMemory.apiKey = mem?.apiKey ?? ''
-  draftMemory.model = mem?.model ?? ''
-  draftMemory.temperature = mem?.temperature ?? 0.2
-  draftMemory.maxTokens = mem?.maxTokens ?? 1200
-  const rec = api.recall
-  draftRecall.enabled = !!rec?.enabled
-  draftRecall.baseUrl = rec?.baseUrl ?? ''
-  draftRecall.apiKey = rec?.apiKey ?? ''
-  draftRecall.model = rec?.model ?? ''
-  draftRecall.temperature = rec?.temperature ?? 0.2
-  draftRecall.maxTokens = rec?.maxTokens ?? 900
 }
 
 onMounted(async () => {
@@ -146,30 +114,6 @@ const secondary = computed(
       model: '',
       temperature: 0.7,
       maxTokens: 8000,
-    },
-)
-
-const memory = computed(
-  () =>
-    props.settings.api.memory ?? {
-      enabled: false,
-      baseUrl: '',
-      apiKey: '',
-      model: '',
-      temperature: 0.2,
-      maxTokens: 1200,
-    },
-)
-
-const recall = computed(
-  () =>
-    props.settings.api.recall ?? {
-      enabled: false,
-      baseUrl: '',
-      apiKey: '',
-      model: '',
-      temperature: 0.2,
-      maxTokens: 900,
     },
 )
 
@@ -206,24 +150,6 @@ function packSideChannels() {
       model: draftSecondary.model.trim(),
       temperature: draftSecondary.temperature,
       maxTokens: draftSecondary.maxTokens,
-    },
-    memory: {
-      ...memory.value,
-      enabled: draftMemory.enabled,
-      baseUrl: draftMemory.baseUrl.trim(),
-      apiKey: draftMemory.apiKey.trim(),
-      model: draftMemory.model.trim(),
-      temperature: draftMemory.temperature,
-      maxTokens: draftMemory.maxTokens,
-    },
-    recall: {
-      ...recall.value,
-      enabled: draftRecall.enabled,
-      baseUrl: draftRecall.baseUrl.trim(),
-      apiKey: draftRecall.apiKey.trim(),
-      model: draftRecall.model.trim(),
-      temperature: draftRecall.temperature,
-      maxTokens: draftRecall.maxTokens,
     },
   }
 }
@@ -266,46 +192,6 @@ async function flushSecondary() {
     })
     saveHint.value = '已保存'
     showToast('次 API 已保存')
-  } catch (e) {
-    saveHint.value = '保存失败'
-    showToast('保存失败：' + ((e as Error).message || String(e)))
-  }
-}
-
-async function flushMemory() {
-  saveHint.value = '保存中…'
-  try {
-    await updateSettings({
-      api: {
-        ...props.settings.api,
-        baseUrl: draftPrimary.baseUrl.trim() || props.settings.api.baseUrl,
-        apiKey: draftPrimary.apiKey.trim() || props.settings.api.apiKey,
-        model: draftPrimary.model.trim() || props.settings.api.model,
-        ...packSideChannels(),
-      },
-    })
-    saveHint.value = '已保存'
-    showToast('记忆 API 已保存')
-  } catch (e) {
-    saveHint.value = '保存失败'
-    showToast('保存失败：' + ((e as Error).message || String(e)))
-  }
-}
-
-async function flushRecall() {
-  saveHint.value = '保存中…'
-  try {
-    await updateSettings({
-      api: {
-        ...props.settings.api,
-        baseUrl: draftPrimary.baseUrl.trim() || props.settings.api.baseUrl,
-        apiKey: draftPrimary.apiKey.trim() || props.settings.api.apiKey,
-        model: draftPrimary.model.trim() || props.settings.api.model,
-        ...packSideChannels(),
-      },
-    })
-    saveHint.value = '已保存'
-    showToast('召回 API 已保存')
   } catch (e) {
     saveHint.value = '保存失败'
     showToast('保存失败：' + ((e as Error).message || String(e)))
@@ -357,21 +243,15 @@ const primaryAccessWarn = computed(() => {
 const lastFetchError = ref('')
 const lastFetchSource = ref<'remote' | 'fallback' | ''>('')
 
-type ApiWhich = 'primary' | 'secondary' | 'memory' | 'recall'
+type ApiWhich = 'primary' | 'secondary'
 
 function pickModel(which: ApiWhich, id: string) {
   if (which === 'primary') {
     draftPrimary.model = id
     void flushPrimary()
-  } else if (which === 'secondary') {
+  } else {
     draftSecondary.model = id
     void flushSecondary()
-  } else if (which === 'memory') {
-    draftMemory.model = id
-    void flushMemory()
-  } else {
-    draftRecall.model = id
-    void flushRecall()
   }
   showToast(`已选用模型：${id}`)
 }
@@ -379,9 +259,7 @@ function pickModel(which: ApiWhich, id: string) {
 async function handleFetchModels(which: ApiWhich) {
   // 先落盘草稿，保证用最新值拉模型
   if (which === 'primary') await flushPrimary()
-  else if (which === 'secondary') await flushSecondary()
-  else if (which === 'memory') await flushMemory()
-  else await flushRecall()
+  else await flushSecondary()
   busy.value = `fetch-${which}`
   lastFetchError.value = ''
   lastFetchSource.value = ''
@@ -389,16 +267,10 @@ async function handleFetchModels(which: ApiWhich) {
     const target =
       which === 'primary'
         ? { baseUrl: draftPrimary.baseUrl, apiKey: draftPrimary.apiKey }
-        : which === 'secondary'
-          ? { baseUrl: draftSecondary.baseUrl, apiKey: draftSecondary.apiKey }
-          : which === 'memory'
-            ? { baseUrl: draftMemory.baseUrl, apiKey: draftMemory.apiKey }
-            : { baseUrl: draftRecall.baseUrl, apiKey: draftRecall.apiKey }
+        : { baseUrl: draftSecondary.baseUrl, apiKey: draftSecondary.apiKey }
     const { models, source, error } = await fetchModels(target)
     if (which === 'primary') primaryModels.value = models
-    else if (which === 'secondary') secondaryModels.value = models
-    else if (which === 'memory') memoryModels.value = models
-    else recallModels.value = models
+    else secondaryModels.value = models
     lastFetchSource.value = source
     if (source === 'remote') {
       showToast(`已从接口获取 ${models.length} 个模型`)
@@ -409,14 +281,6 @@ async function handleFetchModels(which: ApiWhich) {
       if (which === 'secondary' && !draftSecondary.model.trim() && models[0]) {
         draftSecondary.model = models[0]
         await flushSecondary()
-      }
-      if (which === 'memory' && !draftMemory.model.trim() && models[0]) {
-        draftMemory.model = models[0]
-        await flushMemory()
-      }
-      if (which === 'recall' && !draftRecall.model.trim() && models[0]) {
-        draftRecall.model = models[0]
-        await flushRecall()
       }
     } else {
       lastFetchError.value = error || '拉取失败，以下为猜测的常用模型，可手动改名'
@@ -432,9 +296,7 @@ async function handleFetchModels(which: ApiWhich) {
 
 async function handleTest(which: ApiWhich) {
   if (which === 'primary') await flushPrimary()
-  else if (which === 'secondary') await flushSecondary()
-  else if (which === 'memory') await flushMemory()
-  else await flushRecall()
+  else await flushSecondary()
   busy.value = `test-${which}`
   try {
     const target =
@@ -444,33 +306,14 @@ async function handleTest(which: ApiWhich) {
             apiKey: draftPrimary.apiKey,
             model: draftPrimary.model,
           }
-        : which === 'secondary'
-          ? {
-              baseUrl: draftSecondary.baseUrl,
-              apiKey: draftSecondary.apiKey,
-              model: draftSecondary.model,
-            }
-          : which === 'memory'
-            ? {
-                baseUrl: draftMemory.baseUrl,
-                apiKey: draftMemory.apiKey,
-                model: draftMemory.model,
-              }
-            : {
-                baseUrl: draftRecall.baseUrl,
-                apiKey: draftRecall.apiKey,
-                model: draftRecall.model,
-              }
+        : {
+            baseUrl: draftSecondary.baseUrl,
+            apiKey: draftSecondary.apiKey,
+            model: draftSecondary.model,
+          }
     const result = await testConnection(target)
     if (result.ok) {
-      const label =
-        which === 'primary'
-          ? '主'
-          : which === 'secondary'
-            ? '辅'
-            : which === 'memory'
-              ? '记忆'
-              : '召回'
+      const label = which === 'primary' ? '主' : '辅'
       showToast(
         `${label}线连通` + (result.usedUrl ? ` · ${result.usedUrl}` : ''),
       )
@@ -1246,38 +1089,6 @@ function onTagsInput(value: string) {
             </p>
           </div>
         </div>
-        <div class="sched-fields" style="margin-top: 0.75rem">
-          <label class="tj-field sched-field">
-            <span class="sched-field__title">图谱召回模式</span>
-            <span class="sched-field__key">memoryRecallMode</span>
-            <select
-              class="tj-input"
-              :value="settings.memoryRecallMode || 'keyword'"
-              @change="
-                patch({
-                  memoryRecallMode: ($event.target as HTMLSelectElement).value as
-                    | 'keyword'
-                    | 'embedding'
-                    | 'both',
-                })
-              "
-            >
-              <option value="keyword">关键词（默认 · 零 API）</option>
-              <option value="embedding">语义向量 embedding</option>
-              <option value="both">双路：embedding + 关键词兜底</option>
-            </select>
-            <p class="sched-field__help">
-              <strong>关键词</strong>：点名/关系/近事规则选取 + 冷档案闪回，不调 embeddings。
-              <strong>embedding</strong>：主 API
-              <code>/embeddings</code>
-              向量相似度补近事（写入时后台建库；失败静默回退）。
-              <strong>双路</strong>：语义补充 + 规则选取合并。
-              需主 API 支持 embeddings；模型字段可填
-              <code>text-embedding-3-small</code>
-              等，费用约一句话量级。
-            </p>
-          </label>
-        </div>
       </div>
 
       <p class="tj-hint">库标识：{{ storageInfo.dbName }}（与其它项目隔离）</p>
@@ -1623,7 +1434,7 @@ function onTagsInput(value: string) {
   max-width: none;
 }
 
-/* 表格记忆参数：单列说明 + 数字框，避免「读深/批大小」半截标签 */
+/* 参数区：单列说明 + 数字框，避免半截标签 */
 .sched-fields {
   display: flex;
   flex-direction: column;

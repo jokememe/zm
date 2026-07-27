@@ -109,7 +109,7 @@ function onRemoveDisciple() {
   if (!d) return
   if (
     !window.confirm(
-      `确定将「${d.name}」从名册除名？关系与表格记忆会一并清理。`,
+      `确定将「${d.name}」从名册除名？关系与记忆图谱同名节点会一并清理。`,
     )
   ) {
     return

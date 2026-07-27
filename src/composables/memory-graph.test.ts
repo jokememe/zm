@@ -9,6 +9,7 @@ import {
   clearMemoryGraph,
   matchNamesInText,
   removeMemoryGraphNodeByName,
+  renameMemoryGraphNode,
   formatMemoryGraphSliceBrief,
   ingestMemoryTag,
 } from './memory-graph'
@@ -174,5 +175,49 @@ describe('persist memory graph', () => {
     expect(again.nodes.some((n) => n.name === '陆承渊')).toBe(false)
     expect(again.edges.length).toBe(0)
     expect(again.nodes.some((n) => n.name === '沈白')).toBe(true)
+  })
+})
+
+describe('renameMemoryGraphNode', () => {
+  beforeEach(() => {
+    clearMemoryGraph()
+  })
+
+  it('renames node in place: beats / attrs / edges survive, old name gone', () => {
+    let g = createEmptyMemoryGraph()
+    g = applyMemoryGraphPatch(g, {
+      nodes: [
+        { name: '沈青岚', attrs: { 身份: '掌门' }, beat: '继任掌门' },
+        { name: '陆承渊', attrs: { 性格: '沉稳' } },
+      ],
+      edges: [{ from: '陆承渊', to: '沈青岚', type: '师徒', note: '亲传' }],
+    })
+    saveMemoryGraph(g)
+
+    const ok = renameMemoryGraphNode('沈青岚', '沈照临')
+    expect(ok).toBe(true)
+
+    const again = loadMemoryGraph()
+    expect(again.nodes.some((n) => n.name === '沈青岚')).toBe(false)
+    const renamed = findName(again, '沈照临')!
+    expect(renamed).toBeTruthy()
+    expect(renamed.attrs['身份']).toBe('掌门')
+    expect(renamed.beats[0]?.text).toBe('继任掌门')
+    // 边按 node.id 关联，改名不断边；切片显示对端为新名
+    const slice = getMemoryGraphSlice(again, '陆承渊')
+    expect(slice.edges.length).toBe(1)
+    expect(slice.edges[0].otherName).toBe('沈照临')
+  })
+
+  it('returns false when old node missing or names equal', () => {
+    saveMemoryGraph(createEmptyMemoryGraph())
+    expect(renameMemoryGraphNode('不存在', '新名')).toBe(false)
+    let g = createEmptyMemoryGraph()
+    g = applyMemoryGraphPatch(g, { nodes: [{ name: '陆承渊' }] })
+    saveMemoryGraph(g)
+    expect(renameMemoryGraphNode('陆承渊', '陆承渊')).toBe(false)
+    expect(renameMemoryGraphNode('陆承渊', '')).toBe(false)
+    // 节点未被误改
+    expect(findName(loadMemoryGraph(), '陆承渊')).toBeTruthy()
   })
 })

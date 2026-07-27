@@ -768,6 +768,24 @@ export function ingestMemoryTag(raw: string, calendar?: { year: number; season: 
   return result
 }
 
+/**
+ * 改名：把旧名节点合并到新名（近事 / 属性 / 关系全部保留）。
+ * 边按 node.id 关联，改名不断边；冷档案历史条目保留旧名（属当时记录，不回改）。
+ * 返回是否有节点被改。
+ */
+export function renameMemoryGraphNode(oldName: string, newName: string): boolean {
+  const from = String(oldName || '').trim()
+  const to = String(newName || '').trim()
+  if (!from || !to || normalizeName(from) === normalizeName(to)) return false
+  const g = loadMemoryGraph()
+  if (!findNodeByName(g, from)) return false
+  const next = applyMemoryGraphPatch(g, {
+    nodes: [{ name: to, formerName: from, kind: 'character' }],
+  })
+  saveMemoryGraph(next)
+  return true
+}
+
 /** 按姓名移除节点及其关联边（除名时） */
 export function removeMemoryGraphNodeByName(name: string): MemoryGraphState {
   const g = loadMemoryGraph()

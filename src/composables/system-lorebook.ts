@@ -21,8 +21,6 @@ import {
   ensureMemoryGraphHydrated,
   selectMemoryGraphForTurn,
 } from '@/composables/memory-graph'
-import { semanticRecall, type SemanticHit } from '@/composables/memory-embed'
-import type { ApiSettings } from '@/sillytavern/types'
 import { saveLorebook, getLorebooks } from '@/sillytavern/database'
 
 const LIVE_ENTRY_ID = 'live-snapshot'
@@ -64,7 +62,6 @@ function buildSystemEntries(extra?: {
   contextDetail?: string | null
   recallQuery?: string | null
   recallCodes?: string[] | null
-  semanticHits?: SemanticHit[]
   currentYear?: number
 }): LorebookEntry[] {
   loadMemoryBank()
@@ -91,12 +88,6 @@ function buildSystemEntries(extra?: {
     })
     if (sel.text.trim()) graphParts.push(sel.text)
   }
-  if (extra?.semanticHits?.length) {
-    const semLines = extra.semanticHits.map(
-      (h) => `· ${h.nodeName}：${h.text}${h.year ? `（${h.year}年${h.season || ''}）` : ''}`,
-    )
-    graphParts.push(`【语义补充】\n${semLines.join('\n')}`)
-  }
   if (graphParts.length) {
     const combined = graphParts.join('\n').slice(0, 2400)
     entries.push(
@@ -106,7 +97,7 @@ function buildSystemEntries(extra?: {
     entries.push(
       makeEntry(
         MEM_GRAPH_ID,
-        '【角色记忆图谱】\n（暂无命中节点。通灵写入角色近事或侧栏「角色记忆」从档案刷新后会生长。）',
+        '【角色记忆图谱】\n（暂无命中节点。通灵正文写入 <memory> 标签后图谱会自动生长。）',
         '系统自动 · 角色记忆',
         3.5,
       ),
@@ -120,20 +111,8 @@ export async function ensureAndRefreshSystemLorebook(extra?: {
   contextDetail?: string | null
   recallQuery?: string | null
   recallCodes?: string[] | null
-  memoryRecallMode?: 'keyword' | 'embedding' | 'both'
-  api?: ApiSettings
   currentYear?: number
 }): Promise<Lorebook> {
-  // 语义召回（embedding / both 模式）
-  let semanticHits: SemanticHit[] = []
-  const mode = extra?.memoryRecallMode || 'keyword'
-  if ((mode === 'embedding' || mode === 'both') && extra?.api) {
-    const query = extra.contextLabel || extra.recallQuery || ''
-    if (query.trim()) {
-      semanticHits = await semanticRecall(extra.api, query, 6).catch(() => [])
-    }
-  }
-
   let currentYear = extra?.currentYear
   if (currentYear == null) {
     try {
@@ -144,7 +123,7 @@ export async function ensureAndRefreshSystemLorebook(extra?: {
     }
   }
 
-  const systemEntries = buildSystemEntries({ ...extra, semanticHits, currentYear })
+  const systemEntries = buildSystemEntries({ ...extra, currentYear })
   const all = await getLorebooks()
   const existing = all.find((b) => b.id === SYSTEM_LOREBOOK_ID)
   const now = Date.now()

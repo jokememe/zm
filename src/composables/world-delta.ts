@@ -1265,6 +1265,7 @@ export function applyWorldDeltaToSnapshot(
 ): { snap: WorldSnapshot; result: ApplyResult } {
   const next = cloneSnap(snap)
   const lines: string[] = []
+  const renames: Array<{ from: string; to: string }> = []
   let changed = false
 
   if (delta.resources) {
@@ -1339,6 +1340,7 @@ export function applyWorldDeltaToSnapshot(
             }
             r.item.name = nn
             rewritePersonNameRefs(next, before, nn)
+            renames.push({ from: before, to: nn })
             lines.push(`弟子改名 ${before} → ${nn}`)
           }
         }
@@ -1673,7 +1675,7 @@ export function applyWorldDeltaToSnapshot(
     // summary is metadata only
   }
 
-  return { snap: next, result: { lines, changed } }
+  return { snap: next, result: { lines, changed, renames } }
 }
 
 /** Empty minimal snapshot for unit tests */

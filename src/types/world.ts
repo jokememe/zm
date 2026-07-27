@@ -226,4 +226,6 @@ export interface ValidateResult {
 export interface ApplyResult {
   lines: string[]
   changed: boolean
+  /** 本批发生的弟子改名（旧名 → 新名），供记忆图谱等外部索引同步 */
+  renames?: Array<{ from: string; to: string }>
 }

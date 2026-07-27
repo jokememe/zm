@@ -344,6 +344,8 @@ describe('disciple rename (no dual roster)', () => {
     expect(next.disciples[0].id).toBe('d1')
     expect(next.treasures?.[0].owner).toBe('陆九')
     expect(result.lines.some((l) => /改名/.test(l))).toBe(true)
+    // 改名对暴露给记忆图谱等外部索引同步
+    expect(result.renames).toEqual([{ from: '陆承渊', to: '陆九' }])
   })
 })
 

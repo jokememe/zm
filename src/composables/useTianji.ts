@@ -49,7 +49,6 @@ import {
   commitVariablesFromEditor,
 } from '@/composables/game-bridge'
 import { ensureAndRefreshSystemLorebook } from '@/composables/system-lorebook'
-import { embedAndStoreBeats } from '@/composables/memory-embed'
 import { recordTurnSum, loadMemoryBank } from '@/composables/memory-lore'
 import { hasMemoryTag } from '@/composables/memory-tag'
 import { runSettle, textFromSettleCompletion } from '@/composables/settle-runner'
@@ -275,8 +274,6 @@ async function syncSystemLore(
     contextDetail: contextDetail.value,
     recallQuery: extra?.recallQuery ?? null,
     recallCodes: extra?.recallCodes ?? null,
-    memoryRecallMode: s.memoryRecallMode || 'keyword',
-    api: s.api,
     currentYear,
   })
   const list = await getLorebooks()
@@ -493,26 +490,20 @@ function restoreVarsFromKept(
 }
 
 /**
- * 主/次/记忆 API 侧调用（settle 与表格记忆共用）。
+ * 主/次 API 侧调用（变量结算 settle 用）。
  * 依赖当前 settings.value。
  */
 async function postChatForSide({
   target,
   body,
 }: {
-  target: 'primary' | 'secondary' | 'memory'
+  target: 'primary' | 'secondary'
   body: Record<string, unknown>
 }): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
   const api = settings.value?.api
   if (!api) return { ok: false, error: '设置未就绪' }
   let ep: { baseUrl: string; apiKey: string; model: string }
-  if (target === 'memory' && api.memory?.enabled) {
-    ep = {
-      baseUrl: normalizeBaseUrl(api.memory.baseUrl || ''),
-      apiKey: String(api.memory.apiKey || ''),
-      model: String(api.memory.model || '').trim(),
-    }
-  } else if (target === 'secondary' && api.secondary?.enabled) {
+  if (target === 'secondary' && api.secondary?.enabled) {
     ep = {
       baseUrl: normalizeBaseUrl(api.secondary.baseUrl || ''),
       apiKey: String(api.secondary.apiKey || ''),
@@ -812,12 +803,7 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
   // ★ 人物记忆图谱：从 <memory> 标签解析角色动作写入 beats
   if (parsed.memory?.trim()) {
     const gs = useGameState()
-    const newBeats = ingestMemoryTag(parsed.memory, { year: gs.calendar.year, season: String(gs.calendar.season) })
-    // 语义向量存储（embedding/both 模式，后台不阻塞）
-    const recallMode = settings.value?.memoryRecallMode || 'keyword'
-    if (newBeats.length && recallMode !== 'keyword' && settings.value) {
-      void embedAndStoreBeats(settings.value.api, newBeats)
-    }
+    ingestMemoryTag(parsed.memory, { year: gs.calendar.year, season: String(gs.calendar.season) })
   }
 
   const content = hasTags
@@ -1361,8 +1347,6 @@ export function useTianji() {
         api: {
           ...DEFAULT_SETTINGS.api,
           secondary: { ...DEFAULT_SETTINGS.api.secondary! },
-          memory: { ...DEFAULT_SETTINGS.api.memory! },
-          recall: { ...DEFAULT_SETTINGS.api.recall! },
         },
       }
     }
@@ -1384,18 +1368,6 @@ export function useTianji() {
             ? JSON.parse(JSON.stringify(partial.api.secondary))
             : {}),
         },
-        memory: {
-          ...(plainBase.api.memory ?? DEFAULT_SETTINGS.api.memory!),
-          ...(partial.api.memory
-            ? JSON.parse(JSON.stringify(partial.api.memory))
-            : {}),
-        },
-        recall: {
-          ...(plainBase.api.recall ?? DEFAULT_SETTINGS.api.recall!),
-          ...(partial.api.recall
-            ? JSON.parse(JSON.stringify(partial.api.recall))
-            : {}),
-        },
       }
     }
     // 规范化 URL；数组字段保证是纯数组
@@ -1408,18 +1380,6 @@ export function useTianji() {
             baseUrl: normalizeBaseUrl(next.api.secondary.baseUrl || ''),
           }
         : next.api.secondary,
-      memory: next.api.memory
-        ? {
-            ...next.api.memory,
-            baseUrl: normalizeBaseUrl(next.api.memory.baseUrl || ''),
-          }
-        : next.api.memory,
-      recall: next.api.recall
-        ? {
-            ...next.api.recall,
-            baseUrl: normalizeBaseUrl(next.api.recall.baseUrl || ''),
-          }
-        : next.api.recall,
     }
     next.activeLorebookIds = Array.isArray(next.activeLorebookIds)
       ? [...next.activeLorebookIds]
@@ -1427,6 +1387,17 @@ export function useTianji() {
     next.customTags = Array.isArray(next.customTags) ? [...next.customTags] : [...DEFAULT_SETTINGS.customTags]
     settings.value = next
     saveApiCache(next.api)
+
+    // 掌门称谓即游戏内掌门名：密匣改名时同步经营态与记忆图谱
+    const prevUser = String(plainBase.userName || '').trim()
+    const nextUser = String(next.userName || '').trim()
+    if (nextUser && nextUser !== prevUser) {
+      try {
+        useGameState().renameMaster(nextUser)
+      } catch (e) {
+        console.warn('[密匣] 掌门改名同步失败', e)
+      }
+    }
 
     try {
       if (!ready.value) {

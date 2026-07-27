@@ -18,7 +18,7 @@ function onRemove(d: { id: string; name: string }, ev?: Event) {
   ev?.stopPropagation()
   if (
     !confirm(
-      `确定将「${d.name}」从名册除名？\n关系、继位观察、灵田指派与表格记忆中的同名行会一并清理。此操作不可自动恢复。`,
+      `确定将「${d.name}」从名册除名？\n关系、继位观察、灵田指派与记忆图谱中的同名节点会一并清理。此操作不可自动恢复。`,
     )
   ) {
     return

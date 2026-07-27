@@ -335,7 +335,7 @@ function cardBrief(n: MemoryGraphNode): string {
             </li>
           </ul>
         </section>
-        <p v-else class="muted detail-block">尚无近事。点「从表格刷新」可从档案字段补种。</p>
+        <p v-else class="muted detail-block">尚无近事。通灵正文写入 &lt;memory&gt; 标签后会自动累积。</p>
 
         <section v-if="selectedSlice.edges.length" class="detail-block">
           <h4>关系（{{ selectedSlice.edges.length }}）</h4>
