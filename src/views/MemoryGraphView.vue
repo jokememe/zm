@@ -4,10 +4,14 @@ import Icon from '@/components/ui/Icon.vue'
 import { useTianji } from '@/composables/useTianji'
 import { useGameState } from '@/composables/useGameState'
 import {
+  appendNodeBeat,
   ensureMemoryGraphHydrated,
   formatMemoryGraphSliceBrief,
   getMemoryGraphSlice,
+  removeNodeBeat,
+  seedRosterNodes,
   selectMemoryGraphForTurn,
+  setNodeTriggers,
   type MemoryGraphNode,
   type MemoryGraphState,
 } from '@/composables/memory-graph'
@@ -22,10 +26,22 @@ const tick = ref(0)
 const search = ref('')
 const selectedId = ref<string | null>(null)
 const showExtras = ref(false)
+const draftBeat = ref('')
+const draftTriggers = ref('')
 
 void hydrateMemoryArchive().then(() => {
+  // 名册种子：至少有角色壳
+  seedRosterNodes(
+    disciples.value
+      .map((d) => d.name)
+      .concat(masterName.value ? [String(masterName.value)] : []),
+  )
   tick.value++
 })
+
+function bump() {
+  tick.value++
+}
 
 const typeClass: Record<string, string> = {
   师徒: 'tag-moon',
@@ -117,6 +133,40 @@ watch(filteredCharacters, (list) => {
 
 function selectNode(n: MemoryGraphNode) {
   selectedId.value = n.id
+  draftTriggers.value = (n.triggers || []).join('，')
+  draftBeat.value = ''
+}
+
+function saveTriggers() {
+  const n = selectedNode.value
+  if (!n) return
+  setNodeTriggers(n.name, draftTriggers.value)
+  bump()
+  toast.success('触发词已保存', n.name)
+}
+
+function addBeat() {
+  const n = selectedNode.value
+  const t = draftBeat.value.trim()
+  if (!n || !t) {
+    toast.warn('请填写近事', '')
+    return
+  }
+  appendNodeBeat(n.name, t, {
+    year: Number(calendar.year) || 0,
+    season: String(calendar.season || ''),
+  })
+  draftBeat.value = ''
+  bump()
+  toast.success('近事已写入', n.name)
+}
+
+function dropBeat(beatId: string) {
+  const n = selectedNode.value
+  if (!n) return
+  if (!confirm('删除这条热近事？')) return
+  removeNodeBeat(n.name, beatId)
+  bump()
 }
 
 function injectSelected() {
@@ -193,7 +243,7 @@ function cardBrief(n: MemoryGraphNode): string {
       <div>
         <h2><span class="ornament" />角色记忆</h2>
         <p class="section-desc">
-          按角色看近事与关系；热近事在节点上，更早的进冷档案。推演时按线索本地选取，不走旧召回 API。
+          人物近事与关系（L1）。推演前系统预取注入；可手改近事与触发词。长线摘要在短/中/长，不在本页。
         </p>
       </div>
       <div class="section-actions">
@@ -264,7 +314,8 @@ function cardBrief(n: MemoryGraphNode): string {
       <div>
         <strong>尚无角色记忆</strong>
         <p class="muted">
-          通灵正文写入 &lt;memory&gt; 标签后会自动生长：每行「角色名|做了什么」，关系变化写入角色关系网。
+          名册有弟子时会自动建空节点。通灵写
+          &lt;memory&gt;角色名|做了什么&lt;/memory&gt;，或正文出现人名时兜底记近事；也可在有角色后于右侧手改。
         </p>
       </div>
     </div>
@@ -324,18 +375,50 @@ function cardBrief(n: MemoryGraphNode): string {
           </button>
         </header>
 
-        <section v-if="selectedNode.beats?.length" class="detail-block">
-          <h4>近事（{{ selectedNode.beats.length }}）</h4>
-          <ul class="beat-list">
-            <li v-for="b in selectedNode.beats" :key="b.id">
-              <span v-if="b.year != null" class="beat-cal muted"
-                >{{ b.year }}年{{ b.season || '' }}</span
-              >
-              {{ b.text }}
+        <section class="detail-block">
+          <h4>近事（{{ selectedNode.beats?.length || 0 }}）</h4>
+          <ul v-if="selectedNode.beats?.length" class="beat-list">
+            <li v-for="b in selectedNode.beats" :key="b.id" class="beat-row">
+              <div>
+                <span v-if="b.year != null" class="beat-cal muted"
+                  >{{ b.year }}年{{ b.season || '' }}</span
+                >
+                {{ b.text }}
+              </div>
+              <button type="button" class="btn btn-ghost btn-sm" @click="dropBeat(b.id)">
+                删
+              </button>
             </li>
           </ul>
+          <p v-else class="muted">尚无近事。可下方手写，或通灵 &lt;memory&gt; / 正文兜底。</p>
+          <div class="edit-row">
+            <input
+              v-model="draftBeat"
+              type="text"
+              class="filter-search"
+              placeholder="手写一条近事…"
+              @keydown.enter.prevent="addBeat"
+            />
+            <button type="button" class="btn btn-soft btn-sm" @click="addBeat">写入</button>
+          </div>
         </section>
-        <p v-else class="muted detail-block">尚无近事。通灵正文写入 &lt;memory&gt; 标签后会自动累积。</p>
+
+        <section class="detail-block">
+          <h4>触发词</h4>
+          <p class="muted" style="margin: 0 0 0.4rem; font-size: 0.8rem">
+            用户话/正文命中时优先选入（逗号分隔）
+          </p>
+          <div class="edit-row">
+            <input
+              v-model="draftTriggers"
+              type="text"
+              class="filter-search"
+              placeholder="如：赤焰令，比剑之约"
+              @keydown.enter.prevent="saveTriggers"
+            />
+            <button type="button" class="btn btn-soft btn-sm" @click="saveTriggers">保存</button>
+          </div>
+        </section>
 
         <section v-if="selectedSlice.edges.length" class="detail-block">
           <h4>关系（{{ selectedSlice.edges.length }}）</h4>
@@ -493,6 +576,26 @@ function cardBrief(n: MemoryGraphNode): string {
 .node-card.active {
   outline: 1px solid color-mix(in srgb, var(--accent, #7b6bb0) 55%, transparent);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent, #7b6bb0) 20%, transparent);
+}
+
+.edit-row {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+  margin-top: 0.5rem;
+}
+
+.edit-row .filter-search {
+  flex: 1;
+  max-width: none;
+  min-width: 0;
+}
+
+.beat-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  align-items: flex-start;
 }
 
 .node-card header,

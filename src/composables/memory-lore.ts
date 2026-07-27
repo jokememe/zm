@@ -17,6 +17,8 @@ const SHORT_MAX = 5
 /** 每累计这么多短期条，折叠进中期 */
 const COMPRESS_EVERY = 5
 const MID_MAX_CHARS = 900
+/** 中期过长时，整段再压进长期一条「阶段概览」 */
+const MID_PROMOTE_CHARS = 720
 const LONG_MAX = 24
 
 const LONG_HINT =
@@ -111,7 +113,15 @@ export function recordTurnSum(sum: string, meta?: { context?: string | null }) {
   if (bank.turn % COMPRESS_EVERY === 0 && bank.short.length) {
     const chunk = bank.short.join('；')
     bank.mid = [bank.mid, chunk].filter(Boolean).join('\n')
-    if (bank.mid.length > MID_MAX_CHARS) {
+    // P2：中期过长 → 晋升一条长期概览，中期只留尾部
+    if (bank.mid.length > MID_PROMOTE_CHARS) {
+      const promote = bank.mid.slice(0, Math.min(280, bank.mid.length)).replace(/\s+/g, ' ')
+      bank.long.push(`第${bank.turn}回〔阶段概览〕${promote}${bank.mid.length > 280 ? '…' : ''}`)
+      if (bank.long.length > LONG_MAX) {
+        bank.long = bank.long.slice(-LONG_MAX)
+      }
+      bank.mid = '…' + bank.mid.slice(-(MID_MAX_CHARS - 1))
+    } else if (bank.mid.length > MID_MAX_CHARS) {
       bank.mid = '…' + bank.mid.slice(-(MID_MAX_CHARS - 1))
     }
   }
@@ -125,6 +135,26 @@ export function recordTurnSum(sum: string, meta?: { context?: string | null }) {
 
   saveMemoryBank()
   return bank
+}
+
+/** P2：注入用短块（靠前历史感 · 控制字数） */
+export function formatHistoryMemoryBlock(b: MemoryBank = bank, maxChars = 1200): string {
+  loadMemoryBank()
+  const parts = [formatLongMemory(b), formatMidMemory(b)].filter((s) => !/尚无|尚未/.test(s))
+  let text = parts.join('\n')
+  if (text.length > maxChars) text = text.slice(0, maxChars - 1) + '…'
+  if (!text.trim()) {
+    return '【长线摘要】尚无中长期脉络。推演 <sum> 累积后会形成目录。'
+  }
+  return `【长线摘要 · 目录】\n${text}`
+}
+
+/** P2：注入用近端状态（短期贴最近） */
+export function formatRecentMemoryBlock(b: MemoryBank = bank, maxChars = 900): string {
+  loadMemoryBank()
+  let text = formatShortMemory(b)
+  if (text.length > maxChars) text = text.slice(0, maxChars - 1) + '…'
+  return text
 }
 
 export function formatShortMemory(b: MemoryBank = bank): string {

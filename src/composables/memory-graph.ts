@@ -63,6 +63,11 @@ export interface MemoryGraphNode {
   name: string
   /** 展示用属性（性格、位置、身份等） */
   attrs: Record<string, string>
+  /**
+   * 触发词（学 Nocturne disclosure/glossary）：
+   * 用户话/正文命中任一词则优先选入本节点。
+   */
+  triggers?: string[]
   beats: MemoryGraphBeat[]
   updatedAt: number
 }
@@ -201,6 +206,7 @@ export function applyMemoryGraphPatch(
         kind: np.kind || 'character',
         name,
         attrs: {},
+        triggers: [],
         beats: [],
         updatedAt: ts,
       }
@@ -409,15 +415,29 @@ export function selectMemoryGraphForTurn(input: SelectGraphForTurnInput): {
   let hit = matchNamesInText(input.query, rosterUniq)
   const namedHits = [...hit]
 
+  const q = String(input.query || '').trim()
+
+  // 触发词优先（disclosure / glossary）
+  if (q.length >= 1 && hit.length < maxNodes) {
+    for (const n of g.nodes) {
+      if (hit.length >= maxNodes) break
+      const trigs = (n.triggers || []).map((t) => String(t || '').trim()).filter((t) => t.length >= 1)
+      if (!trigs.length) continue
+      if (trigs.some((t) => q.includes(t))) {
+        if (!hit.includes(n.name)) hit.push(n.name)
+      }
+    }
+  }
+
   // 属性/近事关键词弱匹配（query 片段出现在 attrs/beats）
   if (hit.length < maxNodes) {
-    const q = String(input.query || '').trim()
     if (q.length >= 2) {
       const scored = g.nodes
         .map((n) => {
           let score = 0
           const hay = [
             n.name,
+            ...(n.triggers || []),
             ...Object.values(n.attrs || {}),
             ...(n.beats || []).map((b) => b.text),
           ].join('\n')
@@ -657,6 +677,19 @@ function normalizeGraphState(o: Partial<MemoryGraphState>): MemoryGraphState {
               season: b?.season != null ? String(b.season) : undefined,
             }))
           : [],
+        triggers: (() => {
+          const rawTr = (n as MemoryGraphNode)?.triggers as unknown
+          if (Array.isArray(rawTr)) {
+            return rawTr.map((t) => String(t || '').trim()).filter(Boolean)
+          }
+          if (typeof rawTr === 'string') {
+            return rawTr
+              .split(/[,，;；|]/)
+              .map((t) => t.trim())
+              .filter(Boolean)
+          }
+          return []
+        })(),
         updatedAt: Number(n?.updatedAt) || 0,
       }))
     : []
@@ -710,6 +743,7 @@ export interface IngestedBeat {
 /**
  * 解析 <memory> 标签文本并写入图谱。
  * 格式：每行 "角色名|做了什么|关系变化"（后两段可省略）。
+ * 也接受无竖线的「角色名：做了什么」弱格式。
  * 零额外 API 调用，纯本地解析。
  * 返回新写入的 beat 列表（供 embedding 存储）。
  */
@@ -717,15 +751,27 @@ export function ingestMemoryTag(raw: string, calendar?: { year: number; season: 
   const lines = (raw || '')
     .split('\n')
     .map((l) => l.trim())
-    .filter((l) => l && l.includes('|'))
+    .filter(Boolean)
   if (!lines.length) return []
 
   const g = loadMemoryGraph()
   const patch: MemoryGraphPatch = { nodes: [], edges: [] }
 
   for (const line of lines) {
-    const [namePart, actionPart, relationPart] = line.split('|').map((s) => s.trim())
-    const name = (namePart || '').replace(/^\[|\]$/g, '')
+    let name = ''
+    let actionPart = ''
+    let relationPart = ''
+    if (line.includes('|')) {
+      const parts = line.split('|').map((s) => s.trim())
+      name = (parts[0] || '').replace(/^\[|\]$/g, '')
+      actionPart = parts[1] || ''
+      relationPart = parts[2] || ''
+    } else {
+      const m = line.match(/^(.{2,12})[：:]\s*(.+)$/)
+      if (!m) continue
+      name = m[1].trim()
+      actionPart = m[2].trim()
+    }
     if (!name) continue
 
     const beat = actionPart || line
@@ -747,6 +793,16 @@ export function ingestMemoryTag(raw: string, calendar?: { year: number; season: 
           type: normalizeEdgeType(m[2].trim()),
           note: beat,
         })
+      } else if (relationPart.includes('：') || relationPart.includes(':')) {
+        const [to, typ] = relationPart.split(/[：:]/).map((s) => s.trim())
+        if (to) {
+          patch.edges!.push({
+            from: name,
+            to,
+            type: normalizeEdgeType(typ),
+            note: beat,
+          })
+        }
       }
     }
   }
@@ -766,6 +822,207 @@ export function ingestMemoryTag(raw: string, calendar?: { year: number; season: 
     }
   }
   return result
+}
+
+/**
+ * P0：名册种子 — 弟子/掌门至少有角色空节点，避免侧栏永久空白。
+ * 不写假近事；只保证「有人可点」。
+ */
+export function seedRosterNodes(
+  names: Array<string | { name: string; attrs?: Record<string, string> }>,
+): number {
+  const g = loadMemoryGraph()
+  const patch: MemoryGraphPatch = { nodes: [] }
+  let added = 0
+  for (const raw of names) {
+    const name = typeof raw === 'string' ? raw.trim() : String(raw?.name || '').trim()
+    if (!name || name.length < 2) continue
+    if (findNodeByName(g, name) || patch.nodes!.some((n) => normalizeName(n.name) === normalizeName(name))) {
+      continue
+    }
+    const attrs = typeof raw === 'string' ? undefined : raw.attrs
+    patch.nodes!.push({ name, kind: 'character', attrs })
+    added++
+  }
+  if (!added) return 0
+  // 已有节点也要补 attrs（身份等），用 apply 合并
+  const withMerge: MemoryGraphPatch = { nodes: [] }
+  for (const raw of names) {
+    const name = typeof raw === 'string' ? raw.trim() : String(raw?.name || '').trim()
+    if (!name || name.length < 2) continue
+    const attrs = typeof raw === 'string' ? undefined : raw.attrs
+    withMerge.nodes!.push({ name, kind: 'character', attrs })
+  }
+  const next = applyMemoryGraphPatch(g, withMerge)
+  saveMemoryGraph(next)
+  return added
+}
+
+const FALLBACK_STOP = new Set([
+  '掌门',
+  '弟子',
+  '宗门',
+  '今日',
+  '本座',
+  '于是',
+  '突然',
+  '但是',
+  '如果',
+  '已经',
+  '可以',
+  '什么',
+  '一个',
+  '我们',
+  '他们',
+  '你们',
+  '自己',
+  '这里',
+  '那里',
+  '时候',
+  '事情',
+  '之后',
+  '之前',
+  '因为',
+  '所以',
+  '然后',
+  '只是',
+  '还是',
+  '或者',
+  '以及',
+  '进行',
+  '开始',
+  '继续',
+  '回来',
+  '出去',
+  '进来',
+  '说道',
+  '问道',
+  '答道',
+])
+
+/**
+ * P0：正文兜底生长 — 名册人名出现在正文/用户话时，记一条弱近事。
+ * 强度低于显式 <memory>；同文去重；每回最多 maxBeats 条。
+ */
+export function ingestNarrativeFallback(
+  text: string,
+  rosterNames: string[],
+  calendar?: { year: number; season: string },
+  opts?: { maxBeats?: number; source?: string },
+): IngestedBeat[] {
+  const body = String(text || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+  if (body.length < 8) return []
+  const roster = [...new Set((rosterNames || []).map((n) => String(n || '').trim()).filter((n) => n.length >= 2))]
+  if (!roster.length) return []
+
+  // 先确保空节点存在
+  seedRosterNodes(roster)
+
+  const hits = matchNamesInText(body, roster)
+  if (!hits.length) return []
+
+  const maxBeats = Math.max(1, opts?.maxBeats ?? 3)
+  const g = loadMemoryGraph()
+  const patch: MemoryGraphPatch = { nodes: [] }
+  const snippet = body.slice(0, 48).replace(/\s+/g, '')
+  const label = opts?.source === 'user' ? '提及' : '出场'
+  let count = 0
+  for (const name of hits) {
+    if (count >= maxBeats) break
+    if (FALLBACK_STOP.has(name)) continue
+    const node = findNodeByName(g, name)
+    const beat = `〔${label}〕${snippet}${body.length > 48 ? '…' : ''}`
+    if (node?.beats?.some((b) => b.text === beat || (b.text.startsWith(`〔${label}〕`) && body.includes(name) && b.text.includes(snippet.slice(0, 16))))) {
+      continue
+    }
+    patch.nodes!.push({
+      name,
+      kind: 'character',
+      beat,
+      beatYear: calendar?.year,
+      beatSeason: calendar?.season,
+    })
+    count++
+  }
+  if (!patch.nodes!.length) return []
+  const next = applyMemoryGraphPatch(g, patch)
+  saveMemoryGraph(next)
+  const result: IngestedBeat[] = []
+  for (const np of patch.nodes!) {
+    if (!np.beat) continue
+    const node = findNodeByName(next, np.name)
+    const b = node?.beats?.find((x) => x.text === np.beat)
+    if (b) result.push({ id: b.id, text: b.text, nodeName: np.name, year: b.year, season: b.season })
+  }
+  return result
+}
+
+/** P1：追加/改写近事 */
+export function appendNodeBeat(
+  name: string,
+  text: string,
+  calendar?: { year: number; season: string },
+): boolean {
+  const t = String(text || '').trim()
+  const n = String(name || '').trim()
+  if (!n || !t) return false
+  const g = loadMemoryGraph()
+  const next = applyMemoryGraphPatch(g, {
+    nodes: [
+      {
+        name: n,
+        kind: 'character',
+        beat: t,
+        beatYear: calendar?.year,
+        beatSeason: calendar?.season,
+      },
+    ],
+  })
+  saveMemoryGraph(next)
+  return true
+}
+
+/** P1：删除某条热近事（冷档案保留历史 id 不强制删） */
+export function removeNodeBeat(name: string, beatId: string): boolean {
+  const g = loadMemoryGraph()
+  const node = findNodeByName(g, name)
+  if (!node || !beatId) return false
+  const before = node.beats.length
+  node.beats = (node.beats || []).filter((b) => b.id !== beatId)
+  if (node.beats.length === before) return false
+  node.updatedAt = now()
+  saveMemoryGraph(g)
+  return true
+}
+
+/** P1：设置节点触发词（逗号分隔或数组） */
+export function setNodeTriggers(name: string, triggers: string[] | string): boolean {
+  const g = loadMemoryGraph()
+  const node = findNodeByName(g, name)
+  if (!node) return false
+  const list = Array.isArray(triggers)
+    ? triggers
+    : String(triggers || '')
+        .split(/[,，;；|]/)
+        .map((t) => t.trim())
+        .filter(Boolean)
+  node.triggers = [...new Set(list)].slice(0, 24)
+  node.updatedAt = now()
+  saveMemoryGraph(g)
+  return true
+}
+
+/** P1：设置/合并档案字段 */
+export function setNodeAttr(name: string, key: string, value: string): boolean {
+  const k = cleanColumnName(key)
+  const n = String(name || '').trim()
+  if (!n || !k) return false
+  const g = loadMemoryGraph()
+  const next = applyMemoryGraphPatch(g, {
+    nodes: [{ name: n, kind: 'character', attrs: { [k]: String(value ?? '').trim() } }],
+  })
+  saveMemoryGraph(next)
+  return true
 }
 
 /**
@@ -803,10 +1060,15 @@ export function removeMemoryGraphNodeByName(name: string): MemoryGraphState {
 
 /**
  * 确保图谱已加载（内存态/持久化）。
- * 图谱只由 <memory> 标签生长（ingestMemoryTag），不再从任何表格投影。
+ * 生长：<memory> + 正文兜底 + 名册种子；不再从经营表投影全文。
  */
-export function ensureMemoryGraphHydrated(): MemoryGraphState {
-  return loadMemoryGraph()
+export function ensureMemoryGraphHydrated(roster?: string[]): MemoryGraphState {
+  const g = loadMemoryGraph()
+  if (roster?.length) {
+    seedRosterNodes(roster)
+    return loadMemoryGraph()
+  }
+  return g
 }
 
 /** 弟子详情 / 注入天机用短摘要 */

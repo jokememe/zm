@@ -57,7 +57,10 @@ import {
   ensureMemoryGraphHydrated,
   selectMemoryGraphForTurn,
   ingestMemoryTag,
+  ingestNarrativeFallback,
+  seedRosterNodes,
 } from '@/composables/memory-graph'
+import { embedAndStoreBeats } from '@/composables/memory-embed'
 import { snapshotWorldState, restoreWorldState } from '@/composables/world-state'
 import {
   isApiConfigured,
@@ -269,12 +272,29 @@ async function syncSystemLore(
   } catch {
     currentYear = undefined
   }
+  let roster: string[] = []
+  try {
+    const gs = useGameState()
+    roster = [
+      ...gs.disciples.value.map((d) => d.name),
+      String(gs.masterName.value || ''),
+    ].filter(Boolean)
+    seedRosterNodes(roster)
+  } catch {
+    /* ignore */
+  }
   const book = await ensureAndRefreshSystemLorebook({
     contextLabel: contextInjected.value,
     contextDetail: contextDetail.value,
     recallQuery: extra?.recallQuery ?? null,
     recallCodes: extra?.recallCodes ?? null,
     currentYear,
+    rosterNames: roster,
+    memoryRecallMode: s.memoryRecallMode || 'keyword',
+    api: s.api,
+    embeddingModel: s.embeddingModel || undefined,
+    memoryServerUrl: s.memoryServerUrl || undefined,
+    memoryServerToken: s.memoryServerToken || undefined,
   })
   const list = await getLorebooks()
   lorebooks.value = list
@@ -786,24 +806,83 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
   // 会话气数键与游戏资源对齐（只读同步），不应用 LLM vars 补丁
   const settled = mergeSessionWithGame({})
 
-  // ★ 短/中/长期记忆：写入 <sum> → 系统世界书 constant 条目
-  // 角色图谱由 ingestMemoryTag 写入，下次推演前 syncSystemLore 会重读注入
+  // ★ L2 短/中/长期：<sum> → memory-lore
+  // ★ L1 图谱：<memory> + 可选正文兜底；下次推演前 syncSystemLore 注入
   const memoryTagged = hasMemoryTag(raw)
-  if (parsed.sum?.trim() || memoryTagged) {
-    if (parsed.sum?.trim()) {
-      recordTurnSum(parsed.sum, { context: contextInjected.value })
-    }
-    await ensureAndRefreshSystemLorebook({
-      contextLabel: contextInjected.value,
-      contextDetail: contextDetail.value,
+  const gsMem = useGameState()
+  const cal = {
+    year: gsMem.calendar.year,
+    season: String(gsMem.calendar.season),
+  }
+  const rosterNames = [
+    ...gsMem.disciples.value.map((d) => d.name),
+    String(gsMem.masterName.value || ''),
+  ].filter(Boolean)
+  seedRosterNodes(
+    gsMem.disciples.value
+      .map((d) => ({
+        name: d.name,
+        attrs: {
+          ...(d.realm ? { 身份: `${d.role || '弟子'} · ${d.realm}` } : {}),
+          ...(d.status ? { 状态: String(d.status) } : {}),
+        },
+      }))
+      .concat(
+        gsMem.masterName.value
+          ? [{ name: String(gsMem.masterName.value), attrs: { 身份: '掌门' } }]
+          : [],
+      ),
+  )
+
+  let newBeats: Array<{
+    id: string
+    text: string
+    nodeName: string
+    year?: number
+    season?: string
+  }> = []
+  if (parsed.memory?.trim()) {
+    newBeats = ingestMemoryTag(parsed.memory, cal)
+  }
+  // P0 正文兜底：无标签或标签漏人时，名册人名出场仍记弱近事
+  const fallbackOn = settings.value?.memoryNarrativeFallback !== false
+  if (fallbackOn && rosterNames.length) {
+    const main = parsed.maintext || cleanedText || raw
+    const extra = ingestNarrativeFallback(main, rosterNames, cal, {
+      maxBeats: 3,
+      source: 'story',
     })
-    lorebooks.value = await getLorebooks()
+    if (extra.length) newBeats = [...newBeats, ...extra]
   }
 
-  // ★ 人物记忆图谱：从 <memory> 标签解析角色动作写入 beats
-  if (parsed.memory?.trim()) {
-    const gs = useGameState()
-    ingestMemoryTag(parsed.memory, { year: gs.calendar.year, season: String(gs.calendar.season) })
+  if (parsed.sum?.trim()) {
+    recordTurnSum(parsed.sum, { context: contextInjected.value })
+  }
+
+  // L3：embedding 模式后台建库（不阻塞）
+  const recallMode = settings.value?.memoryRecallMode || 'keyword'
+  if (
+    newBeats.length &&
+    (recallMode === 'embedding' || recallMode === 'both') &&
+    settings.value?.api
+  ) {
+    void embedAndStoreBeats(
+      settings.value.api,
+      newBeats,
+      settings.value.embeddingModel || undefined,
+    )
+  }
+
+  if (parsed.sum?.trim() || memoryTagged || newBeats.length) {
+    if (settings.value) await syncSystemLore(settings.value)
+    else {
+      await ensureAndRefreshSystemLorebook({
+        contextLabel: contextInjected.value,
+        contextDetail: contextDetail.value,
+        rosterNames,
+      })
+      lorebooks.value = await getLorebooks()
+    }
   }
 
   const content = hasTags

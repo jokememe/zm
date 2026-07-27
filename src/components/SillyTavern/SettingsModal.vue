@@ -1079,15 +1079,114 @@ function onTagsInput(value: string) {
       <div class="api-panel" style="margin-top: 0.85rem">
         <div class="secondary-head">
           <div>
-            <h3 class="api-panel__title">推演时注入 · 角色记忆图谱</h3>
+            <h3 class="api-panel__title">推演时注入 · 角色记忆（定稿 L1–L3）</h3>
             <p class="tj-hint" style="margin: 0">
-              主路径（零强制 API）：
-              <strong>角色图谱选取</strong>
-              （点名 / 关系 / 近事）+ <strong>冷档案闪回</strong> + 短中长总结。
-              世界书只写【角色记忆图谱】，不写整表、不写纪要 dump。
+              主路径（零强制 API）：Boot 锚 + 长线/近端摘要 +
+              <strong>角色图谱</strong>
+              （点名 / 触发词 / 近事 / 冷档案）。
               完整浏览：侧栏「角色记忆」。
             </p>
           </div>
+        </div>
+        <div class="sched-fields" style="margin-top: 0.75rem">
+          <label class="tj-field sched-field">
+            <span class="sched-field__title">正文兜底生长</span>
+            <span class="sched-field__key">memoryNarrativeFallback</span>
+            <label class="switch" style="margin-top: 0.35rem">
+              <input
+                type="checkbox"
+                :checked="settings.memoryNarrativeFallback !== false"
+                @change="
+                  patch({
+                    memoryNarrativeFallback: ($event.target as HTMLInputElement).checked,
+                  })
+                "
+              />
+              <span class="switch__ui" />
+              <span class="switch__label">{{
+                settings.memoryNarrativeFallback !== false ? '已开启（推荐）' : '已关闭'
+              }}</span>
+            </label>
+            <p class="sched-field__help">
+              开启后：正文出现名册人名时自动记弱近事，避免模型漏写 &lt;memory&gt; 导致空图。
+            </p>
+          </label>
+
+          <label class="tj-field sched-field">
+            <span class="sched-field__title">图谱召回模式</span>
+            <span class="sched-field__key">memoryRecallMode</span>
+            <select
+              class="tj-input"
+              :value="settings.memoryRecallMode || 'keyword'"
+              @change="
+                patch({
+                  memoryRecallMode: ($event.target as HTMLSelectElement).value as
+                    | 'keyword'
+                    | 'embedding'
+                    | 'both',
+                })
+              "
+            >
+              <option value="keyword">关键词（默认 · 零 API）</option>
+              <option value="embedding">语义向量 embedding</option>
+              <option value="both">双路：embedding + 关键词</option>
+            </select>
+            <p class="sched-field__help">
+              embedding / 双路需主 API 支持 /embeddings；失败静默回退关键词。可填下方模型名。
+            </p>
+          </label>
+
+          <label class="tj-field sched-field">
+            <span class="sched-field__title">Embedding 模型</span>
+            <span class="sched-field__key">embeddingModel · 可空</span>
+            <input
+              class="tj-input"
+              type="text"
+              :value="settings.embeddingModel || ''"
+              placeholder="空=用主 API model；如 text-embedding-3-small"
+              @change="
+                patch({
+                  embeddingModel: ($event.target as HTMLInputElement).value.trim(),
+                })
+              "
+            />
+          </label>
+
+          <label class="tj-field sched-field">
+            <span class="sched-field__title">外置记忆服 URL（可选）</span>
+            <span class="sched-field__key">memoryServerUrl</span>
+            <input
+              class="tj-input"
+              type="url"
+              :value="settings.memoryServerUrl || ''"
+              placeholder="https://你的VPS/…  约定 GET /memory/search?q="
+              @change="
+                patch({
+                  memoryServerUrl: ($event.target as HTMLInputElement).value.trim(),
+                })
+              "
+            />
+            <p class="sched-field__help">
+              Nocturne 类 HTTP 补充；失败不挡推演。Token 填下方。
+            </p>
+          </label>
+
+          <label class="tj-field sched-field">
+            <span class="sched-field__title">外置记忆 Token</span>
+            <span class="sched-field__key">memoryServerToken</span>
+            <input
+              class="tj-input"
+              type="password"
+              autocomplete="off"
+              :value="settings.memoryServerToken || ''"
+              placeholder="Bearer token，可空"
+              @change="
+                patch({
+                  memoryServerToken: ($event.target as HTMLInputElement).value.trim(),
+                })
+              "
+            />
+          </label>
         </div>
       </div>
 

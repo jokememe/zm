@@ -191,6 +191,20 @@ export interface AppSettings {
    */
   tableMemoryEnabled?: boolean;
   /**
+   * 记忆图谱召回模式（密匣可改）：
+   * - keyword：点名/触发/近事 + 冷档案（默认 · 零 embeddings）
+   * - embedding：语义向量补充
+   * - both：规则 + 语义
+   */
+  memoryRecallMode?: 'keyword' | 'embedding' | 'both';
+  /** 正文/用户话出现名册人名时弱写入近事（P0 兜底，默认 true） */
+  memoryNarrativeFallback?: boolean;
+  /** embedding 模型名；空则用主 API model 字段 */
+  embeddingModel?: string;
+  /** 可选外置记忆服务 Base URL（Nocturne 类 HTTP，失败静默） */
+  memoryServerUrl?: string;
+  memoryServerToken?: string;
+  /**
    * 拼装时压缩隐藏楼层：助手文只保留 maintext/sum，去掉 thinking / option / Memory 原文。
    * 远端楼进一步只留小结。默认 true（解决整段 raw 撑到数万 token）。
    */
@@ -281,6 +295,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   settleJailbreakPrompt: '',
   historyKeepMessages: 12,
   tableMemoryEnabled: true,
+  memoryRecallMode: 'keyword',
+  memoryNarrativeFallback: true,
+  embeddingModel: '',
+  memoryServerUrl: '',
+  memoryServerToken: '',
   historyCompress: true,
   historyMaxTokens: 12000,
   tableMemoryScheduler: {

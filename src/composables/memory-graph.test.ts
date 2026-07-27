@@ -12,6 +12,10 @@ import {
   renameMemoryGraphNode,
   formatMemoryGraphSliceBrief,
   ingestMemoryTag,
+  seedRosterNodes,
+  ingestNarrativeFallback,
+  setNodeTriggers,
+  appendNodeBeat,
 } from './memory-graph'
 
 function findName(g: ReturnType<typeof createEmptyMemoryGraph>, name: string) {
@@ -85,6 +89,59 @@ describe('ingestMemoryTag (shipped growth path)', () => {
     const g = loadMemoryGraph()
     const node = findName(g, '陆承渊')!
     expect(node.beats.filter((b) => b.text === '闭关破境').length).toBe(1)
+  })
+
+  it('accepts 名：事 weak lines without pipe', () => {
+    ingestMemoryTag('沈微：外门请命')
+    const g = loadMemoryGraph()
+    expect(findName(g, '沈微')?.beats[0]?.text).toBe('外门请命')
+  })
+})
+
+describe('P0 seed + narrative fallback', () => {
+  beforeEach(() => {
+    clearMemoryGraph()
+  })
+
+  it('seedRosterNodes creates empty character shells', () => {
+    seedRosterNodes(['陆承渊', '沈白'])
+    const g = loadMemoryGraph()
+    expect(g.nodes.length).toBe(2)
+    expect(findName(g, '陆承渊')?.beats.length).toBe(0)
+  })
+
+  it('ingestNarrativeFallback writes weak beats for roster hits', () => {
+    const beats = ingestNarrativeFallback(
+      '陆承渊立于剑庐前，请命外出勘察赤焰。',
+      ['陆承渊', '沈白'],
+      { year: 3, season: '春' },
+    )
+    expect(beats.length).toBeGreaterThan(0)
+    const g = loadMemoryGraph()
+    expect(findName(g, '陆承渊')?.beats[0]?.text).toMatch(/出场|提及/)
+  })
+})
+
+describe('P1 triggers + edit', () => {
+  beforeEach(() => {
+    clearMemoryGraph()
+  })
+
+  it('setNodeTriggers makes selectMemoryGraphForTurn prefer node', () => {
+    seedRosterNodes(['沈白'])
+    appendNodeBeat('沈白', '藏锋不露')
+    setNodeTriggers('沈白', ['赤焰令', '比剑'])
+    const g = loadMemoryGraph()
+    const r = selectMemoryGraphForTurn({
+      graph: g,
+      query: '掌门取出赤焰令示众',
+      rosterNames: ['沈白'],
+      maxNodes: 3,
+      maxChars: 800,
+      enableFlashback: false,
+    })
+    expect(r.names).toContain('沈白')
+    expect(r.text).toContain('沈白')
   })
 })
 
