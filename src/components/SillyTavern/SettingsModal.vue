@@ -120,6 +120,23 @@ const secondary = computed(
 function patch(partial: Partial<AppSettings>) {
   void updateSettings(partial)
 }
+/** Embedding 独立端点三件套合并写入（保留未改字段） */
+function patchEmbeddingApi(field: 'baseUrl' | 'apiKey' | 'model', raw: string) {
+  const cur = props.settings.embeddingApi || { baseUrl: '', apiKey: '', model: '' }
+  patch({ embeddingApi: { ...cur, [field]: raw.trim() } })
+}
+/** 运行诊断文案：正常/失败原因/未启用 */
+const embedStatusText = computed(() => {
+  const st = props.settings.embeddingStatus
+  if (!st) return ''
+  if (st.state === 'ok') {
+    return st.recallHits != null ? `正常 · 最近召回 ${st.recallHits} 条` : '正常'
+  }
+  if (st.state === 'error') {
+    return st.message ? `失败：${st.message}` : '失败'
+  }
+  return '未启用 embedding 模式'
+})
 
 /** 显示页 · 历史限制自定义：钳制后写入 */
 function clampInt(n: number, min: number, max: number): number {
@@ -1152,6 +1169,40 @@ function onTagsInput(value: string) {
             />
           </label>
 
+          <div class="tj-field sched-field">
+            <span class="sched-field__title">Embedding 独立端点（可选）</span>
+            <span class="sched-field__key">embeddingApi · 全空时回退主 API</span>
+            <div class="sched-embed-grid">
+              <input
+                class="tj-input"
+                type="text"
+                :value="settings.embeddingApi?.baseUrl || ''"
+                placeholder="Base URL，如 https://api.openai.com/v1"
+                @change="patchEmbeddingApi('baseUrl', ($event.target as HTMLInputElement).value)"
+              />
+              <input
+                class="tj-input"
+                type="password"
+                :value="settings.embeddingApi?.apiKey || ''"
+                placeholder="API Key（可与主 API 不同）"
+                @change="patchEmbeddingApi('apiKey', ($event.target as HTMLInputElement).value)"
+              />
+              <input
+                class="tj-input"
+                type="text"
+                :value="settings.embeddingApi?.model || ''"
+                placeholder="端点默认模型（如 text-embedding-3-large）"
+                @change="patchEmbeddingApi('model', ($event.target as HTMLInputElement).value)"
+              />
+            </div>
+          </div>
+
+          <div class="tj-field sched-field" v-if="settings.embeddingStatus">
+            <span class="sched-field__title">Embedding 运行诊断</span>
+            <span class="sched-field__key">embeddingStatus</span>
+            <p class="sched-hint" :class="`sched-hint--${settings.embeddingStatus.state}`">{{ embedStatusText }}</p>
+          </div>
+
           <label class="tj-field sched-field">
             <span class="sched-field__title">外置记忆服 URL（可选）</span>
             <span class="sched-field__key">memoryServerUrl</span>
@@ -1569,6 +1620,30 @@ function onTagsInput(value: string) {
 .sched-field .limit-input {
   width: 100%;
   max-width: 12rem;
+}
+/** Embedding 端点三件套紧凑排布 */
+.sched-embed-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.sched-embed-grid .tj-input {
+  width: 100%;
+}
+/** 运行诊断文案配色（可观测性） */
+.sched-hint {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--ink-faint);
+}
+.sched-hint--ok {
+  color: #3a8a4a;
+}
+.sched-hint--error {
+  color: #c0563a;
+}
+.sched-hint--disabled {
+  color: var(--ink-faint);
 }
 
 .sched-field__help {

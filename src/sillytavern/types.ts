@@ -154,6 +154,32 @@ export interface ApiSettings {
   /** 局面分析 / 变量结算旁路 */
   secondary?: SideApiChannel;
 }
+/**
+ * Embedding 独立端点配置（可空）。
+ * 三字段任一非空即视为启用独立端点；全空则回退主 API（兼容旧存档）。
+ * 与 embeddingModel 配合：本配置定「去哪打」，embeddingModel 定「打哪个模型」。
+ */
+export interface EmbeddingApiConfig {
+  baseUrl?: string;
+  apiKey?: string;
+  model?: string;
+}
+/**
+ * Embedding 运行时诊断（可观测性）：记录上次建库/召回是否成功、原因、命中数。
+ * 由 memory-embed 写回 AppSettings.embeddingStatus；UI 可展示。
+ */
+export interface EmbeddingStatus {
+  /** 最近一次建库（embedAndStoreBeats）时间戳；0 = 从未尝试 */
+  lastStoreAt?: number;
+  /** 最近一次召回（semanticRecall）时间戳；0 = 从未尝试 */
+  lastRecallAt?: number;
+  /** 'ok' = 成功；'disabled' = 未启用 embedding 模式；'error' = 调用失败 */
+  state: 'ok' | 'disabled' | 'error';
+  /** 失败原因（state=error 时有值，如 'HTTP 400' / '网络错误'） */
+  message?: string;
+  /** 最近一次召回命中条数（含被阈值过滤后的） */
+  recallHits?: number;
+}
 
 export interface AppSettings {
   key?: string;
@@ -199,11 +225,18 @@ export interface AppSettings {
   memoryRecallMode?: 'keyword' | 'embedding' | 'both';
   /** 正文/用户话出现名册人名时弱写入近事（P0 兜底，默认 true） */
   memoryNarrativeFallback?: boolean;
-  /** embedding 模型名；空则用主 API model 字段 */
+  /** embedding 模型名；空则用独立端点 model 或主 API model 字段 */
   embeddingModel?: string;
+  /** embedding 独立端点（baseUrl/apiKey/model 三件套）；全空时回退主 API */
+  embeddingApi?: EmbeddingApiConfig;
   /** 可选外置记忆服务 Base URL（Nocturne 类 HTTP，失败静默） */
   memoryServerUrl?: string;
   memoryServerToken?: string;
+  /**
+   * Embedding 运行时诊断（可观测性）：记录上次建库/召回是否成功、原因、命中数。
+   * 由 memory-embed 写回 AppSettings.embeddingStatus；UI 可展示。
+   */
+  embeddingStatus?: EmbeddingStatus;
   /**
    * 拼装时压缩隐藏楼层：助手文只保留 maintext/sum，去掉 thinking / option / Memory 原文。
    * 远端楼进一步只留小结。默认 true（解决整段 raw 撑到数万 token）。
@@ -298,6 +331,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   memoryRecallMode: 'keyword',
   memoryNarrativeFallback: true,
   embeddingModel: '',
+  embeddingApi: { baseUrl: '', apiKey: '', model: '' },
+  embeddingStatus: { state: 'disabled' },
   memoryServerUrl: '',
   memoryServerToken: '',
   historyCompress: true,

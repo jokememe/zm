@@ -40,6 +40,7 @@ import {
   type ChatMessage,
   type Lorebook,
   type ParsedTags,
+  type EmbeddingStatus,
 } from '@/sillytavern'
 import {
   SYSTEM_LOREBOOK_ID,
@@ -167,6 +168,23 @@ function pickReply(text: string, context?: string | null): string {
 function hasApiKey(s: AppSettings | null): boolean {
   return isApiConfigured(s?.api)
 }
+/**
+ * 写回 embedding 运行时诊断（可观测性）。
+ * 不阻塞主路径；密匣 SettingsModal 可展示 state/message。
+ */
+function patchEmbeddingStatus(patch: Partial<EmbeddingStatus> & { state: EmbeddingStatus['state'] }): void {
+  const cur = settings.value
+  if (!cur) return
+  const prev = cur.embeddingStatus || { state: 'disabled' as const }
+  const next: EmbeddingStatus = { ...prev, ...patch }
+  settings.value = { ...cur, embeddingStatus: next }
+  // 落盘，避免刷新丢失诊断
+  try {
+    void saveSettings({ ...cur, embeddingStatus: next })
+  } catch {
+    /* ignore */
+  }
+}
 
 function stRoleToTianji(role: ChatMessage['role']): TianjiMessage['role'] {
   if (role === 'user') return 'player'
@@ -293,8 +311,13 @@ async function syncSystemLore(
     memoryRecallMode: s.memoryRecallMode || 'keyword',
     api: s.api,
     embeddingModel: s.embeddingModel || undefined,
+    embeddingApi: s.embeddingApi,
     memoryServerUrl: s.memoryServerUrl || undefined,
     memoryServerToken: s.memoryServerToken || undefined,
+    onEmbeddingStatus: (status) => {
+      // 召回诊断写回密匣，让玩家看见 embedding 走没走通
+      patchEmbeddingStatus(status)
+    },
   })
   const list = await getLorebooks()
   lorebooks.value = list
@@ -870,7 +893,15 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
       settings.value.api,
       newBeats,
       settings.value.embeddingModel || undefined,
-    )
+      settings.value.embeddingApi,
+    ).then((result) => {
+      // 建库诊断写回密匣：失败时玩家能看见为什么没建成
+      patchEmbeddingStatus({
+        state: result.ok ? 'ok' : 'error',
+        lastStoreAt: Date.now(),
+        message: result.ok ? undefined : result.reason,
+      })
+    })
   }
 
   if (parsed.sum?.trim() || memoryTagged || newBeats.length) {

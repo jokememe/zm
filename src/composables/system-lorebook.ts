@@ -24,6 +24,7 @@ import {
   selectMemoryGraphForTurn,
 } from '@/composables/memory-graph'
 import { semanticRecall, type SemanticHit } from '@/composables/memory-embed'
+import type { EmbeddingApiConfig, EmbeddingStatus } from '@/sillytavern/types'
 import { saveLorebook, getLorebooks } from '@/sillytavern/database'
 
 const LIVE_ENTRY_ID = 'live-snapshot'
@@ -193,9 +194,13 @@ export async function ensureAndRefreshSystemLorebook(extra?: {
   memoryRecallMode?: 'keyword' | 'embedding' | 'both'
   api?: ApiSettings
   embeddingModel?: string
+  /** embedding 独立端点（baseUrl/apiKey/model）；全空回退主 API */
+  embeddingApi?: EmbeddingApiConfig
   /** VPS 记忆服务（可选 · 失败忽略） */
   memoryServerUrl?: string
   memoryServerToken?: string
+  /** 召回诊断回写钩子（可观测性）：由调用方写回 AppSettings.embeddingStatus */
+  onEmbeddingStatus?: (status: EmbeddingStatus) => void
 }): Promise<Lorebook> {
   let currentYear = extra?.currentYear
   let roster = extra?.rosterNames || []
@@ -223,12 +228,23 @@ export async function ensureAndRefreshSystemLorebook(extra?: {
       [extra.recallQuery, extra.contextLabel, extra.contextDetail].filter(Boolean).join('\n') ||
       ''
     if (query.trim()) {
-      semanticHits = await semanticRecall(
-        extra.api,
-        query,
-        6,
-        extra.embeddingModel,
-      ).catch(() => [])
+      try {
+        semanticHits = await semanticRecall(
+          extra.api,
+          query,
+          6,
+          extra.embeddingModel,
+          extra.embeddingApi,
+        )
+        extra.onEmbeddingStatus?.({
+          state: 'ok',
+          lastRecallAt: Date.now(),
+          recallHits: semanticHits.length,
+        })
+      } catch {
+        extra.onEmbeddingStatus?.({ state: 'error', lastRecallAt: Date.now(), message: '召回异常' })
+        semanticHits = []
+      }
     }
   }
 
