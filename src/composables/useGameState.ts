@@ -67,6 +67,7 @@ import {
   clearMemoryGraph,
   removeMemoryGraphNodeByName,
   renameMemoryGraphNode,
+  seedRosterNodes,
 } from '@/composables/memory-graph'
 
 const currentView = ref<ViewId>('hall')
@@ -771,6 +772,18 @@ export function useGameState() {
         difficulty: diff,
         difficultyLabel: opt.label,
       })
+      // 角色记忆图谱：开局改名同步——
+      // 残留默认名节点（沈青岚 / DEFAULT_MASTER）并入自定义名，再以自定义名建壳，
+      // 避免图谱视图仍显示默认掌门名。与 renameMaster 同一真源。
+      try {
+        const prevDefaults = [DEFAULT_MASTER, '沈青岚'].filter((n) => n !== master)
+        for (const prev of prevDefaults) {
+          if (renameMemoryGraphNode(prev, master)) break
+        }
+        seedRosterNodes([master])
+      } catch (e) {
+        console.warn('[开局] 记忆图谱掌门名同步失败', e)
+      }
     } catch (e) {
       console.warn('[开局] 记忆初始化失败', e)
     }

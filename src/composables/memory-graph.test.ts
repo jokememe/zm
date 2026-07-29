@@ -278,3 +278,49 @@ describe('renameMemoryGraphNode', () => {
     expect(findName(loadMemoryGraph(), '陆承渊')).toBeTruthy()
   })
 })
+
+describe('开局掌门改名（applyOpeningConfig 图谱同步路径）', () => {
+  beforeEach(() => {
+    clearMemoryGraph()
+  })
+
+  it('残留默认名节点时改名并入新名，再 seedRosterNodes 建壳，图谱只剩自定义名', () => {
+    // 模拟旧局残留：图谱里已有默认掌门名「沈青岚」节点（带近事/属性）
+    let g = createEmptyMemoryGraph()
+    g = applyMemoryGraphPatch(g, {
+      nodes: [{ name: '沈青岚', attrs: { 身份: '掌门' }, beat: '继任掌门' }],
+    })
+    saveMemoryGraph(g)
+
+    const master = '自定义掌门'
+    const prevDefaults = ['沈青岚'].filter((n) => n !== master)
+    let renamed = false
+    for (const prev of prevDefaults) {
+      if (renameMemoryGraphNode(prev, master)) {
+        renamed = true
+        break
+      }
+    }
+    expect(renamed).toBe(true)
+    seedRosterNodes([master])
+
+    const after = loadMemoryGraph()
+    // 默认名节点消失
+    expect(after.nodes.some((n) => n.name === '沈青岚')).toBe(false)
+    // 自定义名节点存在且保留属性/近事
+    const node = findName(after, master)!
+    expect(node).toBeTruthy()
+    expect(node.attrs['身份']).toBe('掌门')
+    expect(node.beats[0]?.text).toBe('继任掌门')
+  })
+
+  it('全新图谱（无残留默认名）改名返回 false，seedRosterNodes 直接用自定义名建壳', () => {
+    saveMemoryGraph(createEmptyMemoryGraph())
+    const master = '新掌门'
+    expect(renameMemoryGraphNode('沈青岚', master)).toBe(false)
+    seedRosterNodes([master])
+    const after = loadMemoryGraph()
+    expect(after.nodes.some((n) => n.name === master)).toBe(true)
+    expect(after.nodes.some((n) => n.name === '沈青岚')).toBe(false)
+  })
+})
