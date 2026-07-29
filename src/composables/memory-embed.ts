@@ -4,7 +4,7 @@
  */
 import Dexie, { type Table } from 'dexie'
 import { normalizeBaseUrl } from '@/composables/api-cache'
-import type { ApiSettings } from '@/sillytavern/types'
+import type { ApiSettings, EmbeddingApiConfig } from '@/sillytavern/types'
 
 interface EmbedRecord {
   id: string
