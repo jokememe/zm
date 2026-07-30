@@ -151,6 +151,12 @@ const summaryStatusText = computed(() => {
   return '未启用'
 })
 
+const RECALL_OPTIONS = [
+  { value: 'keyword' as const, label: '仅关键词' },
+  { value: 'embedding' as const, label: '语义向量' },
+  { value: 'both' as const, label: '双路召回' },
+]
+
 /** 显示页 · 历史限制自定义：钳制后写入 */
 function clampInt(n: number, min: number, max: number): number {
   if (!Number.isFinite(n)) return min
@@ -1109,20 +1115,19 @@ function onTagsInput(value: string) {
       <div class="api-panel" style="margin-top: 0.85rem">
         <div class="secondary-head">
           <div>
-            <h3 class="api-panel__title">推演时注入 · 角色记忆（定稿 L1–L3）</h3>
+            <h3 class="api-panel__title">推演时注入 · 角色记忆</h3>
             <p class="tj-hint" style="margin: 0">
-              主路径（零强制 API）：Boot 锚 + 长线/近端摘要 +
-              <strong>角色图谱</strong>
-              （点名 / 触发词 / 近事 / 冷档案）。
+              Boot 锚 + 长线/近端摘要 + 角色图谱。
               完整浏览：侧栏「角色记忆」。
             </p>
           </div>
         </div>
-        <div class="sched-fields" style="margin-top: 0.75rem">
-          <label class="tj-field sched-field">
-            <span class="sched-field__title">正文兜底生长</span>
-            <span class="sched-field__key">memoryNarrativeFallback</span>
-            <label class="switch" style="margin-top: 0.35rem">
+
+        <!-- ── 自动记账 ── -->
+        <div class="mem-group">
+          <div class="mem-group__head">
+            <span class="mem-group__label">自动记账</span>
+            <label class="switch">
               <input
                 type="checkbox"
                 :checked="settings.memoryNarrativeFallback !== false"
@@ -1134,177 +1139,201 @@ function onTagsInput(value: string) {
               />
               <span class="switch__ui" />
               <span class="switch__label">{{
-                settings.memoryNarrativeFallback !== false ? '已开启（推荐）' : '已关闭'
+                settings.memoryNarrativeFallback !== false ? '开启' : '关闭'
               }}</span>
             </label>
-            <p class="sched-field__help">
-              开启后：正文出现名册人名时自动记弱近事，避免模型漏写 &lt;memory&gt; 导致空图。
-            </p>
-          </label>
+          </div>
+          <p class="mem-group__desc">
+            每回合 AI 回复后自动从正文提取角色近事、物品/地点/关系变更。
+          </p>
 
-          <label class="tj-field sched-field">
-            <span class="sched-field__title">图谱召回模式</span>
-            <span class="sched-field__key">memoryRecallMode</span>
-            <select
-              class="tj-input"
-              :value="settings.memoryRecallMode || 'keyword'"
-              @change="
-                patch({
-                  memoryRecallMode: ($event.target as HTMLSelectElement).value as
-                    | 'keyword'
-                    | 'embedding'
-                    | 'both',
-                })
-              "
+          <!-- 引擎选择（记账开启时显示） -->
+          <template v-if="settings.memoryNarrativeFallback !== false">
+            <p class="mem-sub-label">记账引擎</p>
+            <div class="mem-radio-row">
+              <label
+                class="mem-radio"
+                :class="{ 'is-on': !settings.memoryLlmSummary }"
+              >
+                <input
+                  type="radio"
+                  name="mem-engine"
+                  :checked="!settings.memoryLlmSummary"
+                  @change="patch({ memoryLlmSummary: false })"
+                />
+                <span class="mem-radio__dot" />
+                <span class="mem-radio__body">
+                  <span class="mem-radio__title">正则规则引擎</span>
+                  <span class="mem-radio__hint">默认 · 零 API 调用</span>
+                </span>
+              </label>
+              <label
+                class="mem-radio"
+                :class="{ 'is-on': !!settings.memoryLlmSummary }"
+              >
+                <input
+                  type="radio"
+                  name="mem-engine"
+                  :checked="!!settings.memoryLlmSummary"
+                  @change="patch({ memoryLlmSummary: true })"
+                />
+                <span class="mem-radio__dot" />
+                <span class="mem-radio__body">
+                  <span class="mem-radio__title">LLM 摘要引擎</span>
+                  <span class="mem-radio__hint">小模型提炼 · 质量更高</span>
+                </span>
+              </label>
+            </div>
+
+            <!-- LLM 摘要引擎配置 -->
+            <div class="mem-sub-block" v-if="settings.memoryLlmSummary">
+              <p class="mem-sub-label">摘要小模型端点</p>
+              <div class="mem-endpoint-grid">
+                <input
+                  class="tj-input"
+                  type="url"
+                  :value="settings.summaryApi?.baseUrl || ''"
+                  placeholder="baseUrl（如 http://localhost:11434/v1）"
+                  @change="patchSummaryApi('baseUrl', ($event.target as HTMLInputElement).value)"
+                />
+                <input
+                  class="tj-input"
+                  type="password"
+                  :value="settings.summaryApi?.apiKey || ''"
+                  placeholder="API Key（可空）"
+                  @change="patchSummaryApi('apiKey', ($event.target as HTMLInputElement).value)"
+                />
+                <input
+                  class="tj-input"
+                  type="text"
+                  :value="settings.summaryApi?.model || ''"
+                  placeholder="模型名（如 gemma3:27b）"
+                  @change="patchSummaryApi('model', ($event.target as HTMLInputElement).value)"
+                />
+              </div>
+              <p class="sched-hint" v-if="settings.summaryStatus && settings.summaryStatus.state !== 'disabled'" :class="`sched-hint--${settings.summaryStatus.state}`">
+                {{ summaryStatusText }}
+              </p>
+            </div>
+          </template>
+        </div>
+
+        <!-- ── 语义召回 ── -->
+        <div class="mem-group">
+          <div class="mem-group__head">
+            <span class="mem-group__label">语义召回</span>
+            <span class="mem-group__badge">需 embedding API</span>
+          </div>
+          <p class="mem-group__desc">
+            从历史建库中语义检索相关记忆，追加注入到推演上下文。
+          </p>
+
+          <p class="mem-sub-label">注入时策略</p>
+          <div class="mem-recall-row">
+            <label
+              v-for="opt in RECALL_OPTIONS"
+              :key="opt.value"
+              class="mem-chip"
+              :class="{ 'is-on': (settings.memoryRecallMode || 'keyword') === opt.value }"
             >
-              <option value="keyword">关键词（默认 · 零 API）</option>
-              <option value="embedding">语义向量 embedding</option>
-              <option value="both">双路：embedding + 关键词</option>
-            </select>
-            <p class="sched-field__help">
-              embedding / 双路需主 API 支持 /embeddings；失败静默回退关键词。可填下方模型名。
-            </p>
-          </label>
+              <input
+                type="radio"
+                name="mem-recall"
+                :value="opt.value"
+                :checked="(settings.memoryRecallMode || 'keyword') === opt.value"
+                @change="
+                  patch({
+                    memoryRecallMode: ($event.target as HTMLInputElement).value as
+                      | 'keyword'
+                      | 'embedding'
+                      | 'both',
+                  })
+                "
+              />
+              <span>{{ opt.label }}</span>
+            </label>
+          </div>
 
-          <label class="tj-field sched-field">
-            <span class="sched-field__title">Embedding 模型</span>
-            <span class="sched-field__key">embeddingModel · 可空</span>
-            <input
-              class="tj-input"
-              type="text"
-              :value="settings.embeddingModel || ''"
-              placeholder="空=用主 API model；如 text-embedding-3-small"
-              @change="
-                patch({
-                  embeddingModel: ($event.target as HTMLInputElement).value.trim(),
-                })
-              "
-            />
-          </label>
-
-          <div class="tj-field sched-field">
-            <span class="sched-field__title">Embedding 独立端点（可选）</span>
-            <span class="sched-field__key">embeddingApi · 全空时回退主 API</span>
-            <div class="sched-embed-grid">
+          <!-- embedding 配置 -->
+          <div class="mem-sub-block" v-if="settings.memoryRecallMode === 'embedding' || settings.memoryRecallMode === 'both'">
+            <p class="mem-sub-label">Embedding 配置</p>
+            <div class="tj-field" style="margin-bottom: 0.55rem">
+              <input
+                class="tj-input"
+                type="text"
+                :value="settings.embeddingModel || ''"
+                placeholder="模型（空=主 API model，如 text-embedding-3-small）"
+                @change="
+                  patch({
+                    embeddingModel: ($event.target as HTMLInputElement).value.trim(),
+                  })
+                "
+              />
+            </div>
+            <p class="mem-sub-label" style="font-size: 0.72rem">独立端点（可选 · 全空则回退主 API）</p>
+            <div class="mem-endpoint-grid">
               <input
                 class="tj-input"
                 type="text"
                 :value="settings.embeddingApi?.baseUrl || ''"
-                placeholder="Base URL，如 https://api.openai.com/v1"
+                placeholder="baseUrl"
                 @change="patchEmbeddingApi('baseUrl', ($event.target as HTMLInputElement).value)"
               />
               <input
                 class="tj-input"
                 type="password"
                 :value="settings.embeddingApi?.apiKey || ''"
-                placeholder="API Key（可与主 API 不同）"
+                placeholder="API Key"
                 @change="patchEmbeddingApi('apiKey', ($event.target as HTMLInputElement).value)"
               />
               <input
                 class="tj-input"
                 type="text"
                 :value="settings.embeddingApi?.model || ''"
-                placeholder="端点默认模型（如 text-embedding-3-large）"
+                placeholder="端点模型"
                 @change="patchEmbeddingApi('model', ($event.target as HTMLInputElement).value)"
               />
             </div>
-          </div>
-
-          <div class="tj-field sched-field" v-if="settings.embeddingStatus">
-            <span class="sched-field__title">Embedding 运行诊断</span>
-            <span class="sched-field__key">embeddingStatus</span>
-            <p class="sched-hint" :class="`sched-hint--${settings.embeddingStatus.state}`">{{ embedStatusText }}</p>
-          </div>
-
-          <label class="tj-field sched-field">
-            <span class="sched-field__title">LLM 摘要记账（柏宝书式）</span>
-            <span class="sched-field__key">memoryLlmSummary</span>
-            <input
-              type="checkbox"
-              :checked="!!settings.memoryLlmSummary"
-              @change="
-                patch({
-                  memoryLlmSummary: ($event.target as HTMLInputElement).checked,
-                })
-              "
-            />
-            <p class="sched-field__help">
-              开启后用独立小模型（如本地 Gemma / Qwen）把回合正文提炼成结构化记忆，替代正则记账，质量更高。
-            </p>
-          </label>
-
-          <div class="tj-field sched-field" v-if="settings.memoryLlmSummary">
-            <span class="sched-field__title">摘要小模型端点（baseUrl / API Key / 模型名）</span>
-            <span class="sched-field__key">summaryApi</span>
-            <div class="sched-embed-grid">
-              <input
-                class="tj-input"
-                type="url"
-                :value="settings.summaryApi?.baseUrl || ''"
-                placeholder="https://你的小模型/v1"
-                @change="patchSummaryApi('baseUrl', ($event.target as HTMLInputElement).value)"
-              />
-              <input
-                class="tj-input"
-                type="password"
-                :value="settings.summaryApi?.apiKey || ''"
-                placeholder="API Key（可与主 API 不同）"
-                @change="patchSummaryApi('apiKey', ($event.target as HTMLInputElement).value)"
-              />
-              <input
-                class="tj-input"
-                type="text"
-                :value="settings.summaryApi?.model || ''"
-                placeholder="小模型名（如 gemma-3-27b / qwen2.5-32b）"
-                @change="patchSummaryApi('model', ($event.target as HTMLInputElement).value)"
-              />
-            </div>
-            <p class="sched-field__help">
-              建议使用本地或廉价小模型：摘要任务轻、需低延迟。失败会自动回退正则记账。
+            <p class="sched-hint" v-if="settings.embeddingStatus" :class="`sched-hint--${settings.embeddingStatus.state}`">
+              {{ embedStatusText }}
             </p>
           </div>
+        </div>
 
-          <div class="tj-field sched-field" v-if="settings.memoryLlmSummary">
-            <span class="sched-field__title">摘要运行诊断</span>
-            <span class="sched-field__key">summaryStatus</span>
-            <p class="sched-hint" :class="`sched-hint--${settings.summaryStatus?.state || 'disabled'}`">{{ summaryStatusText }}</p>
+        <!-- ── 外置记忆服 ── -->
+        <div class="mem-group">
+          <div class="mem-group__head">
+            <span class="mem-group__label">外置记忆服</span>
+            <span class="mem-group__badge">可选</span>
           </div>
-
-          <label class="tj-field sched-field">
-            <span class="sched-field__title">外置记忆服 URL（可选）</span>
-            <span class="sched-field__key">memoryServerUrl</span>
+          <p class="mem-group__desc">
+            Nocturne 类 HTTP 补充记忆源，失败不挡推演。
+          </p>
+          <div class="mem-svr-grid">
             <input
               class="tj-input"
               type="url"
               :value="settings.memoryServerUrl || ''"
-              placeholder="https://你的VPS/…  约定 GET /memory/search?q="
+              placeholder="URL（约定 GET /memory/search?q=）"
               @change="
                 patch({
                   memoryServerUrl: ($event.target as HTMLInputElement).value.trim(),
                 })
               "
             />
-            <p class="sched-field__help">
-              Nocturne 类 HTTP 补充；失败不挡推演。Token 填下方。
-            </p>
-          </label>
-
-          <label class="tj-field sched-field">
-            <span class="sched-field__title">外置记忆 Token</span>
-            <span class="sched-field__key">memoryServerToken</span>
             <input
               class="tj-input"
               type="password"
               autocomplete="off"
               :value="settings.memoryServerToken || ''"
-              placeholder="Bearer token，可空"
+              placeholder="Bearer Token（可空）"
               @change="
                 patch({
                   memoryServerToken: ($event.target as HTMLInputElement).value.trim(),
                 })
               "
             />
-          </label>
+          </div>
         </div>
       </div>
 
@@ -1657,6 +1686,148 @@ function onTagsInput(value: string) {
   flex-direction: column;
   gap: 0.85rem;
   margin-top: 0.75rem;
+}
+
+/* ── 角色记忆组（mem-group / mem-radio / mem-chip）── */
+.mem-group {
+  margin-top: 0.85rem;
+  padding: 0.8rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.3);
+}
+.mem-group__head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+.mem-group__label {
+  font-size: 0.92rem;
+  font-weight: 650;
+  color: var(--ink-primary);
+}
+.mem-group__badge {
+  font-size: 0.68rem;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--jade-soft);
+  color: var(--jade);
+  font-weight: 500;
+}
+.mem-group__desc {
+  margin: 0 0 0.65rem;
+  font-size: 0.75rem;
+  color: var(--ink-faint);
+  line-height: 1.45;
+}
+.mem-sub-label {
+  margin: 0 0 0.35rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--ink-secondary);
+}
+.mem-sub-block {
+  margin-top: 0.6rem;
+  padding: 0.65rem 0.7rem;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.45);
+  border: 1px dashed var(--border-subtle);
+}
+
+/* 引擎单选行 */
+.mem-radio-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.mem-radio {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: #fff;
+  cursor: pointer;
+  transition: border-color 0.18s, background 0.18s;
+}
+.mem-radio.is-on {
+  border-color: var(--jade);
+  background: #edf7f0;
+}
+.mem-radio input { display: none; }
+.mem-radio__dot {
+  flex-shrink: 0;
+  margin-top: 2px;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--border-mid);
+  background: #fff;
+  transition: border-color 0.18s, background 0.18s;
+}
+.mem-radio.is-on .mem-radio__dot {
+  border-color: var(--jade);
+  background: var(--jade);
+}
+.mem-radio__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mem-radio__title {
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--ink-primary);
+}
+.mem-radio__hint {
+  font-size: 0.7rem;
+  color: var(--ink-faint);
+}
+
+/* 召回策略 chip 行 */
+.mem-recall-row {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.mem-chip {
+  display: flex;
+  align-items: center;
+  padding: 0.38rem 0.7rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: #fff;
+  font-size: 0.78rem;
+  font-weight: 550;
+  color: var(--ink-secondary);
+  cursor: pointer;
+  transition: border-color 0.18s, background 0.18s, color 0.18s;
+}
+.mem-chip.is-on {
+  border-color: var(--jade);
+  background: #edf7f0;
+  color: var(--jade);
+}
+.mem-chip input { display: none; }
+
+/* 端点 / 外置记忆服 紧凑网格 */
+.mem-endpoint-grid {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+.mem-endpoint-grid .tj-input {
+  flex: 1 1 120px;
+  min-width: 0;
+}
+.mem-svr-grid {
+  display: flex;
+  gap: 0.45rem;
+}
+.mem-svr-grid .tj-input {
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .sched-field {
