@@ -9,6 +9,7 @@ import {
   formatMemoryGraphSliceBrief,
   getMemoryGraphSlice,
   removeNodeBeat,
+  renameMemoryGraphNode,
   seedRosterNodes,
   selectMemoryGraphForTurn,
   setNodeTriggers,
@@ -38,6 +39,26 @@ void hydrateMemoryArchive().then(() => {
   )
   tick.value++
 })
+
+// 掌门改名后，确保记忆图谱使用自定义名（解决默认名残留问题）
+watch(
+  masterName,
+  (newName, oldName) => {
+    // 旧名节点合并到新名，防止图谱中残留默认名（如"沈青岚"）
+    if (oldName && newName && oldName !== newName) {
+      try {
+        renameMemoryGraphNode(oldName, newName)
+      } catch {
+        /* ignore */
+      }
+    }
+    if (newName) {
+      seedRosterNodes([newName])
+      tick.value++ // 强制重新计算图谱列表
+    }
+  },
+  { immediate: false },
+)
 
 function bump() {
   tick.value++
