@@ -34,6 +34,33 @@ function cleanColumnName(column: string): string {
     .trim()
 }
 
+/**
+ * 男主称呼归一（修复「掌门」被当成自定义名记录进图谱的顽疾）：
+ * 正文里 AI 常以「掌门 / 本座 / 宗主」指代玩家，而非自定义名。
+ * 这里把所有称呼与旧名统一映射到当前自定义名，避免生成独立的「掌门」节点。
+ */
+const MASTER_TITLES = new Set(['掌门', '本座', '宗主', '掌教', '掌门本人'])
+let _masterName = ''
+
+/** 由游戏态在推演前注入当前掌门自定义名 */
+export function setMasterName(name: string): void {
+  _masterName = String(name || '').trim()
+}
+
+/** 把男主称呼 / 旧名归一为当前自定义名；非男主则返回原名 */
+export function resolveProtagonistAlias(name: string): string {
+  const n = normalizeName(name)
+  if (!n) return name
+  if (_masterName && n === normalizeName(_masterName)) return _masterName
+  if (MASTER_TITLES.has(n)) return _masterName || name
+  return name
+}
+
+/** 男主称呼列表（供其它模块把称呼纳入名册匹配） */
+export function getMasterTitles(): string[] {
+  return [...MASTER_TITLES]
+}
+
 export type MemoryGraphNodeKind = 'character' | 'event' | 'item' | 'place' | 'other'
 
 export type MemoryGraphEdgeType =
@@ -189,9 +216,11 @@ export function applyMemoryGraphPatch(
   const ts = now()
 
   for (const np of patch.nodes || []) {
-    const name = String(np.name || '').trim()
-    if (!name) continue
-    const former = String(np.formerName || '').trim()
+    const rawName = String(np.name || '').trim()
+    if (!rawName) continue
+    // 男主称呼归一：避免「掌门」成为独立节点
+    const name = resolveProtagonistAlias(rawName)
+    const former = resolveProtagonistAlias(String(np.formerName || '').trim())
     let node = former ? findNodeByName(next, former) : findNodeByName(next, name)
     if (!node && former) node = findNodeByName(next, name)
 
@@ -270,8 +299,8 @@ export function applyMemoryGraphPatch(
   }
 
   for (const ep of patch.edges || []) {
-    const fromName = String(ep.from || '').trim()
-    const toName = String(ep.to || '').trim()
+    const fromName = resolveProtagonistAlias(String(ep.from || '').trim())
+    const toName = resolveProtagonistAlias(String(ep.to || '').trim())
     if (!fromName || !toName) continue
     const fromN = ensureCharacter(fromName)
     const toN = ensureCharacter(toName)
@@ -882,13 +911,19 @@ export function ingestNarrativeFallback(
 ): IngestedBeat[] {
   const body = String(text || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
   if (body.length < 8) return []
-  const roster = [...new Set((rosterNames || []).map((n) => String(n || '').trim()).filter((n) => n.length >= 2))]
-  if (!roster.length) return []
+  const baseRoster = [...new Set((rosterNames || []).map((n) => String(n || '').trim()).filter((n) => n.length >= 2))]
+  if (!baseRoster.length) return []
 
-  // 先确保空节点存在
-  seedRosterNodes(roster)
+  // 先确保空节点存在（仅名册/自定义名，不含称呼）
+  seedRosterNodes(baseRoster)
 
-  const hits = matchNamesInText(body, roster)
+  // 匹配额外纳入男主自定义名与称呼，使正文写「掌门」也能命中男主
+  const matchRoster = [
+    ...baseRoster,
+    ...(_masterName ? [_masterName] : []),
+    ...MASTER_TITLES,
+  ]
+  const hits = matchNamesInText(body, matchRoster)
   if (!hits.length) return []
 
   const maxBeats = Math.max(1, opts?.maxBeats ?? 3)
@@ -899,14 +934,15 @@ export function ingestNarrativeFallback(
   let count = 0
   for (const name of hits) {
     if (count >= maxBeats) break
-    if (FALLBACK_STOP.has(name)) continue
-    const node = findNodeByName(g, name)
+    const resolved = resolveProtagonistAlias(name)
+    if (FALLBACK_STOP.has(resolved)) continue
+    const node = findNodeByName(g, resolved)
     const beat = `〔${label}〕${snippet}${body.length > 48 ? '…' : ''}`
-    if (node?.beats?.some((b) => b.text === beat || (b.text.startsWith(`〔${label}〕`) && body.includes(name) && b.text.includes(snippet.slice(0, 16))))) {
+    if (node?.beats?.some((b) => b.text === beat || (b.text.startsWith(`〔${label}〕`) && body.includes(resolved) && b.text.includes(snippet.slice(0, 16))))) {
       continue
     }
     patch.nodes!.push({
-      name,
+      name: resolved,
       kind: 'character',
       beat,
       beatYear: calendar?.year,
@@ -944,7 +980,12 @@ export function ingestReplyDigest(
 
   const g = loadMemoryGraph()
   // 归一化名册用于反向匹配：从物品/地点事件定位到角色
-  const rosterNorm = new Set(rosterNames.map((n) => normalizeName(n)))
+  // 额外纳入男主自定义名与称呼（掌门/本座/宗主），使正文写「掌门」也能命中男主
+  const rosterNorm = new Set<string>([
+    ...rosterNames.map((n) => normalizeName(n)),
+    ...(_masterName ? [normalizeName(_masterName)] : []),
+    ...[...MASTER_TITLES].map((t) => normalizeName(t)),
+  ])
   const patch: MemoryGraphPatch = { nodes: [], edges: [] }
   const cal: { year?: number; season?: string } = calendar || {}
   const stats = { beatCount: 0, itemNodes: 0, placeNodes: 0, relationEdges: 0 }
@@ -966,7 +1007,7 @@ export function ingestReplyDigest(
     while ((m = rule.pattern.exec(flat)) !== null) {
       const source = rule.source ? rule.source(m) : m[1]
       const item = rule.source ? m[1] : m[2]
-      const name = source?.trim() || ''
+      const name = resolveProtagonistAlias(source?.trim() || '')
       const itemName = item?.trim() || ''
       if (name.length < 2 || itemName.length < 2) continue
       if (FALLBACK_STOP.has(name) || FALLBACK_STOP.has(itemName)) continue
@@ -992,7 +1033,7 @@ export function ingestReplyDigest(
   const placeRe = /([^，。；!\n]{2,8})(?:来到|到达|踏入|进入|抵达|前往|赶赴|离开|走出|退出)([^，。；!\n]{2,10})/g
   let pm: RegExpExecArray | null
   while ((pm = placeRe.exec(flat)) !== null) {
-    const name = pm[1].trim()
+    const name = resolveProtagonistAlias(pm[1].trim())
     const place = pm[2].trim()
     if (name.length < 2 || place.length < 2) continue
     if (FALLBACK_STOP.has(name) || FALLBACK_STOP.has(place)) continue
@@ -1015,10 +1056,13 @@ export function ingestReplyDigest(
   }
 
   // ── 状态变化 ──
-  for (const name of rosterNames) {
-    const idx = flat.indexOf(name)
+  // 除名册名外，额外扫描男主称呼（掌门/本座/宗主），使正文写「掌门突破」也能命中男主
+  const statusSubjects = [...rosterNames, ...MASTER_TITLES]
+  for (const rawName of statusSubjects) {
+    const resolved = resolveProtagonistAlias(rawName)
+    const idx = flat.indexOf(String(rawName))
     if (idx < 0) continue
-    const ctx = flat.slice(Math.max(0, idx - 3), idx + name.length + 24)
+    const ctx = flat.slice(Math.max(0, idx - 3), idx + String(rawName).length + 24)
     const statusHits: string[] = []
     if (/突破/.test(ctx)) statusHits.push('突破')
     if (/受伤|负伤|重创|被重创/.test(ctx)) statusHits.push('受伤')
@@ -1027,7 +1071,7 @@ export function ingestReplyDigest(
     if (/突破.*境界|晋升|进境|修为大?[进增涨]/.test(ctx)) statusHits.push('修为精进')
     for (const s of statusHits) {
       patch.nodes!.push({
-        name,
+        name: resolved,
         kind: 'character',
         beat: s,
         beatYear: cal.year,
@@ -1036,7 +1080,7 @@ export function ingestReplyDigest(
       stats.beatCount++
       // 更新 attrs
       if (s === '突破' || s === '修为精进') {
-        patch.nodes!.push({ name, kind: 'character', attrs: { 最近状态: s } })
+        patch.nodes!.push({ name: resolved, kind: 'character', attrs: { 最近状态: s } })
       }
     }
   }
@@ -1052,8 +1096,8 @@ export function ingestReplyDigest(
   for (const { re, type } of relPatterns) {
     let rm: RegExpExecArray | null
     while ((rm = re.exec(flat)) !== null) {
-      const a = rm[1].trim()
-      const b = rm[2].trim()
+      const a = resolveProtagonistAlias(rm[1].trim())
+      const b = resolveProtagonistAlias(rm[2].trim())
       if (a.length < 2 || b.length < 2) continue
       if (FALLBACK_STOP.has(a) || FALLBACK_STOP.has(b)) continue
       const aOk = rosterNorm.has(normalizeName(a))

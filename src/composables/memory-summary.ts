@@ -17,6 +17,8 @@ import {
   applyMemoryGraphPatch,
   loadMemoryGraph,
   saveMemoryGraph,
+  resolveProtagonistAlias,
+  getMasterTitles,
   type MemoryGraphEdgeType,
 } from './memory-graph'
 
@@ -67,6 +69,7 @@ const SYSTEM_PROMPT = `你是仙侠小说的记忆记账员。阅读一段剧情
 关系|角色A|关系|角色B
 要求：
 - 角色必须是给定名册中的名字，否则丢弃该行
+- 若正文以「掌门 / 本座 / 宗主」等称呼指代男主，请使用名册中的真实名字输出（不要输出「掌门」）
 - 物品的动作只能取：获得/失去/使用/传递
 - 地点的动作只能取：抵达/离开
 - 状态只能取：突破/受伤/中毒/痊愈/修为精进
@@ -83,7 +86,10 @@ function parseSummaryLines(
   rosterNames: string[],
   calendar?: { year: number; season: string },
 ): { patch: ReturnType<typeof loadMemoryGraph> extends never ? never : any; beats: SummaryBeat[]; stats: Omit<SummaryResult, 'beats'> } {
-  const rosterNorm = new Set(rosterNames.map((n) => normalizeName(n)))
+  const rosterNorm = new Set([
+    ...rosterNames.map((n) => normalizeName(n)),
+    ...getMasterTitles().map((t) => normalizeName(t)),
+  ])
   const patch: { nodes: any[]; edges: any[] } = { nodes: [], edges: [] }
   const beats: SummaryBeat[] = []
   const stats: Omit<SummaryResult, 'beats'> = { beatCount: 0, itemNodes: 0, placeNodes: 0, relationEdges: 0 }
@@ -111,7 +117,7 @@ function parseSummaryLines(
     const parts = m[2].split('|').map((s) => s.trim())
 
     if (type === '物品' && parts.length >= 3) {
-      const who = parts[0]
+      const who = resolveProtagonistAlias(parts[0])
       const act = parts[1]
       const what = parts[2]
       if (who.length < 2 || what.length < 2) continue
@@ -121,7 +127,7 @@ function parseSummaryLines(
       pushBeat(who, `${act}${what}`)
       stats.itemNodes++
     } else if (type === '地点' && parts.length >= 3) {
-      const who = parts[0]
+      const who = resolveProtagonistAlias(parts[0])
       const act = parts[1]
       const place = parts[2]
       if (who.length < 2 || place.length < 2) continue
@@ -131,7 +137,7 @@ function parseSummaryLines(
       pushBeat(who, /抵达|到达|进入|前往|赶赴/.test(act) ? `抵达${place}` : `离开${place}`)
       stats.placeNodes++
     } else if (type === '状态' && parts.length >= 2) {
-      const who = parts[0]
+      const who = resolveProtagonistAlias(parts[0])
       const status = parts[1]
       if (who.length < 2) continue
       if (FALLBACK_STOP.has(who)) continue
@@ -141,9 +147,9 @@ function parseSummaryLines(
         patch.nodes.push({ name: who, kind: 'character', attrs: { 最近状态: status } })
       }
     } else if (type === '关系' && parts.length >= 3) {
-      const a = parts[0]
+      const a = resolveProtagonistAlias(parts[0])
       const rel = parts[1] as MemoryGraphEdgeType
-      const b = parts[2]
+      const b = resolveProtagonistAlias(parts[2])
       if (a.length < 2 || b.length < 2) continue
       if (FALLBACK_STOP.has(a) || FALLBACK_STOP.has(b)) continue
       const aOk = rosterNorm.has(normalizeName(a))

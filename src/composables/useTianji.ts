@@ -62,6 +62,7 @@ import {
   ingestMemoryTag,
   ingestNarrativeFallback,
   seedRosterNodes,
+  setMasterName,
 } from '@/composables/memory-graph'
 import { embedAndStoreBeats } from '@/composables/memory-embed'
 import { summarizeTurnToBeats } from '@/composables/memory-summary'
@@ -759,7 +760,7 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
     history,
     preset: livePreset,
     lorebooks: books,
-    userName: s.userName || '掌门',
+    userName: s.userName || useGameState().masterName.value || '掌门',
     characterName: s.characterName || '天机',
     variables: vars,
     extraVariables: vars,
@@ -857,6 +858,8 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
     ...gsMem.disciples.value.map((d) => d.name),
     String(gsMem.masterName.value || ''),
   ].filter(Boolean)
+  // 注入当前掌门自定义名，使「掌门/本座/宗主」称呼在记账时归一为自定义名
+  setMasterName(gsMem.masterName.value || '')
   seedRosterNodes(
     gsMem.disciples.value
       .map((d) => ({

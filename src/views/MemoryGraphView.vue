@@ -12,6 +12,7 @@ import {
   renameMemoryGraphNode,
   seedRosterNodes,
   selectMemoryGraphForTurn,
+  setMasterName,
   type MemoryGraphNode,
   type MemoryGraphState,
 } from '@/composables/memory-graph'
@@ -29,12 +30,23 @@ const showExtras = ref(false)
 const draftBeat = ref('')
 
 void hydrateMemoryArchive().then(() => {
+  setMasterName(masterName.value)
   // 名册种子：至少有角色壳
   seedRosterNodes(
     disciples.value
       .map((d) => d.name)
       .concat(masterName.value ? [String(masterName.value)] : []),
   )
+  // 清理：把历史遗留的「掌门/本座/宗主」称呼节点合并到自定义名
+  if (masterName.value) {
+    for (const t of ['掌门', '本座', '宗主']) {
+      try {
+        renameMemoryGraphNode(t, masterName.value)
+      } catch {
+        /* 节点不存在则忽略 */
+      }
+    }
+  }
   tick.value++
 })
 
@@ -42,6 +54,7 @@ void hydrateMemoryArchive().then(() => {
 watch(
   masterName,
   (newName, oldName) => {
+    if (newName) setMasterName(newName)
     // 旧名节点合并到新名，防止图谱中残留默认名（如"沈青岚"）
     if (oldName && newName && oldName !== newName) {
       try {
@@ -50,7 +63,15 @@ watch(
         /* ignore */
       }
     }
+    // 称呼节点也一并归一
     if (newName) {
+      for (const t of ['掌门', '本座', '宗主']) {
+        try {
+          renameMemoryGraphNode(t, newName)
+        } catch {
+          /* ignore */
+        }
+      }
       seedRosterNodes([newName])
       tick.value++ // 强制重新计算图谱列表
     }

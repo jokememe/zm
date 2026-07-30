@@ -3,6 +3,7 @@ import {
   clearMemoryGraph,
   loadMemoryGraph,
   getMemoryGraphSlice,
+  setMasterName,
 } from './memory-graph'
 import { summarizeTurnToBeats } from './memory-summary'
 import type { ApiSettings } from '@/sillytavern/types'
@@ -119,5 +120,36 @@ describe('summarizeTurnToBeats', () => {
         summaryApi: SUMMARY_API,
       }),
     ).rejects.toThrow()
+  })
+
+  it('正文用「掌门」指代时归一为自定义名（不生成掌门节点）', async () => {
+    setMasterName('张三')
+    const fetchMock = mockFetchWith(
+      ['状态|掌门|突破', '关系|掌门|道侣|苏沐雪'].join('\n'),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const r = await summarizeTurnToBeats({
+      body: '今日掌门于密室中突破瓶颈，修为大进，并与苏沐雪结为道侣。',
+      rosterNames: ['张三', '苏沐雪'],
+      calendar: { year: 1, season: '春' },
+      api: DUMMY_API,
+      summaryApi: SUMMARY_API,
+    })
+
+    const g = loadMemoryGraph()
+    expect(g.nodes.find((n) => n.name === '掌门')).toBeUndefined()
+    expect(r.beatCount).toBeGreaterThan(0)
+    const zhang = g.nodes.find((n) => n.name === '张三')
+    expect(zhang).toBeTruthy()
+    const hasBreak = (zhang?.beats || []).some((b) => b.text.includes('突破'))
+    expect(hasBreak).toBe(true)
+    // 关系边归一为自定义名（边存节点 id，这里按名字反查）
+    const edge = g.edges.find((e) => e.type === '道侣')
+    expect(edge).toBeTruthy()
+    const fromName = g.nodes.find((n) => n.id === edge!.from)?.name
+    const toName = g.nodes.find((n) => n.id === edge!.to)?.name
+    expect(fromName).toBe('张三')
+    expect(toName).toBe('苏沐雪')
   })
 })
