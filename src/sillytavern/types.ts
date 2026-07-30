@@ -232,6 +232,12 @@ export interface AppSettings {
   /** 可选外置记忆服务 Base URL（Nocturne 类 HTTP，失败静默） */
   memoryServerUrl?: string;
   memoryServerToken?: string;
+  /** LLM 摘要记账：用独立小模型把回合正文提炼成结构化记忆（柏宝书风格） */
+  memoryLlmSummary?: boolean;
+  /** LLM 摘要专用端点（小模型，baseUrl/apiKey/model 三件套）；全空则不启用 */
+  summaryApi?: EmbeddingApiConfig;
+  /** LLM 摘要运行状态诊断 */
+  summaryStatus?: EmbeddingStatus;
   /**
    * Embedding 运行时诊断（可观测性）：记录上次建库/召回是否成功、原因、命中数。
    * 由 memory-embed 写回 AppSettings.embeddingStatus；UI 可展示。
@@ -335,6 +341,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   embeddingStatus: { state: 'disabled' },
   memoryServerUrl: '',
   memoryServerToken: '',
+  memoryLlmSummary: false,
+  summaryApi: { baseUrl: '', apiKey: '', model: '' },
+  summaryStatus: { state: 'disabled' },
   historyCompress: true,
   historyMaxTokens: 12000,
   tableMemoryScheduler: {

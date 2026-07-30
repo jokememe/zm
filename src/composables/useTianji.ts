@@ -64,6 +64,7 @@ import {
   seedRosterNodes,
 } from '@/composables/memory-graph'
 import { embedAndStoreBeats } from '@/composables/memory-embed'
+import { summarizeTurnToBeats } from '@/composables/memory-summary'
 import { snapshotWorldState, restoreWorldState } from '@/composables/world-state'
 import {
   isApiConfigured,
@@ -183,6 +184,19 @@ function patchEmbeddingStatus(patch: Partial<EmbeddingStatus> & { state: Embeddi
   // 落盘，避免刷新丢失诊断
   try {
     void saveSettings({ ...cur, embeddingStatus: next })
+  } catch {
+    /* ignore */
+  }
+}
+
+function patchSummaryStatus(patch: Partial<EmbeddingStatus> & { state: EmbeddingStatus['state'] }): void {
+  const cur = settings.value
+  if (!cur) return
+  const prev = cur.summaryStatus || { state: 'disabled' as const }
+  const next: EmbeddingStatus = { ...prev, ...patch }
+  settings.value = { ...cur, summaryStatus: next }
+  try {
+    void saveSettings({ ...cur, summaryStatus: next })
   } catch {
     /* ignore */
   }
@@ -862,7 +876,7 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
   let newBeats: Array<{
     id: string
     text: string
-    nodeName: string
+    nodeName?: string
     year?: number
     season?: string
   }> = []
@@ -880,14 +894,45 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
     if (extra.length) newBeats = [...newBeats, ...extra]
   }
 
-  // 柏宝书化：自动从AI回复提取实体（物品/地点/状态/关系）
+  // 柏宝书化：自动记账（优先 LLM 摘要，失败回退正则提取）
   let digestResult: { beatCount: number } | null = null
   if (fallbackOn && rosterNames.length) {
+    const s = settings.value
+    const useLlm =
+      !!s?.memoryLlmSummary &&
+      !!s.summaryApi?.baseUrl &&
+      !!s.summaryApi?.apiKey &&
+      !!s.api
+    const main = parsed.maintext || cleanedText || raw
     try {
-      const main = parsed.maintext || cleanedText || raw
-      digestResult = ingestReplyDigest(main, rosterNames, cal)
-    } catch {
-      /* 实体提取失败不影响主流程 */
+      if (useLlm) {
+        const r = await summarizeTurnToBeats({
+          body: main,
+          rosterNames,
+          calendar: cal,
+          api: s!.api!,
+          summaryApi: s!.summaryApi!,
+        })
+        digestResult = { beatCount: r.beatCount }
+        if (r.beats.length) newBeats = [...newBeats, ...r.beats]
+        patchSummaryStatus({ state: 'ok', lastStoreAt: Date.now() })
+      } else {
+        digestResult = ingestReplyDigest(main, rosterNames, cal)
+      }
+    } catch (e) {
+      // LLM 摘要失败 → 回退正则；保留错误诊断
+      try {
+        digestResult = ingestReplyDigest(main, rosterNames, cal)
+        if (useLlm) {
+          patchSummaryStatus({
+            state: 'error',
+            lastStoreAt: Date.now(),
+            message: e instanceof Error ? e.message : String(e),
+          })
+        }
+      } catch {
+        /* ignore */
+      }
     }
     // 热近事超阈值自动压缩
     try {

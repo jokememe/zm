@@ -137,6 +137,19 @@ const embedStatusText = computed(() => {
   }
   return '未启用 embedding 模式'
 })
+/** 摘要端点三件套合并写入（保留未改字段） */
+function patchSummaryApi(field: 'baseUrl' | 'apiKey' | 'model', raw: string) {
+  const cur = props.settings.summaryApi || { baseUrl: '', apiKey: '', model: '' }
+  patch({ summaryApi: { ...cur, [field]: raw.trim() } })
+}
+/** 摘要运行诊断文案 */
+const summaryStatusText = computed(() => {
+  const st = props.settings.summaryStatus
+  if (!st || st.state === 'disabled') return '未启用'
+  if (st.state === 'ok') return '正常 · 上次记账成功'
+  if (st.state === 'error') return st.message ? `失败：${st.message}` : '失败'
+  return '未启用'
+})
 
 /** 显示页 · 历史限制自定义：钳制后写入 */
 function clampInt(n: number, min: number, max: number): number {
@@ -1201,6 +1214,60 @@ function onTagsInput(value: string) {
             <span class="sched-field__title">Embedding 运行诊断</span>
             <span class="sched-field__key">embeddingStatus</span>
             <p class="sched-hint" :class="`sched-hint--${settings.embeddingStatus.state}`">{{ embedStatusText }}</p>
+          </div>
+
+          <label class="tj-field sched-field">
+            <span class="sched-field__title">LLM 摘要记账（柏宝书式）</span>
+            <span class="sched-field__key">memoryLlmSummary</span>
+            <input
+              type="checkbox"
+              :checked="!!settings.memoryLlmSummary"
+              @change="
+                patch({
+                  memoryLlmSummary: ($event.target as HTMLInputElement).checked,
+                })
+              "
+            />
+            <p class="sched-field__help">
+              开启后用独立小模型（如本地 Gemma / Qwen）把回合正文提炼成结构化记忆，替代正则记账，质量更高。
+            </p>
+          </label>
+
+          <div class="tj-field sched-field" v-if="settings.memoryLlmSummary">
+            <span class="sched-field__title">摘要小模型端点（baseUrl / API Key / 模型名）</span>
+            <span class="sched-field__key">summaryApi</span>
+            <div class="sched-embed-grid">
+              <input
+                class="tj-input"
+                type="url"
+                :value="settings.summaryApi?.baseUrl || ''"
+                placeholder="https://你的小模型/v1"
+                @change="patchSummaryApi('baseUrl', ($event.target as HTMLInputElement).value)"
+              />
+              <input
+                class="tj-input"
+                type="password"
+                :value="settings.summaryApi?.apiKey || ''"
+                placeholder="API Key（可与主 API 不同）"
+                @change="patchSummaryApi('apiKey', ($event.target as HTMLInputElement).value)"
+              />
+              <input
+                class="tj-input"
+                type="text"
+                :value="settings.summaryApi?.model || ''"
+                placeholder="小模型名（如 gemma-3-27b / qwen2.5-32b）"
+                @change="patchSummaryApi('model', ($event.target as HTMLInputElement).value)"
+              />
+            </div>
+            <p class="sched-field__help">
+              建议使用本地或廉价小模型：摘要任务轻、需低延迟。失败会自动回退正则记账。
+            </p>
+          </div>
+
+          <div class="tj-field sched-field" v-if="settings.memoryLlmSummary">
+            <span class="sched-field__title">摘要运行诊断</span>
+            <span class="sched-field__key">summaryStatus</span>
+            <p class="sched-hint" :class="`sched-hint--${settings.summaryStatus?.state || 'disabled'}`">{{ summaryStatusText }}</p>
           </div>
 
           <label class="tj-field sched-field">
