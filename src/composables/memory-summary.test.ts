@@ -152,4 +152,31 @@ describe('summarizeTurnToBeats', () => {
     expect(fromName).toBe('张三')
     expect(toName).toBe('苏沐雪')
   })
+
+  it('正文用默认全名「沈青岚」指代时归一为自定义名（不生成默认名节点）', async () => {
+    setMasterName('沈青')
+    const fetchMock = mockFetchWith(
+      ['状态|沈青岚|突破', '关系|沈青岚|道侣|苏沐雪'].join('\n'),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const r = await summarizeTurnToBeats({
+      body: '今日沈青岚于密室中突破瓶颈，修为大进，并与苏沐雪结为道侣。',
+      rosterNames: ['沈青', '苏沐雪'],
+      calendar: { year: 1, season: '春' },
+      api: DUMMY_API,
+      summaryApi: SUMMARY_API,
+    })
+
+    const g = loadMemoryGraph()
+    expect(g.nodes.find((n) => n.name === '沈青岚')).toBeUndefined()
+    expect(r.beatCount).toBeGreaterThan(0)
+    const master = g.nodes.find((n) => n.name === '沈青')
+    expect(master).toBeTruthy()
+    expect((master?.beats || []).some((b) => b.text.includes('突破'))).toBe(true)
+    const edge = g.edges.find((e) => e.type === '道侣')
+    expect(edge).toBeTruthy()
+    expect(g.nodes.find((n) => n.id === edge!.from)?.name).toBe('沈青')
+    expect(g.nodes.find((n) => n.id === edge!.to)?.name).toBe('苏沐雪')
+  })
 })

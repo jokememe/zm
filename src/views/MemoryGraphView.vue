@@ -17,6 +17,7 @@ import {
   type MemoryGraphState,
 } from '@/composables/memory-graph'
 import { getArchiveCount, hydrateMemoryArchive } from '@/composables/memory-archive'
+import { DEFAULT_MASTER_NAME } from '@/data/opening'
 import { useToast } from '@/composables/useToast'
 
 const { injectContext } = useTianji()
@@ -37,9 +38,10 @@ void hydrateMemoryArchive().then(() => {
       .map((d) => d.name)
       .concat(masterName.value ? [String(masterName.value)] : []),
   )
-  // 清理：把历史遗留的「掌门/本座/宗主」称呼节点合并到自定义名
+  // 清理：把历史遗留的「掌门/本座/宗主」以及默认全名「沈青岚」节点合并到自定义名
   if (masterName.value) {
-    for (const t of ['掌门', '本座', '宗主']) {
+    for (const t of ['掌门', '本座', '宗主', DEFAULT_MASTER_NAME]) {
+      if (t === masterName.value) continue
       try {
         renameMemoryGraphNode(t, masterName.value)
       } catch {
@@ -63,9 +65,10 @@ watch(
         /* ignore */
       }
     }
-    // 称呼节点也一并归一
+    // 称呼节点与默认全名也一并归一
     if (newName) {
-      for (const t of ['掌门', '本座', '宗主']) {
+      for (const t of ['掌门', '本座', '宗主', DEFAULT_MASTER_NAME]) {
+        if (t === newName) continue
         try {
           renameMemoryGraphNode(t, newName)
         } catch {

@@ -4,7 +4,7 @@
  * - 冷层：memory-archive 全量 beats（IndexedDB + 镜像），有线索可闪回
  * 与经营 relationEdges 分离。
  */
-import { MEMORY_GRAPH_STORAGE_KEY } from '@/data/opening'
+import { DEFAULT_MASTER_NAME, MEMORY_GRAPH_STORAGE_KEY } from '@/data/opening'
 import {
   appendArchiveBeats,
   clearMemoryArchive,
@@ -53,6 +53,9 @@ export function resolveProtagonistAlias(name: string): string {
   if (!n) return name
   if (_masterName && n === normalizeName(_masterName)) return _masterName
   if (MASTER_TITLES.has(n)) return _masterName || name
+  // 默认掌门全名（如「沈青岚」）也是男主别名：LLM 可能从开局默认设定沿用它，
+  // 若不归一会再生成一个独立的默认名节点。
+  if (n === normalizeName(DEFAULT_MASTER_NAME)) return _masterName || name
   return name
 }
 
@@ -922,6 +925,7 @@ export function ingestNarrativeFallback(
     ...baseRoster,
     ...(_masterName ? [_masterName] : []),
     ...MASTER_TITLES,
+    DEFAULT_MASTER_NAME,
   ]
   const hits = matchNamesInText(body, matchRoster)
   if (!hits.length) return []
@@ -985,6 +989,7 @@ export function ingestReplyDigest(
     ...rosterNames.map((n) => normalizeName(n)),
     ...(_masterName ? [normalizeName(_masterName)] : []),
     ...[...MASTER_TITLES].map((t) => normalizeName(t)),
+    normalizeName(DEFAULT_MASTER_NAME),
   ])
   const patch: MemoryGraphPatch = { nodes: [], edges: [] }
   const cal: { year?: number; season?: string } = calendar || {}

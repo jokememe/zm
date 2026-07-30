@@ -13,6 +13,7 @@
 
 import { createApiRouter } from '@/sillytavern/api-router'
 import type { ApiSettings, EmbeddingApiConfig } from '@/sillytavern/types'
+import { DEFAULT_MASTER_NAME } from '@/data/opening'
 import {
   applyMemoryGraphPatch,
   loadMemoryGraph,
@@ -89,6 +90,7 @@ function parseSummaryLines(
   const rosterNorm = new Set([
     ...rosterNames.map((n) => normalizeName(n)),
     ...getMasterTitles().map((t) => normalizeName(t)),
+    normalizeName(DEFAULT_MASTER_NAME),
   ])
   const patch: { nodes: any[]; edges: any[] } = { nodes: [], edges: [] }
   const beats: SummaryBeat[] = []
