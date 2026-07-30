@@ -55,7 +55,9 @@ import { hasMemoryTag } from '@/composables/memory-tag'
 import { runSettle, textFromSettleCompletion } from '@/composables/settle-runner'
 import '@/composables/memory-graph'
 import {
+  compactHotBeats,
   ensureMemoryGraphHydrated,
+  ingestReplyDigest,
   selectMemoryGraphForTurn,
   ingestMemoryTag,
   ingestNarrativeFallback,
@@ -878,6 +880,23 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
     if (extra.length) newBeats = [...newBeats, ...extra]
   }
 
+  // 柏宝书化：自动从AI回复提取实体（物品/地点/状态/关系）
+  let digestResult: { beatCount: number } | null = null
+  if (fallbackOn && rosterNames.length) {
+    try {
+      const main = parsed.maintext || cleanedText || raw
+      digestResult = ingestReplyDigest(main, rosterNames, cal)
+    } catch {
+      /* 实体提取失败不影响主流程 */
+    }
+    // 热近事超阈值自动压缩
+    try {
+      compactHotBeats()
+    } catch {
+      /* ignore */
+    }
+  }
+
   if (parsed.sum?.trim()) {
     recordTurnSum(parsed.sum, { context: contextInjected.value })
   }
@@ -904,7 +923,7 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
     })
   }
 
-  if (parsed.sum?.trim() || memoryTagged || newBeats.length) {
+  if (parsed.sum?.trim() || memoryTagged || newBeats.length || (digestResult && digestResult.beatCount > 0)) {
     if (settings.value) await syncSystemLore(settings.value)
     else {
       await ensureAndRefreshSystemLorebook({

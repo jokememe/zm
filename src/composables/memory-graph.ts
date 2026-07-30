@@ -63,11 +63,6 @@ export interface MemoryGraphNode {
   name: string
   /** 展示用属性（性格、位置、身份等） */
   attrs: Record<string, string>
-  /**
-   * 触发词（学 Nocturne disclosure/glossary）：
-   * 用户话/正文命中任一词则优先选入本节点。
-   */
-  triggers?: string[]
   beats: MemoryGraphBeat[]
   updatedAt: number
 }
@@ -206,7 +201,6 @@ export function applyMemoryGraphPatch(
         kind: np.kind || 'character',
         name,
         attrs: {},
-        triggers: [],
         beats: [],
         updatedAt: ts,
       }
@@ -384,10 +378,12 @@ export interface SelectGraphForTurnInput {
 }
 
 /**
- * 规则选取（无限记忆 · 有线索可想起）：
- * 1) 点名节点 + 热层关键词 + 一跳邻接
- * 2) 有线索时从冷档案捞旧事闪回（热窗口挤掉的细节仍可回）
- * 3) 完全无线索：仅最近更新热节点，不扫十年冷库
+ * 柏宝书式自动选取：
+ * 1) 当前会话命中名册人名 → 直接选入
+ * 2) 查询词与节点属性/近事关键词弱匹配 → 按相关度排序
+ * 3) 一跳邻接扩展关联角色
+ * 4) 有线索时从冷档案捞旧事闪回
+ * 5) 完全无线索：取最近更新热节点
  */
 export function selectMemoryGraphForTurn(input: SelectGraphForTurnInput): {
   names: string[]
@@ -417,18 +413,6 @@ export function selectMemoryGraphForTurn(input: SelectGraphForTurnInput): {
 
   const q = String(input.query || '').trim()
 
-  // 触发词优先（disclosure / glossary）
-  if (q.length >= 1 && hit.length < maxNodes) {
-    for (const n of g.nodes) {
-      if (hit.length >= maxNodes) break
-      const trigs = (n.triggers || []).map((t) => String(t || '').trim()).filter((t) => t.length >= 1)
-      if (!trigs.length) continue
-      if (trigs.some((t) => q.includes(t))) {
-        if (!hit.includes(n.name)) hit.push(n.name)
-      }
-    }
-  }
-
   // 属性/近事关键词弱匹配（query 片段出现在 attrs/beats）
   if (hit.length < maxNodes) {
     if (q.length >= 2) {
@@ -437,7 +421,6 @@ export function selectMemoryGraphForTurn(input: SelectGraphForTurnInput): {
           let score = 0
           const hay = [
             n.name,
-            ...(n.triggers || []),
             ...Object.values(n.attrs || {}),
             ...(n.beats || []).map((b) => b.text),
           ].join('\n')
@@ -677,19 +660,6 @@ function normalizeGraphState(o: Partial<MemoryGraphState>): MemoryGraphState {
               season: b?.season != null ? String(b.season) : undefined,
             }))
           : [],
-        triggers: (() => {
-          const rawTr = (n as MemoryGraphNode)?.triggers as unknown
-          if (Array.isArray(rawTr)) {
-            return rawTr.map((t) => String(t || '').trim()).filter(Boolean)
-          }
-          if (typeof rawTr === 'string') {
-            return rawTr
-              .split(/[,，;；|]/)
-              .map((t) => t.trim())
-              .filter(Boolean)
-          }
-          return []
-        })(),
         updatedAt: Number(n?.updatedAt) || 0,
       }))
     : []
@@ -957,6 +927,236 @@ export function ingestNarrativeFallback(
   return result
 }
 
+/**
+ * 柏宝书化：从 AI 回复正文自动提取结构化实体与事件。
+ * 纯规则引擎 — 零 LLM 调用，类似 BaiBai-Book 的旁侧记账。
+ * 提取：物品变更 / 地点移动 / 状态变化 / 关系变更。
+ */
+export function ingestReplyDigest(
+  text: string,
+  rosterNames: string[],
+  calendar?: { year: number; season: string },
+): { beatCount: number; itemNodes: number; placeNodes: number; relationEdges: number } {
+  const body = String(text || '')
+    .replace(/<[^>]+>/g, '')
+    .trim()
+  if (body.length < 16) return { beatCount: 0, itemNodes: 0, placeNodes: 0, relationEdges: 0 }
+
+  const g = loadMemoryGraph()
+  // 归一化名册用于反向匹配：从物品/地点事件定位到角色
+  const rosterNorm = new Set(rosterNames.map((n) => normalizeName(n)))
+  const patch: MemoryGraphPatch = { nodes: [], edges: [] }
+  const cal = calendar || {}
+  const stats = { beatCount: 0, itemNodes: 0, placeNodes: 0, relationEdges: 0 }
+
+  // 预处理：去空格换行，方便正则锚定
+  const flat = body.replace(/\s+/g, '')
+
+  // ── 物品 ──
+  type ItemRule = { pattern: RegExp; tag: string; source?: (m: RegExpExecArray) => string | undefined }
+  const itemRules: ItemRule[] = [
+    { pattern: /([^，。；!\n]{2,8})(?:获得|得到|取得|拿到|拾取|收下|购入|炼成)([^，。；!\n]{1,12})/g, tag: '获得' },
+    { pattern: /([^，。；!\n]{2,8})(?:失去|丢弃|遗失|交出|摧毁)([^，。；!\n]{1,12})/g, tag: '失去' },
+    { pattern: /([^，。；!\n]{2,8})(?:使用|服用|吞下|运功催动)([^，。；!\n]{1,12})/g, tag: '使用' },
+    // 传递：把 AA 交给 BB → BB 获得 AA，AA 转到 BB
+    { pattern: /(?:把|将)([^，。；!\n]{1,12})(?:交给|送给|赠与|递给)([^，。；!\n]{2,8})/g, tag: '获得', source: (m) => m[2] },
+  ]
+  for (const rule of itemRules) {
+    let m: RegExpExecArray | null
+    while ((m = rule.pattern.exec(flat)) !== null) {
+      const source = rule.source ? rule.source(m) : m[1]
+      const item = rule.source ? m[1] : m[2]
+      const name = source?.trim() || ''
+      const itemName = item?.trim() || ''
+      if (name.length < 2 || itemName.length < 2) continue
+      if (FALLBACK_STOP.has(name) || FALLBACK_STOP.has(itemName)) continue
+      if (!rosterNorm.has(normalizeName(name))) continue
+      patch.nodes!.push({
+        name: itemName,
+        kind: 'item',
+        attrs: { 关联角色: name, 状态: rule.tag },
+      })
+      patch.nodes!.push({
+        name,
+        kind: 'character',
+        beat: `${rule.tag}${itemName}`,
+        beatYear: cal.year,
+        beatSeason: cal.season,
+      })
+      stats.itemNodes++
+      stats.beatCount++
+    }
+  }
+
+  // ── 地点 ──
+  const placeRe = /([^，。；!\n]{2,8})(?:来到|到达|踏入|进入|抵达|前往|赶赴|离开|走出|退出)([^，。；!\n]{2,10})/g
+  let pm: RegExpExecArray | null
+  while ((pm = placeRe.exec(flat)) !== null) {
+    const name = pm[1].trim()
+    const place = pm[2].trim()
+    if (name.length < 2 || place.length < 2) continue
+    if (FALLBACK_STOP.has(name) || FALLBACK_STOP.has(place)) continue
+    if (!rosterNorm.has(normalizeName(name))) continue
+    const isArrive = flat.slice(pm.index, pm.index + 40).includes('来到') || flat.slice(pm.index, pm.index + 40).includes('进入') || flat.slice(pm.index, pm.index + 40).includes('抵达') || flat.slice(pm.index, pm.index + 40).includes('前往')
+    patch.nodes!.push({
+      name: place,
+      kind: 'place',
+      attrs: { 最近出入: name },
+    })
+    patch.nodes!.push({
+      name,
+      kind: 'character',
+      beat: isArrive ? `抵达${place}` : `离开${place}`,
+      beatYear: cal.year,
+      beatSeason: cal.season,
+    })
+    stats.placeNodes++
+    stats.beatCount++
+  }
+
+  // ── 状态变化 ──
+  for (const name of rosterNames) {
+    const idx = flat.indexOf(name)
+    if (idx < 0) continue
+    const ctx = flat.slice(Math.max(0, idx - 3), idx + name.length + 24)
+    const statusHits: string[] = []
+    if (/突破/.test(ctx)) statusHits.push('突破')
+    if (/受伤|负伤|重创|被重创/.test(ctx)) statusHits.push('受伤')
+    if (/中毒|中蛊|中毒了/.test(ctx)) statusHits.push('中毒')
+    if (/痊愈|恢复|好转|苏醒/.test(ctx)) statusHits.push('痊愈')
+    if (/突破.*境界|晋升|进境|修为大?[进增涨]/.test(ctx)) statusHits.push('修为精进')
+    for (const s of statusHits) {
+      patch.nodes!.push({
+        name,
+        kind: 'character',
+        beat: s,
+        beatYear: cal.year,
+        beatSeason: cal.season,
+      })
+      stats.beatCount++
+      // 更新 attrs
+      if (s === '突破' || s === '修为精进') {
+        patch.nodes!.push({ name, kind: 'character', attrs: { 最近状态: s } })
+      }
+    }
+  }
+
+  // ── 关系变更 ──
+  const relPatterns: Array<{ re: RegExp; type: MemoryGraphEdgeType }> = [
+    { re: /([^，。；!\n]{2,8})(?:与|和|跟)([^，。；!\n]{2,8})(?:结为|结成|成为)(?:道侣|伴侣|夫妻)/g, type: '道侣' },
+    { re: /([^，。；!\n]{2,8})(?:与|和|跟)([^，。；!\n]{2,8})(?:结为|结成)(?:兄弟|姐妹|同盟|搭档)/g, type: '结义' },
+    { re: /([^，。；!\n]{2,8})(?:拜|认)([^，。；!\n]{2,8})为师/g, type: '师徒' },
+    { re: /([^，。；!\n]{2,8})收([^，。；!\n]{2,8})为徒/g, type: '师徒' },
+    { re: /([^，。；!\n]{2,8})(?:与|和|跟)([^，。；!\n]{2,8})(?:决裂|反目|翻脸|为敌|结仇|结怨)/g, type: '仇恨' },
+  ]
+  for (const { re, type } of relPatterns) {
+    let rm: RegExpExecArray | null
+    while ((rm = re.exec(flat)) !== null) {
+      const a = rm[1].trim()
+      const b = rm[2].trim()
+      if (a.length < 2 || b.length < 2) continue
+      if (FALLBACK_STOP.has(a) || FALLBACK_STOP.has(b)) continue
+      const aOk = rosterNorm.has(normalizeName(a))
+      const bOk = rosterNorm.has(normalizeName(b))
+      if (!aOk && !bOk) continue
+      // 至少一方是名册角色
+      patch.edges!.push({ from: a, to: b, type })
+      // 给双方各记一条近事
+      patch.nodes!.push({
+        name: a,
+        kind: 'character',
+        beat: `${type}${b}`,
+        beatYear: cal.year,
+        beatSeason: cal.season,
+      })
+      patch.nodes!.push({
+        name: b,
+        kind: 'character',
+        beat: `${type}${a}`,
+        beatYear: cal.year,
+        beatSeason: cal.season,
+      })
+      stats.relationEdges++
+      stats.beatCount += 2
+    }
+  }
+
+  if ((patch.nodes?.length || 0) > 0 || (patch.edges?.length || 0) > 0) {
+    const next = applyMemoryGraphPatch(g, patch)
+    saveMemoryGraph(next)
+  }
+  return stats
+}
+
+/**
+ * 柏宝书化：热近事多层压缩。
+ * 角色 beats 超过阈值时，将最旧的 beats 合并为摘要写入冷档案并从热层移除。
+ * 类似 BaiBai-Book 的摘要→总结递进压缩。
+ */
+export function compactHotBeats(
+  opts?: { hotKeep?: number; mergeThreshold?: number },
+): { merged: number; characters: number } {
+  const hotKeep = Math.max(4, opts?.hotKeep ?? 8)
+  const mergeThreshold = Math.max(hotKeep + 4, opts?.mergeThreshold ?? 16)
+  const g = loadMemoryGraph()
+  let merged = 0
+  let chars = 0
+  const next = {
+    version: 1 as const,
+    nodes: g.nodes.map((n) => ({ ...n, attrs: { ...n.attrs }, beats: [...(n.beats || [])] })),
+    edges: g.edges.map((e) => ({ ...e })),
+  }
+  for (const node of next.nodes) {
+    if (node.kind !== 'character') continue
+    if (node.beats.length <= mergeThreshold) continue
+    chars++
+    // 按时间正序（旧在前），取超出 hotKeep 的最老 beats
+    const ordered = [...node.beats].reverse() // 旧→新
+    const overflow = ordered.slice(0, ordered.length - hotKeep)
+    if (!overflow.length) continue
+    // 生成摘要：拼接旧 beats 的前 N 字
+    const summary = overflow
+      .map((b) => b.text)
+      .join('；')
+      .slice(0, 300)
+    // 写入冷档案
+    appendArchiveBeats(
+      overflow.map((b) => ({
+        id: b.id,
+        nodeId: node.id,
+        nodeName: node.name,
+        text: b.text,
+        at: b.at || Date.now(),
+        year: b.year,
+        season: b.season,
+      })),
+    )
+    // 追加一条摘要 beat 到冷档案
+    const summaryId = newId('s')
+    appendArchiveBeats([
+      {
+        id: summaryId,
+        nodeId: node.id,
+        nodeName: node.name,
+        text: `【摘要】${summary}`,
+        at: Date.now(),
+      },
+    ])
+    // 热层保留最近 hotKeep 条 + 一条"前情摘要"占位 beat
+    const kept = ordered.slice(ordered.length - hotKeep).reverse()
+    node.beats = [
+      { id: summaryId, text: `〔前情〕${summary}`, at: Date.now() },
+      ...kept,
+    ]
+    merged += overflow.length
+    node.updatedAt = Date.now()
+  }
+  if (chars > 0) {
+    saveMemoryGraph(next)
+  }
+  return { merged, characters: chars }
+}
+
 /** P1：追加/改写近事 */
 export function appendNodeBeat(
   name: string,
@@ -990,23 +1190,6 @@ export function removeNodeBeat(name: string, beatId: string): boolean {
   const before = node.beats.length
   node.beats = (node.beats || []).filter((b) => b.id !== beatId)
   if (node.beats.length === before) return false
-  node.updatedAt = now()
-  saveMemoryGraph(g)
-  return true
-}
-
-/** P1：设置节点触发词（逗号分隔或数组） */
-export function setNodeTriggers(name: string, triggers: string[] | string): boolean {
-  const g = loadMemoryGraph()
-  const node = findNodeByName(g, name)
-  if (!node) return false
-  const list = Array.isArray(triggers)
-    ? triggers
-    : String(triggers || '')
-        .split(/[,，;；|]/)
-        .map((t) => t.trim())
-        .filter(Boolean)
-  node.triggers = [...new Set(list)].slice(0, 24)
   node.updatedAt = now()
   saveMemoryGraph(g)
   return true

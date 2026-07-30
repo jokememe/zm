@@ -14,7 +14,6 @@ import {
   ingestMemoryTag,
   seedRosterNodes,
   ingestNarrativeFallback,
-  setNodeTriggers,
   appendNodeBeat,
 } from './memory-graph'
 
@@ -119,29 +118,6 @@ describe('P0 seed + narrative fallback', () => {
     expect(beats.length).toBeGreaterThan(0)
     const g = loadMemoryGraph()
     expect(findName(g, '陆承渊')?.beats[0]?.text).toMatch(/出场|提及/)
-  })
-})
-
-describe('P1 triggers + edit', () => {
-  beforeEach(() => {
-    clearMemoryGraph()
-  })
-
-  it('setNodeTriggers makes selectMemoryGraphForTurn prefer node', () => {
-    seedRosterNodes(['沈白'])
-    appendNodeBeat('沈白', '藏锋不露')
-    setNodeTriggers('沈白', ['赤焰令', '比剑'])
-    const g = loadMemoryGraph()
-    const r = selectMemoryGraphForTurn({
-      graph: g,
-      query: '掌门取出赤焰令示众',
-      rosterNames: ['沈白'],
-      maxNodes: 3,
-      maxChars: 800,
-      enableFlashback: false,
-    })
-    expect(r.names).toContain('沈白')
-    expect(r.text).toContain('沈白')
   })
 })
 

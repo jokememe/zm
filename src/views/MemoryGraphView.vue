@@ -12,7 +12,6 @@ import {
   renameMemoryGraphNode,
   seedRosterNodes,
   selectMemoryGraphForTurn,
-  setNodeTriggers,
   type MemoryGraphNode,
   type MemoryGraphState,
 } from '@/composables/memory-graph'
@@ -28,7 +27,6 @@ const search = ref('')
 const selectedId = ref<string | null>(null)
 const showExtras = ref(false)
 const draftBeat = ref('')
-const draftTriggers = ref('')
 
 void hydrateMemoryArchive().then(() => {
   // 名册种子：至少有角色壳
@@ -154,16 +152,7 @@ watch(filteredCharacters, (list) => {
 
 function selectNode(n: MemoryGraphNode) {
   selectedId.value = n.id
-  draftTriggers.value = (n.triggers || []).join('，')
   draftBeat.value = ''
-}
-
-function saveTriggers() {
-  const n = selectedNode.value
-  if (!n) return
-  setNodeTriggers(n.name, draftTriggers.value)
-  bump()
-  toast.success('触发词已保存', n.name)
 }
 
 function addBeat() {
@@ -421,23 +410,6 @@ function cardBrief(n: MemoryGraphNode): string {
               @keydown.enter.prevent="addBeat"
             />
             <button type="button" class="btn btn-soft btn-sm" @click="addBeat">写入</button>
-          </div>
-        </section>
-
-        <section class="detail-block">
-          <h4>触发词</h4>
-          <p class="muted" style="margin: 0 0 0.4rem; font-size: 0.8rem">
-            用户话/正文命中时优先选入（逗号分隔）
-          </p>
-          <div class="edit-row">
-            <input
-              v-model="draftTriggers"
-              type="text"
-              class="filter-search"
-              placeholder="如：赤焰令，比剑之约"
-              @keydown.enter.prevent="saveTriggers"
-            />
-            <button type="button" class="btn btn-soft btn-sm" @click="saveTriggers">保存</button>
           </div>
         </section>
 
