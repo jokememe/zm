@@ -946,7 +946,7 @@ export function ingestReplyDigest(
   // 归一化名册用于反向匹配：从物品/地点事件定位到角色
   const rosterNorm = new Set(rosterNames.map((n) => normalizeName(n)))
   const patch: MemoryGraphPatch = { nodes: [], edges: [] }
-  const cal = calendar || {}
+  const cal: { year?: number; season?: string } = calendar || {}
   const stats = { beatCount: 0, itemNodes: 0, placeNodes: 0, relationEdges: 0 }
 
   // 预处理：去空格换行，方便正则锚定

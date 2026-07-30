@@ -46,7 +46,7 @@ function normalizeName(name: string): string {
 export interface SummaryBeat {
   id: string
   text: string
-  nodeName?: string
+  nodeName: string
   year?: number
   season?: string
 }
@@ -87,7 +87,7 @@ function parseSummaryLines(
   const patch: { nodes: any[]; edges: any[] } = { nodes: [], edges: [] }
   const beats: SummaryBeat[] = []
   const stats: Omit<SummaryResult, 'beats'> = { beatCount: 0, itemNodes: 0, placeNodes: 0, relationEdges: 0 }
-  const cal = calendar || {}
+  const cal: { year?: number; season?: string } = calendar || {}
 
   const pushBeat = (name: string, text: string) => {
     patch.nodes.push({

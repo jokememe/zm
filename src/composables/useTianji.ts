@@ -876,7 +876,7 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
   let newBeats: Array<{
     id: string
     text: string
-    nodeName?: string
+    nodeName: string
     year?: number
     season?: string
   }> = []
