@@ -11,7 +11,8 @@
  * 本模块只做「记账」，召回由 system-lorebook / memory-embed（L3）负责。
  */
 
-import { createApiRouter } from '@/sillytavern/api-router'
+import { extractChatCompletionText, postChatCompletion } from '@/sillytavern/api-tools'
+import { normalizeBaseUrl } from '@/composables/api-cache'
 import type { ApiSettings, EmbeddingApiConfig } from '@/sillytavern/types'
 import { DEFAULT_MASTER_NAME } from '@/data/opening'
 import {
@@ -185,31 +186,46 @@ export async function summarizeTurnToBeats(opts: {
     return { beatCount: 0, beats: [], itemNodes: 0, placeNodes: 0, relationEdges: 0 }
   }
 
-  const summarySettings: ApiSettings = {
-    baseUrl: opts.summaryApi.baseUrl || '',
-    apiKey: opts.summaryApi.apiKey || '',
-    model: opts.summaryApi.model || '',
-    timeout: 20000,
+  // 端点规整：与 embedding 同一逻辑——normalizeApiBaseUrl 清尾斜杠 / 剥误贴的
+  // chat/completions，主动补 /v1；缺项给出明确原因，而不是闷头打一个必 404 的 URL。
+  const rawBase = (opts.summaryApi.baseUrl || '').trim()
+  const apiKey = (opts.summaryApi.apiKey || '').trim()
+  const model = (opts.summaryApi.model || '').trim()
+  const base = normalizeBaseUrl(rawBase)
+  const resolvedBase = base || (rawBase ? `${rawBase.replace(/\/+$/, '')}/v1` : '')
+  if (!resolvedBase || !apiKey || !model) {
+    const miss: string[] = []
+    if (!resolvedBase) miss.push('Base URL')
+    if (!apiKey) miss.push('API Key')
+    if (!model) miss.push('模型')
+    throw new Error(`摘要端点未配齐：缺少 ${miss.join('、')}`)
   }
-
-  const router = createApiRouter(summarySettings)
   const rosterLine = (opts.rosterNames || []).join('、')
   const userMsg = `名册角色：${rosterLine}\n\n正文：\n${body}`
 
-  const { response } = await router.call('story', {
-    messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user', content: userMsg },
-    ],
-    stream: false,
-    temperature: 0.2,
-    max_tokens: 320,
+  // 与主剧情/结算同一请求通道：proxify 在部署环境（HTTPS）走 /api/proxy 服务端
+  // 代理绕开 CORS；candidateBases 自动试 /v1 变体、多套鉴权头、20s 超时。
+  // 旧的 createApiRouter 是裸 fetch，远程端点/部署环境必被浏览器 CORS 拦截，
+  // 表现为「任何模型都报错」（Failed to fetch），主剧情却正常。
+  const completion = await postChatCompletion({
+    baseUrl: resolvedBase,
+    apiKey,
+    body: {
+      model,
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: userMsg },
+      ],
+      stream: false,
+      temperature: 0.2,
+      max_tokens: 320,
+    },
+    timeoutMs: 20000,
   })
-  if (!response.ok) {
-    throw new Error(`LLM 摘要接口 HTTP ${response.status}`)
+  if (!completion.ok) {
+    throw new Error(`LLM 摘要接口 ${completion.error}`)
   }
-  const data = (await response.json()) as any
-  const content = data?.choices?.[0]?.message?.content || ''
+  const content = extractChatCompletionText(completion.data).text
   if (!content.trim()) {
     return { beatCount: 0, beats: [], itemNodes: 0, placeNodes: 0, relationEdges: 0 }
   }
