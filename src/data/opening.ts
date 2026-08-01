@@ -217,12 +217,6 @@ export function buildOpeningTianjiMessages(
   ]
 }
 
-/** @deprecated 使用 buildOpeningTianjiMessages */
-export const openingTianjiMessages: TianjiMessage[] = buildOpeningTianjiMessages(
-  DEFAULT_MASTER_NAME,
-  DEFAULT_SECT_NAME,
-)
-
 export function buildOpeningNotifications(
   masterName: string,
   sectName: string,

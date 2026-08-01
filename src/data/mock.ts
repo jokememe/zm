@@ -297,14 +297,6 @@ export const tianjiSeed: TianjiMessage[] = [
   },
 ]
 
-/** @deprecated 岁月卡请用 buildTimelineSeasons(year, season)；保留空导出避免误 import 崩 */
-export const timelineSeasons: {
-  id: string
-  label: string
-  events: string[]
-  status: 'current' | 'next' | 'future'
-}[] = []
-
 export const hallChronicle = [
   { id: 'ch1', year: '天元 3840', text: '先师坐化，青岚宗势如残烛，外门散去过半。' },
   { id: 'ch2', year: '天元 3842', text: '你继任掌门，以残令重聚七名旧人，守住山门。' },

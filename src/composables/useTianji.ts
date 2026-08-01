@@ -5,7 +5,7 @@
 import { computed, ref } from 'vue'
 import type { TianjiMessage } from '@/types/game'
 import { tianjiSeed } from '@/data/mock'
-import { buildOpeningTianjiMessages, openingTianjiMessages } from '@/data/opening'
+import { buildOpeningTianjiMessages } from '@/data/opening'
 import { useGameState } from '@/composables/useGameState'
 import { useToast } from '@/composables/useToast'
 import {
@@ -88,7 +88,7 @@ function defaultLocalMessages(): TianjiMessage[] {
       String(sectName.value || '本宗'),
     )
   } catch {
-    return [...openingTianjiMessages]
+    return buildOpeningTianjiMessages('掌门', '本宗')
   }
 }
 
@@ -948,7 +948,9 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
             patchSummaryStatus({
               state: 'ok',
               lastStoreAt: Date.now(),
-              message: `批量 ${batch.length} 回合已统一记账`,
+              message:
+                `批量 ${batch.length} 回合已记 ${r.beatCount} 条` +
+                (r.droppedLines ? ` · ${r.droppedHint}` : ''),
             })
           } catch (e) {
             // 整批回退正则逐条记账，保证不丢；保留错误诊断
@@ -987,7 +989,11 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
         })
         digestResult = { beatCount: r.beatCount }
         if (r.beats.length) newBeats = [...newBeats, ...r.beats]
-        patchSummaryStatus({ state: 'ok', lastStoreAt: Date.now() })
+        patchSummaryStatus({
+          state: 'ok',
+          lastStoreAt: Date.now(),
+          message: r.droppedLines ? `记 ${r.beatCount} 条 · ${r.droppedHint}` : undefined,
+        })
       } else {
         digestResult = ingestReplyDigest(main, rosterNames, cal)
       }

@@ -61,6 +61,10 @@ export interface SummaryResult {
   itemNodes: number
   placeNodes: number
   relationEdges: number
+  /** 被解析丢弃的行数（格式错 / 非名册 / 泛称），让「静默丢数据」可见 */
+  droppedLines: number
+  /** 丢弃原因摘要，供诊断展示 */
+  droppedHint?: string
 }
 
 const SYSTEM_PROMPT = `你是仙侠小说的记忆记账员。阅读一段剧情正文，提取其中发生的实体与状态变化。
@@ -87,7 +91,7 @@ function parseSummaryLines(
   content: string,
   rosterNames: string[],
   calendar?: { year: number; season: string },
-): { patch: ReturnType<typeof loadMemoryGraph> extends never ? never : any; beats: SummaryBeat[]; stats: Omit<SummaryResult, 'beats'> } {
+): { patch: ReturnType<typeof loadMemoryGraph> extends never ? never : any; beats: SummaryBeat[]; stats: Omit<SummaryResult, 'beats'>; dropped: { format: number; roster: number; stop: number } } {
   const rosterNorm = new Set([
     ...rosterNames.map((n) => normalizeName(n)),
     ...getMasterTitles().map((t) => normalizeName(t)),
@@ -95,7 +99,14 @@ function parseSummaryLines(
   ])
   const patch: { nodes: any[]; edges: any[] } = { nodes: [], edges: [] }
   const beats: SummaryBeat[] = []
-  const stats: Omit<SummaryResult, 'beats'> = { beatCount: 0, itemNodes: 0, placeNodes: 0, relationEdges: 0 }
+  const dropped = { format: 0, roster: 0, stop: 0 }
+  const stats: Omit<SummaryResult, 'beats'> = {
+    beatCount: 0,
+    itemNodes: 0,
+    placeNodes: 0,
+    relationEdges: 0,
+    droppedLines: 0,
+  }
   const cal: { year?: number; season?: string } = calendar || {}
 
   const pushBeat = (name: string, text: string) => {
@@ -115,7 +126,10 @@ function parseSummaryLines(
     const line = raw.trim()
     if (!line) continue
     const m = line.match(/^(物品|地点|状态|关系)\|(.+)$/)
-    if (!m) continue
+    if (!m) {
+      dropped.format++
+      continue
+    }
     const type = m[1]
     const parts = m[2].split('|').map((s) => s.trim())
 
@@ -123,9 +137,18 @@ function parseSummaryLines(
       const who = resolveProtagonistAlias(parts[0])
       const act = parts[1]
       const what = parts[2]
-      if (who.length < 2 || what.length < 2) continue
-      if (FALLBACK_STOP.has(who) || FALLBACK_STOP.has(what)) continue
-      if (!rosterNorm.has(normalizeName(who))) continue
+      if (who.length < 2 || what.length < 2) {
+        dropped.format++
+        continue
+      }
+      if (FALLBACK_STOP.has(who) || FALLBACK_STOP.has(what)) {
+        dropped.stop++
+        continue
+      }
+      if (!rosterNorm.has(normalizeName(who))) {
+        dropped.roster++
+        continue
+      }
       patch.nodes.push({ name: what, kind: 'item', attrs: { 关联角色: who, 状态: act } })
       pushBeat(who, `${act}${what}`)
       stats.itemNodes++
@@ -133,18 +156,36 @@ function parseSummaryLines(
       const who = resolveProtagonistAlias(parts[0])
       const act = parts[1]
       const place = parts[2]
-      if (who.length < 2 || place.length < 2) continue
-      if (FALLBACK_STOP.has(who) || FALLBACK_STOP.has(place)) continue
-      if (!rosterNorm.has(normalizeName(who))) continue
+      if (who.length < 2 || place.length < 2) {
+        dropped.format++
+        continue
+      }
+      if (FALLBACK_STOP.has(who) || FALLBACK_STOP.has(place)) {
+        dropped.stop++
+        continue
+      }
+      if (!rosterNorm.has(normalizeName(who))) {
+        dropped.roster++
+        continue
+      }
       patch.nodes.push({ name: place, kind: 'place', attrs: { 最近出入: who } })
       pushBeat(who, /抵达|到达|进入|前往|赶赴/.test(act) ? `抵达${place}` : `离开${place}`)
       stats.placeNodes++
     } else if (type === '状态' && parts.length >= 2) {
       const who = resolveProtagonistAlias(parts[0])
       const status = parts[1]
-      if (who.length < 2) continue
-      if (FALLBACK_STOP.has(who)) continue
-      if (!rosterNorm.has(normalizeName(who))) continue
+      if (who.length < 2) {
+        dropped.format++
+        continue
+      }
+      if (FALLBACK_STOP.has(who)) {
+        dropped.stop++
+        continue
+      }
+      if (!rosterNorm.has(normalizeName(who))) {
+        dropped.roster++
+        continue
+      }
       pushBeat(who, status)
       if (status === '突破' || status === '修为精进') {
         patch.nodes.push({ name: who, kind: 'character', attrs: { 最近状态: status } })
@@ -153,11 +194,20 @@ function parseSummaryLines(
       const a = resolveProtagonistAlias(parts[0])
       const rel = parts[1] as MemoryGraphEdgeType
       const b = resolveProtagonistAlias(parts[2])
-      if (a.length < 2 || b.length < 2) continue
-      if (FALLBACK_STOP.has(a) || FALLBACK_STOP.has(b)) continue
+      if (a.length < 2 || b.length < 2) {
+        dropped.format++
+        continue
+      }
+      if (FALLBACK_STOP.has(a) || FALLBACK_STOP.has(b)) {
+        dropped.stop++
+        continue
+      }
       const aOk = rosterNorm.has(normalizeName(a))
       const bOk = rosterNorm.has(normalizeName(b))
-      if (!aOk && !bOk) continue
+      if (!aOk && !bOk) {
+        dropped.roster++
+        continue
+      }
       patch.edges.push({ from: a, to: b, type: rel })
       pushBeat(a, `${rel}${b}`)
       pushBeat(b, `${rel}${a}`)
@@ -165,7 +215,8 @@ function parseSummaryLines(
     }
   }
 
-  return { patch, beats, stats }
+  stats.droppedLines = dropped.format + dropped.roster + dropped.stop
+  return { patch, beats, stats, dropped }
 }
 
 /**
@@ -183,7 +234,7 @@ export async function summarizeTurnToBeats(opts: {
     .replace(/<[^>]+>/g, '')
     .trim()
   if (body.length < 16) {
-    return { beatCount: 0, beats: [], itemNodes: 0, placeNodes: 0, relationEdges: 0 }
+    return { beatCount: 0, beats: [], itemNodes: 0, placeNodes: 0, relationEdges: 0, droppedLines: 0 }
   }
 
   // 端点规整：与 embedding 同一逻辑——normalizeApiBaseUrl 清尾斜杠 / 剥误贴的
@@ -227,14 +278,18 @@ export async function summarizeTurnToBeats(opts: {
   }
   const content = extractChatCompletionText(completion.data).text
   if (!content.trim()) {
-    return { beatCount: 0, beats: [], itemNodes: 0, placeNodes: 0, relationEdges: 0 }
+    return { beatCount: 0, beats: [], itemNodes: 0, placeNodes: 0, relationEdges: 0, droppedLines: 0 }
   }
 
-  const { patch, beats, stats } = parseSummaryLines(content, opts.rosterNames, opts.calendar)
+  const { patch, beats, stats, dropped } = parseSummaryLines(content, opts.rosterNames, opts.calendar)
   if ((patch.nodes.length || 0) > 0 || (patch.edges.length || 0) > 0) {
     const g = loadMemoryGraph()
     const next = applyMemoryGraphPatch(g, patch as any)
     saveMemoryGraph(next)
   }
-  return { beats, ...stats }
+  const droppedHint =
+    stats.droppedLines > 0
+      ? `丢弃 ${stats.droppedLines} 行（格式 ${dropped.format} · 非名册 ${dropped.roster} · 泛称 ${dropped.stop}）`
+      : undefined
+  return { beats, ...stats, droppedHint }
 }

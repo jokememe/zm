@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, markRaw, type Component } from 'vue'
+import { computed, markRaw, onBeforeUnmount, onErrorCaptured, onMounted, ref, type Component } from 'vue'
 import TopBar from '@/components/layout/TopBar.vue'
 import SideNav from '@/components/layout/SideNav.vue'
 import TianjiPanel from '@/components/layout/TianjiPanel.vue'
@@ -69,6 +69,46 @@ function onNavBackdrop() {
 function onTianjiBackdrop() {
   closeTianjiSheet()
 }
+
+// —— 全局错误兜底：LLM 请求/异步任务失败不让整个应用白屏 ——
+const appError = ref<string | null>(null)
+
+function captureError(err: unknown, where = '应用') {
+  const msg = err instanceof Error ? err.message : String(err ?? '未知错误')
+  // 网络类错误太常见，合并为同一文案，避免刷屏
+  if (/failed to fetch|networkerror|abort/i.test(msg)) {
+    appError.value = `${where}：网络请求失败（Failed to fetch）。检查 API 端点/CORS，或按 F12 看控制台。`
+  } else {
+    appError.value = `${where}出错：${msg.slice(0, 160)}`
+  }
+}
+
+function onWindowError(e: ErrorEvent) {
+  captureError(e.error || e.message, '页面')
+}
+
+function onUnhandledRejection(e: PromiseRejectionEvent) {
+  captureError(e.reason, '异步任务')
+}
+
+onErrorCaptured((err, _instance, info) => {
+  captureError(err, info || '组件')
+  return false // 吞掉，由兜底条提示，不触发全局崩溃
+})
+
+onMounted(() => {
+  window.addEventListener('error', onWindowError)
+  window.addEventListener('unhandledrejection', onUnhandledRejection)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('error', onWindowError)
+  window.removeEventListener('unhandledrejection', onUnhandledRejection)
+})
+
+function dismissAppError() {
+  appError.value = null
+}
 </script>
 
 <template>
@@ -91,6 +131,12 @@ function onTianjiBackdrop() {
 
       <main id="main-stage" class="main-stage scroll-y" role="main">
         <div class="main-stage__inner">
+          <div v-if="appError" class="app-error-bar" role="alert">
+            <span>{{ appError }}</span>
+            <button type="button" class="app-error-bar__close" aria-label="关闭" @click="dismissAppError">
+              ×
+            </button>
+          </div>
           <component :is="ActiveView" :key="currentView" class="view-enter-active" />
         </div>
       </main>
@@ -170,6 +216,40 @@ function onTianjiBackdrop() {
   padding: 1.15rem 1.25rem 1.5rem;
   min-height: 100%;
   position: relative;
+}
+
+/* 全局错误兜底条 */
+.app-error-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+  padding: 0.6rem 0.8rem;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--danger, #c25a5a) 10%, var(--bg-elevated));
+  border: 1px solid color-mix(in srgb, var(--danger, #c25a5a) 35%, transparent);
+  color: var(--ink-secondary);
+  font-size: 0.84rem;
+  line-height: 1.5;
+  animation: slide-in-down var(--dur-mid) var(--ease-out) both;
+}
+
+.app-error-bar__close {
+  flex: 0 0 auto;
+  border: none;
+  background: none;
+  color: var(--ink-muted);
+  font-size: 1.05rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.1rem 0.3rem;
+  border-radius: var(--radius-full);
+  transition: color var(--dur-fast) var(--ease-soft);
+}
+
+.app-error-bar__close:hover {
+  color: var(--danger, #c25a5a);
 }
 
 .view-loading {

@@ -72,7 +72,7 @@ const showSettings = ref(false)
 const showLorebooks = ref(false)
 const showPresets = ref(false)
 const showVariables = ref(false)
-const showChatModal = ref(false)
+
 
 const toast = ref<string | null>(null)
 const streamState = ref<StreamParserState>({ ...initialStreamState })
@@ -703,7 +703,6 @@ export function useSillytavern() {
     showLorebooks,
     showPresets,
     showVariables,
-    showChatModal,
 
     loadAll,
     toggleLorebook,
@@ -743,9 +742,6 @@ export function useSillytavern() {
     },
     openVariables: () => {
       showVariables.value = true
-    },
-    openChatModal: () => {
-      showChatModal.value = true
     },
   }
 }

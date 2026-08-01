@@ -179,4 +179,25 @@ describe('summarizeTurnToBeats', () => {
     expect(g.nodes.find((n) => n.id === edge!.from)?.name).toBe('沈青')
     expect(g.nodes.find((n) => n.id === edge!.to)?.name).toBe('苏沐雪')
   })
+
+  it('统计并报告被解析丢弃的行（格式/非名册/泛称）', async () => {
+    const fetchMock = mockFetchWith(
+      ['状态|沈白|突破', '随便一行垃圾', '状态|路人甲|中毒', '状态|弟子|突破'].join('\n'),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const r = await summarizeTurnToBeats({
+      body: '沈白于密室中突破瓶颈，修为大进，道心更稳。',
+      rosterNames: ['沈白', '苏沐雪'],
+      calendar: { year: 1, season: '春' },
+      api: DUMMY_API,
+      summaryApi: SUMMARY_API,
+    })
+
+    expect(r.beatCount).toBe(1) // 只有「沈白突破」被记
+    expect(r.droppedLines).toBe(3) // 垃圾格式 + 路人甲非名册 + 弟子泛称
+    expect(r.droppedHint).toContain('格式 1')
+    expect(r.droppedHint).toContain('非名册 1')
+    expect(r.droppedHint).toContain('泛称 1')
+  })
 })
