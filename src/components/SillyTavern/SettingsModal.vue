@@ -1211,6 +1211,27 @@ function onTagsInput(value: string) {
                   @change="patchSummaryApi('model', ($event.target as HTMLInputElement).value)"
                 />
               </div>
+              <p class="mem-sub-label">批量窗口（回合）</p>
+              <input
+                class="tj-input"
+                type="number"
+                min="0"
+                max="64"
+                :value="settings.memoryBatchSize ?? 3"
+                @change="
+                  patch({
+                    memoryBatchSize: clampInt(
+                      Number(($event.target as HTMLInputElement).value),
+                      0,
+                      64,
+                    ),
+                  })
+                "
+              />
+              <p class="sched-hint">
+                每 N 回合攒一次统一摘要（省调用、上下文更连贯）；0 或 1 = 每回合记。
+                建议 ≤ 历史保留条数（当前 {{ settings.historyKeepMessages }} 楼），避免跨出记忆窗口。
+              </p>
               <p class="sched-hint" v-if="settings.summaryStatus && settings.summaryStatus.state !== 'disabled'" :class="`sched-hint--${settings.summaryStatus.state}`">
                 {{ summaryStatusText }}
               </p>

@@ -66,6 +66,7 @@ import {
 } from '@/composables/memory-graph'
 import { embedAndStoreBeats } from '@/composables/memory-embed'
 import { summarizeTurnToBeats } from '@/composables/memory-summary'
+import { loadPendingTurns, savePendingTurns } from '@/composables/memory-batch'
 import { snapshotWorldState, restoreWorldState } from '@/composables/world-state'
 import {
   isApiConfigured,
@@ -887,9 +888,19 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
     newBeats = ingestMemoryTag(parsed.memory, cal)
   }
   // P0 正文兜底：无标签或标签漏人时，名册人名出场仍记弱近事
+  // 批量窗口内跳过（正文攒入待记队列，窗口结束统一记）
   const fallbackOn = settings.value?.memoryNarrativeFallback !== false
-  if (fallbackOn && rosterNames.length) {
-    const main = parsed.maintext || cleanedText || raw
+  const useLlm =
+    !!s?.memoryLlmSummary &&
+    !!s.summaryApi?.baseUrl &&
+    !!s.summaryApi?.apiKey &&
+    !!s.api
+  const batchSize = useLlm
+    ? Math.max(0, Math.floor(Number(s?.memoryBatchSize) || 0))
+    : 0
+  const batchPending = batchSize >= 2
+  const main = parsed.maintext || cleanedText || raw
+  if (fallbackOn && rosterNames.length && !batchPending) {
     const extra = ingestNarrativeFallback(main, rosterNames, cal, {
       maxBeats: 3,
       source: 'story',
@@ -900,15 +911,73 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
   // 柏宝书化：自动记账（优先 LLM 摘要，失败回退正则提取）
   let digestResult: { beatCount: number } | null = null
   if (fallbackOn && rosterNames.length) {
-    const s = settings.value
-    const useLlm =
-      !!s?.memoryLlmSummary &&
-      !!s.summaryApi?.baseUrl &&
-      !!s.summaryApi?.apiKey &&
-      !!s.api
-    const main = parsed.maintext || cleanedText || raw
     try {
-      if (useLlm) {
+      if (useLlm && batchPending) {
+        // 批量窗口：先入队，攒满一次 LLM 摘要（省调用、上下文更连贯）
+        const pending = loadPendingTurns()
+        pending.push({
+          id: `p-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+          body: main,
+          rosterNames,
+          calendar: cal,
+          ts: Date.now(),
+        })
+        savePendingTurns(pending)
+        if (pending.length >= batchSize) {
+          const batch = pending.slice(0, batchSize)
+          const remain = pending.slice(batchSize)
+          try {
+            const joined = batch
+              .map(
+                (t, i) =>
+                  `【第${i + 1}回合 · ${t.calendar?.season || ''}${
+                    t.calendar?.year ? ` 天元${t.calendar.year}年` : ''
+                  }】\n${t.body}`,
+              )
+              .join('\n\n')
+            const r = await summarizeTurnToBeats({
+              body: joined,
+              rosterNames,
+              calendar: cal,
+              api: s!.api!,
+              summaryApi: s!.summaryApi!,
+            })
+            digestResult = { beatCount: r.beatCount }
+            if (r.beats.length) newBeats = [...newBeats, ...r.beats]
+            savePendingTurns(remain)
+            patchSummaryStatus({
+              state: 'ok',
+              lastStoreAt: Date.now(),
+              message: `批量 ${batch.length} 回合已统一记账`,
+            })
+          } catch (e) {
+            // 整批回退正则逐条记账，保证不丢；保留错误诊断
+            let total = 0
+            for (const t of batch) {
+              try {
+                total += ingestReplyDigest(
+                  t.body,
+                  t.rosterNames.length ? t.rosterNames : rosterNames,
+                  {
+                    year: t.calendar?.year ?? cal.year,
+                    season: t.calendar?.season ?? cal.season,
+                  },
+                ).beatCount
+              } catch {
+                /* ignore */
+              }
+            }
+            digestResult = { beatCount: total }
+            savePendingTurns(remain)
+            patchSummaryStatus({
+              state: 'error',
+              lastStoreAt: Date.now(),
+              message: e instanceof Error ? e.message : String(e),
+            })
+          }
+        }
+        // 未攒满窗口：本次不记账，正文已入队（完全攒着）
+      } else if (useLlm) {
         const r = await summarizeTurnToBeats({
           body: main,
           rosterNames,
@@ -923,18 +992,20 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
         digestResult = ingestReplyDigest(main, rosterNames, cal)
       }
     } catch (e) {
-      // LLM 摘要失败 → 回退正则；保留错误诊断
-      try {
-        digestResult = ingestReplyDigest(main, rosterNames, cal)
-        if (useLlm) {
-          patchSummaryStatus({
-            state: 'error',
-            lastStoreAt: Date.now(),
-            message: e instanceof Error ? e.message : String(e),
-          })
+      // 逐回合 LLM 失败 → 回退正则；批量窗口的失败已在窗口内处理
+      if (!batchPending) {
+        try {
+          digestResult = ingestReplyDigest(main, rosterNames, cal)
+          if (useLlm) {
+            patchSummaryStatus({
+              state: 'error',
+              lastStoreAt: Date.now(),
+              message: e instanceof Error ? e.message : String(e),
+            })
+          }
+        } catch {
+          /* ignore */
         }
-      } catch {
-        /* ignore */
       }
     }
     // 热近事超阈值自动压缩

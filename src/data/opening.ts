@@ -9,6 +9,8 @@ export const IDENTITY_STORAGE_KEY = 'zongmen-identity-v1'
 export const MEMORY_STORAGE_KEY = 'zongmen-memory-v1'
 /** 叙事记忆图谱（节点 + 边，与经营 relationEdges 分离） */
 export const MEMORY_GRAPH_STORAGE_KEY = 'zongmen-memory-graph-v1'
+/** 批量统一记忆：攒够窗口的待记回合正文队列（跨刷新持久化） */
+export const MEMORY_PENDING_STORAGE_KEY = 'zongmen-memory-pending-v1'
 
 export const OPENING_CALENDAR = {
   era: '天元历',

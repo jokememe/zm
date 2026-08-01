@@ -239,6 +239,12 @@ export interface AppSettings {
   /** LLM 摘要运行状态诊断 */
   summaryStatus?: EmbeddingStatus;
   /**
+   * 批量统一记忆窗口：攒满 N 个回合正文后一次性 LLM 摘要记账。
+   * 0 或 1 = 每回合记账（默认）；≥2 = 批量；仅对 LLM 摘要引擎生效。
+   * 建议 ≤ 历史保留条数（historyKeepMessages），避免跨出记忆窗口。
+   */
+  memoryBatchSize?: number;
+  /**
    * Embedding 运行时诊断（可观测性）：记录上次建库/召回是否成功、原因、命中数。
    * 由 memory-embed 写回 AppSettings.embeddingStatus；UI 可展示。
    */
@@ -344,6 +350,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   memoryLlmSummary: false,
   summaryApi: { baseUrl: '', apiKey: '', model: '' },
   summaryStatus: { state: 'disabled' },
+  memoryBatchSize: 3,
   historyCompress: true,
   historyMaxTokens: 12000,
   tableMemoryScheduler: {
