@@ -137,6 +137,17 @@ const embedStatusText = computed(() => {
   }
   return '未启用 embedding 模式'
 })
+
+/** LLM 召回运行诊断文案：正常/失败原因/未启用 */
+const llmStatusText = computed(() => {
+  const st = props.settings.llmRecallStatus
+  if (!st || st.state === 'disabled') return '未启用'
+  if (st.state === 'ok') {
+    return st.recallHits != null ? `正常 · 最近补选 ${st.recallHits} 条` : '正常'
+  }
+  if (st.state === 'error') return st.message ? `失败：${st.message}` : '失败'
+  return '未启用'
+})
 /** 摘要端点三件套合并写入（保留未改字段） */
 function patchSummaryApi(field: 'baseUrl' | 'apiKey' | 'model', raw: string) {
   const cur = props.settings.summaryApi || { baseUrl: '', apiKey: '', model: '' }
@@ -154,7 +165,8 @@ const summaryStatusText = computed(() => {
 const RECALL_OPTIONS = [
   { value: 'keyword' as const, label: '仅关键词' },
   { value: 'embedding' as const, label: '语义向量' },
-  { value: 'both' as const, label: '双路召回' },
+  { value: 'llm' as const, label: 'LLM 召回' },
+  { value: 'all' as const, label: '全路召回' },
 ]
 
 /** 显示页 · 历史限制自定义：钳制后写入 */
@@ -1267,7 +1279,9 @@ function onTagsInput(value: string) {
                     memoryRecallMode: ($event.target as HTMLInputElement).value as
                       | 'keyword'
                       | 'embedding'
-                      | 'both',
+                      | 'llm'
+                      | 'both'
+                      | 'all',
                   })
                 "
               />
@@ -1275,8 +1289,19 @@ function onTagsInput(value: string) {
             </label>
           </div>
 
+          <!-- LLM 召回说明（复用主 API） -->
+          <div v-if="settings.memoryRecallMode === 'llm' || settings.memoryRecallMode === 'all'" class="mem-sub-block">
+            <p class="mem-sub-label">LLM 召回</p>
+            <p class="mem-group__desc" style="margin: 0 0 0.4rem">
+              复用主 API：仅当关键词召回未命中或查询在问旧事时触发；输出引用会回源校验，失败自动回退关键词。
+            </p>
+            <p class="sched-hint" v-if="settings.llmRecallStatus" :class="`sched-hint--${settings.llmRecallStatus.state}`">
+              {{ llmStatusText }}
+            </p>
+          </div>
+
           <!-- embedding 配置 -->
-          <div class="mem-sub-block" v-if="settings.memoryRecallMode === 'embedding' || settings.memoryRecallMode === 'both'">
+          <div class="mem-sub-block" v-if="settings.memoryRecallMode === 'embedding' || settings.memoryRecallMode === 'both' || settings.memoryRecallMode === 'all'">
             <p class="mem-sub-label">Embedding 配置</p>
             <div class="tj-field" style="margin-bottom: 0.55rem">
               <input

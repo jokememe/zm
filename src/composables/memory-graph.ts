@@ -94,6 +94,8 @@ export interface MemoryGraphNode {
   /** 展示用属性（性格、位置、身份等） */
   attrs: Record<string, string>
   beats: MemoryGraphBeat[]
+  /** 触发词：正文/用户话命中任一即选入本节点（纯本地） */
+  triggerWords?: string[]
   updatedAt: number
 }
 
@@ -123,6 +125,8 @@ export interface MemoryGraphNodePatch {
   beatYear?: number
   /** beat 对应的游戏历法季 */
   beatSeason?: string
+  /** 触发词：整体替换节点触发词（去重、上限 24） */
+  triggerWords?: string[]
   /** 改名：旧名，合并到新 name */
   formerName?: string
 }
@@ -254,6 +258,13 @@ export function applyMemoryGraphPatch(
         if (!key || !val) continue
         node.attrs[key] = val
       }
+    }
+    if (Array.isArray(np.triggerWords)) {
+      const seen = new Set<string>()
+      node.triggerWords = np.triggerWords
+        .map((raw) => String(raw || "").trim())
+        .filter((w) => w && !seen.has(w) && seen.add(w))
+        .slice(0, 24)
     }
     if (np.beat && String(np.beat).trim()) {
       const text = String(np.beat).trim()
@@ -445,6 +456,21 @@ export function selectMemoryGraphForTurn(input: SelectGraphForTurnInput): {
 
   const q = String(input.query || '').trim()
 
+  // P1 触发词：节点 triggerWords 命中 query 即选入（点名之下、关键词之上）
+  const triggerHits: string[] = []
+  if (q.length >= 1) {
+    for (const n of g.nodes) {
+      for (const tw of n.triggerWords || []) {
+        const w = String(tw || "").trim()
+        if (w && q.includes(w) && !hit.includes(n.name)) {
+          triggerHits.push(n.name)
+          hit.push(n.name)
+          break
+        }
+      }
+    }
+  }
+
   // 属性/近事关键词弱匹配（query 片段出现在 attrs/beats）
   if (hit.length < maxNodes) {
     if (q.length >= 2) {
@@ -546,8 +572,8 @@ export function selectMemoryGraphForTurn(input: SelectGraphForTurnInput): {
   let flashText = ''
   if (input.enableFlashback !== false) {
     const clueNames =
-      namedHits.length > 0
-        ? namedHits
+      namedHits.length > 0 || triggerHits.length > 0
+        ? [...new Set([...namedHits, ...triggerHits])]
         : hadExplicitClue
           ? order
           : []
@@ -693,6 +719,12 @@ function normalizeGraphState(o: Partial<MemoryGraphState>): MemoryGraphState {
             }))
           : [],
         updatedAt: Number(n?.updatedAt) || 0,
+        triggerWords: Array.isArray(n?.triggerWords)
+          ? n.triggerWords
+              .map((w) => String(w ?? '').trim())
+              .filter(Boolean)
+              .slice(0, 24)
+          : undefined,
       }))
     : []
   const edges = Array.isArray(o.edges)
@@ -1144,12 +1176,19 @@ export function ingestReplyDigest(
  */
 export function compactHotBeats(
   opts?: { hotKeep?: number; mergeThreshold?: number },
-): { merged: number; characters: number } {
+): {
+  merged: number
+  characters: number
+  /** 本次生成的前情摘要（供 embedding 建库，避免摘要不可语义召回） */
+  summaries: Array<{ id: string; text: string; nodeName: string }>
+} {
   const hotKeep = Math.max(4, opts?.hotKeep ?? 8)
-  const mergeThreshold = Math.max(hotKeep + 4, opts?.mergeThreshold ?? 16)
+  // 阈值必须 < 热窗口上限（16），否则永远不压缩（旧默认 16 是死阈值）
+  const mergeThreshold = Math.max(hotKeep + 4, opts?.mergeThreshold ?? 12)
   const g = loadMemoryGraph()
   let merged = 0
   let chars = 0
+  const summaries: Array<{ id: string; text: string; nodeName: string }> = []
   const next = {
     version: 1 as const,
     nodes: g.nodes.map((n) => ({ ...n, attrs: { ...n.attrs }, beats: [...(n.beats || [])] })),
@@ -1191,6 +1230,7 @@ export function compactHotBeats(
         at: Date.now(),
       },
     ])
+    summaries.push({ id: summaryId, text: `【前情】${summary}`, nodeName: node.name })
     // 热层保留最近 hotKeep 条 + 一条"前情摘要"占位 beat
     const kept = ordered.slice(ordered.length - hotKeep).reverse()
     node.beats = [
@@ -1203,7 +1243,7 @@ export function compactHotBeats(
   if (chars > 0) {
     saveMemoryGraph(next)
   }
-  return { merged, characters: chars }
+  return { merged, characters: chars, summaries }
 }
 
 /** P1：追加/改写近事 */
@@ -1226,6 +1266,24 @@ export function appendNodeBeat(
         beatSeason: calendar?.season,
       },
     ],
+  })
+  saveMemoryGraph(next)
+  return true
+}
+
+/** P1：整体替换某节点触发词（侧栏手改用） */
+export function setNodeTriggerWords(name: string, words: string[]): boolean {
+  const n = String(name || '').trim()
+  if (!n) return false
+  const g = loadMemoryGraph()
+  if (!findNodeByName(g, n)) return false
+  const seen = new Set<string>()
+  const cleaned = (Array.isArray(words) ? words : [])
+    .map((w) => String(w || "").trim())
+    .filter((w) => w && !seen.has(w) && seen.add(w))
+    .slice(0, 24)
+  const next = applyMemoryGraphPatch(g, {
+    nodes: [{ name: n, kind: "character", triggerWords: cleaned }],
   })
   saveMemoryGraph(next)
   return true

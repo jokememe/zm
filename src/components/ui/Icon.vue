@@ -186,6 +186,14 @@ const box = computed(() => (typeof props.size === 'number' ? `${props.size}` : p
     <g v-else-if="name === 'moon'" :stroke-width="stroke" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
       <path d="M18 14.5A7 7 0 1 1 9.5 6 5.5 5.5 0 0 0 18 14.5z" />
     </g>
+    <g v-else-if="name === 'sliders'" :stroke-width="stroke" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M4 7h16" />
+      <path d="M4 12h16" />
+      <path d="M4 17h16" />
+      <circle cx="9" cy="7" r="2" />
+      <circle cx="15" cy="12" r="2" />
+      <circle cx="7" cy="17" r="2" />
+    </g>
     <g v-else-if="name === 'filter'" :stroke-width="stroke" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
       <path d="M4 6h16l-6 7v5l-4 2v-7L4 6z" />
     </g>

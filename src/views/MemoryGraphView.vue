@@ -13,6 +13,7 @@ import {
   seedRosterNodes,
   selectMemoryGraphForTurn,
   setMasterName,
+  setNodeTriggerWords,
   type MemoryGraphNode,
   type MemoryGraphState,
 } from '@/composables/memory-graph'
@@ -30,6 +31,7 @@ const search = ref('')
 const selectedId = ref<string | null>(null)
 const showExtras = ref(false)
 const draftBeat = ref('')
+const draftTrigger = ref('')
 
 void hydrateMemoryArchive().then(() => {
   setMasterName(masterName.value)
@@ -231,6 +233,26 @@ function dropBeat(beatId: string) {
   if (!n) return
   if (!confirm('删除这条热近事？')) return
   removeNodeBeat(n.name, beatId)
+  bump()
+}
+
+function addTrigger() {
+  const n = selectedNode.value
+  const w = draftTrigger.value.trim()
+  if (!n || !w) {
+    toast.warn('请填写触发词', '')
+    return
+  }
+  setNodeTriggerWords(n.name, [...(n.triggerWords || []), w])
+  draftTrigger.value = ''
+  bump()
+  toast.success('触发词已写入', n.name)
+}
+
+function removeTrigger(word: string) {
+  const n = selectedNode.value
+  if (!n) return
+  setNodeTriggerWords(n.name, (n.triggerWords || []).filter((w) => w !== word))
   bump()
 }
 
@@ -503,6 +525,33 @@ function cardBrief(n: MemoryGraphNode): string {
               @keydown.enter.prevent="addBeat"
             />
             <button type="button" class="btn btn-soft btn-sm" @click="addBeat">写入</button>
+          </div>
+        </section>
+
+        <section class="detail-block">
+          <h4>触发词 · {{ selectedNode.triggerWords?.length || 0 }}</h4>
+          <div v-if="selectedNode.triggerWords?.length" class="tw-list">
+            <button
+              v-for="w in selectedNode.triggerWords"
+              :key="w"
+              type="button"
+              class="tw-chip"
+              title="点击移除"
+              @click="removeTrigger(w)"
+            >
+              {{ w }} ✕
+            </button>
+          </div>
+          <p v-else class="muted">正文/用户话命中触发词即把此人带入上下文（纯本地，无需 API）。</p>
+          <div class="edit-row">
+            <input
+              v-model="draftTrigger"
+              type="text"
+              class="filter-search"
+              placeholder="加触发词（如：剑庐夜谈）…"
+              @keydown.enter.prevent="addTrigger"
+            />
+            <button type="button" class="btn btn-soft btn-sm" @click="addTrigger">写入</button>
           </div>
         </section>
 
@@ -1228,6 +1277,31 @@ function cardBrief(n: MemoryGraphNode): string {
   color: var(--ink-muted);
   font-size: 0.76rem;
   letter-spacing: 0.06em;
+}
+
+/* 触发词 */
+.tw-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.5rem;
+}
+.tw-chip {
+  appearance: none;
+  border: 1px solid var(--border-moon);
+  background: var(--moon-glow);
+  color: var(--moon-deep);
+  border-radius: var(--radius-full);
+  padding: 0.2rem 0.55rem;
+  font-size: 0.72rem;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all var(--dur-fast);
+}
+.tw-chip:hover {
+  border-color: var(--rose);
+  color: var(--rose);
+  background: var(--rose-soft);
 }
 
 /* 手写近事 */

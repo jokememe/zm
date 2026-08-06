@@ -5,6 +5,7 @@ import {
   MEMORY_STORAGE_KEY,
   type DifficultyId,
 } from '@/data/opening'
+import { appendArchiveBeats } from '@/composables/memory-archive'
 
 export interface MemoryBank {
   short: string[]
@@ -118,10 +119,46 @@ export function recordTurnSum(sum: string, meta?: { context?: string | null }) {
       const promote = bank.mid.slice(0, Math.min(280, bank.mid.length)).replace(/\s+/g, ' ')
       bank.long.push(`第${bank.turn}回〔阶段概览〕${promote}${bank.mid.length > 280 ? '…' : ''}`)
       if (bank.long.length > LONG_MAX) {
+        const dropped = bank.long.slice(0, bank.long.length - LONG_MAX)
+        appendArchiveBeats(
+          dropped.map((text, i) => ({
+            id: `long-${Date.now().toString(36)}-${i}`,
+            nodeId: 'long',
+            nodeName: '宗门纪要',
+            text,
+            at: Date.now(),
+          })),
+        )
         bank.long = bank.long.slice(-LONG_MAX)
       }
-      bank.mid = '…' + bank.mid.slice(-(MID_MAX_CHARS - 1))
+      // 中期溢出：概览已入长期、尾部保留；中间被裁掉的部分归档到冷档案
+      const keepTail = MID_MAX_CHARS - 1
+      const dropStart = Math.min(280, bank.mid.length)
+      const dropEnd = bank.mid.length - keepTail
+      if (dropEnd > dropStart) {
+        const droppedMiddle = bank.mid.slice(dropStart, dropEnd)
+        appendArchiveBeats([
+          {
+            id: `mid-${Date.now().toString(36)}`,
+            nodeId: 'mid',
+            nodeName: '宗门纪要',
+            text: `【中期归档】${droppedMiddle}`,
+            at: Date.now(),
+          },
+        ])
+      }
+      bank.mid = '…' + bank.mid.slice(-keepTail)
     } else if (bank.mid.length > MID_MAX_CHARS) {
+      const droppedHead = bank.mid.slice(0, bank.mid.length - (MID_MAX_CHARS - 1))
+      appendArchiveBeats([
+        {
+          id: `mid-${Date.now().toString(36)}`,
+          nodeId: 'mid',
+          nodeName: '宗门纪要',
+          text: `【中期归档】${droppedHead}`,
+          at: Date.now(),
+        },
+      ])
       bank.mid = '…' + bank.mid.slice(-(MID_MAX_CHARS - 1))
     }
   }
@@ -129,6 +166,16 @@ export function recordTurnSum(sum: string, meta?: { context?: string | null }) {
   if (LONG_HINT.test(text)) {
     bank.long.push(line)
     if (bank.long.length > LONG_MAX) {
+      const dropped = bank.long.slice(0, bank.long.length - LONG_MAX)
+      appendArchiveBeats(
+        dropped.map((text, i) => ({
+          id: `long-${Date.now().toString(36)}-${i}`,
+          nodeId: 'long',
+          nodeName: '宗门纪要',
+          text,
+          at: Date.now(),
+        })),
+      )
       bank.long = bank.long.slice(-LONG_MAX)
     }
   }

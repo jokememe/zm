@@ -164,7 +164,7 @@ async function onSettingsClose() {
         <button type="button" class="btn btn-ghost btn-sm" @click="showLorebooks = true">
           典籍
         </button>
-        <button type="button" class="btn btn-ghost btn-sm" @click="showPresets = true">心法</button>
+        <button type="button" class="btn btn-ghost btn-sm" title="推演心法 · SillyTavern 预设工坊" @click="showPresets = true">预设</button>
         <button type="button" class="btn btn-ghost btn-sm" @click="showSettings = true">密匣</button>
         <button type="button" class="btn btn-soft btn-sm" @click="showLog = !showLog">
           {{ showLog ? '正文' : '卷宗' }}

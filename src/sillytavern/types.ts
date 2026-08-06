@@ -218,11 +218,13 @@ export interface AppSettings {
   tableMemoryEnabled?: boolean;
   /**
    * 记忆图谱召回模式（密匣可改）：
-   * - keyword：点名/触发/近事 + 冷档案（默认 · 零 embeddings）
-   * - embedding：语义向量补充
-   * - both：规则 + 语义
+   * - keyword：点名/触发词/近事 + 冷档案（默认 · 零 API）
+   * - embedding：规则 + 语义向量（需 embedding API，失败静默）
+   * - llm：规则 + LLM 语义/推断召回（复用主 API，触发闸门 + 回源校验）
+   * - both：旧值兼容，等同 embedding
+   * - all：规则 + LLM + 语义向量
    */
-  memoryRecallMode?: 'keyword' | 'embedding' | 'both';
+  memoryRecallMode?: 'keyword' | 'embedding' | 'llm' | 'both' | 'all';
   /** 正文/用户话出现名册人名时弱写入近事（P0 兜底，默认 true） */
   memoryNarrativeFallback?: boolean;
   /** embedding 模型名；空则用独立端点 model 或主 API model 字段 */
@@ -249,6 +251,11 @@ export interface AppSettings {
    * 由 memory-embed 写回 AppSettings.embeddingStatus；UI 可展示。
    */
   embeddingStatus?: EmbeddingStatus;
+  /**
+   * LLM 召回运行时诊断（可观测性）：记录上次 LLM 召回是否成功、原因、命中数。
+   * 由 useTianji 写回；UI 可展示。失败静默回退规则召回。
+   */
+  llmRecallStatus?: EmbeddingStatus;
   /**
    * 拼装时压缩隐藏楼层：助手文只保留 maintext/sum，去掉 thinking / option / Memory 原文。
    * 远端楼进一步只留小结。默认 true（解决整段 raw 撑到数万 token）。
@@ -345,6 +352,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   embeddingModel: '',
   embeddingApi: { baseUrl: '', apiKey: '', model: '' },
   embeddingStatus: { state: 'disabled' },
+  llmRecallStatus: { state: 'disabled' },
   memoryServerUrl: '',
   memoryServerToken: '',
   memoryLlmSummary: false,

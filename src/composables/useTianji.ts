@@ -50,7 +50,7 @@ import {
   commitVariablesFromEditor,
 } from '@/composables/game-bridge'
 import { ensureAndRefreshSystemLorebook } from '@/composables/system-lorebook'
-import { recordTurnSum, loadMemoryBank } from '@/composables/memory-lore'
+import { recordTurnSum, loadMemoryBank, getMemoryBank } from '@/composables/memory-lore'
 import { hasMemoryTag } from '@/composables/memory-tag'
 import { runSettle, textFromSettleCompletion } from '@/composables/settle-runner'
 import '@/composables/memory-graph'
@@ -65,6 +65,12 @@ import {
   setMasterName,
 } from '@/composables/memory-graph'
 import { embedAndStoreBeats } from '@/composables/memory-embed'
+import { getArchiveMirror } from '@/composables/memory-archive'
+import {
+  formatLlmRecallBlock,
+  runLlmRecall,
+  shouldTriggerLlmRecall,
+} from '@/composables/memory-llm-recall'
 import { summarizeTurnToBeats } from '@/composables/memory-summary'
 import { loadPendingTurns, savePendingTurns } from '@/composables/memory-batch'
 import { snapshotWorldState, restoreWorldState } from '@/composables/world-state'
@@ -204,6 +210,19 @@ function patchSummaryStatus(patch: Partial<EmbeddingStatus> & { state: Embedding
   }
 }
 
+function patchLlmRecallStatus(patch: Partial<EmbeddingStatus> & { state: EmbeddingStatus['state'] }): void {
+  const cur = settings.value
+  if (!cur) return
+  const prev = cur.llmRecallStatus || { state: 'disabled' as const }
+  const next: EmbeddingStatus = { ...prev, ...patch }
+  settings.value = { ...cur, llmRecallStatus: next }
+  try {
+    void saveSettings({ ...cur, llmRecallStatus: next })
+  } catch {
+    /* ignore */
+  }
+}
+
 function stRoleToTianji(role: ChatMessage['role']): TianjiMessage['role'] {
   if (role === 'user') return 'player'
   if (role === 'assistant') return 'oracle'
@@ -300,7 +319,7 @@ async function ensureSession(s: AppSettings, allChats: ChatSession[]): Promise<C
 
 async function syncSystemLore(
   s: AppSettings,
-  extra?: { recallQuery?: string | null; recallCodes?: string[] | null },
+  extra?: { recallQuery?: string | null; recallCodes?: string[] | null; llmRecallText?: string | null },
 ) {
   let currentYear: number | undefined
   try {
@@ -324,6 +343,7 @@ async function syncSystemLore(
     contextDetail: contextDetail.value,
     recallQuery: extra?.recallQuery ?? null,
     recallCodes: extra?.recallCodes ?? null,
+    llmRecallText: extra?.llmRecallText ?? undefined,
     currentYear,
     rosterNames: roster,
     memoryRecallMode: s.memoryRecallMode || 'keyword',
@@ -351,11 +371,12 @@ async function syncSystemLore(
 }
 
 /**
- * 发话前记忆准备：仅角色图谱规则选取 + 冷档案闪回（零 API）。
- * 旧纪要 LLM 选码 / 召回 API 已拆除。
+ * 发话前记忆准备：角色图谱规则选取 + 冷档案闪回（零 API）。
+ * llm/all 模式下按触发闸门追加 LLM 语义补选（回源校验，失败静默）。
  */
-async function runPreTurnRecall(userText: string): Promise<string[] | null> {
+async function runPreTurnRecall(userText: string): Promise<string | null> {
   lastRecallCodes.value = []
+  let llmRecallText: string | null = null
   try {
     const graph = ensureMemoryGraphHydrated()
     const gs = useGameState()
@@ -363,22 +384,67 @@ async function runPreTurnRecall(userText: string): Promise<string[] | null> {
       ...gs.disciples.value.map((d) => d.name),
       String(gs.masterName.value || ''),
     ].filter(Boolean)
+    const query = [userText, contextInjected.value || '', contextDetail.value || ''].join(
+      '\n',
+    )
     const picked = selectMemoryGraphForTurn({
       graph,
-      query: [userText, contextInjected.value || '', contextDetail.value || ''].join(
-        '\n',
-      ),
+      query,
       rosterNames: roster,
       maxNodes: 4,
       maxChars: 1600,
       currentYear: Number(gs.calendar.year) || undefined,
       flashbackTopK: 6,
     })
+
+    // L3 LLM 召回：仅 llm/all 模式 + 触发闸门；失败静默回退规则结果
+    const mode = settings.value?.memoryRecallMode || 'keyword'
+    if (
+      (mode === 'llm' || mode === 'all') &&
+      settings.value?.api &&
+      shouldTriggerLlmRecall(query, picked)
+    ) {
+      try {
+        const res = await runLlmRecall({
+          api: settings.value.api,
+          query,
+          graph,
+          bank: getMemoryBank(),
+          archive: getArchiveMirror(),
+        })
+        if (res.ok && (res.nodes.length || res.beats.length)) {
+          llmRecallText = formatLlmRecallBlock(res.nodes, res.beats, graph, 900)
+          patchLlmRecallStatus({
+            state: 'ok',
+            lastRecallAt: Date.now(),
+            recallHits: res.nodes.length + res.beats.length,
+          })
+        } else if (!res.ok) {
+          patchLlmRecallStatus({
+            state: 'error',
+            lastRecallAt: Date.now(),
+            message: res.reason,
+          })
+        } else {
+          patchLlmRecallStatus({ state: 'ok', lastRecallAt: Date.now(), recallHits: 0 })
+        }
+      } catch (e) {
+        patchLlmRecallStatus({
+          state: 'error',
+          lastRecallAt: Date.now(),
+          message: e instanceof Error ? e.message : String(e),
+        })
+      }
+    }
+
     if (picked.nodeCount > 0 || picked.flashbackCount > 0) {
       lastRecallTraceKind.value = 'ok'
       const fb =
         picked.flashbackCount > 0 ? ` · 旧事 ${picked.flashbackCount}` : ''
-      lastRecallTrace.value = `角色记忆 ${picked.nodeCount} 人${fb}：${picked.names.slice(0, 6).join('、')}`
+      lastRecallTrace.value = `角色记忆 ${picked.nodeCount} 人${fb}：${picked.names.slice(0, 6).join('、')}${llmRecallText ? ' · LLM 补选' : ''}`
+    } else if (llmRecallText) {
+      lastRecallTraceKind.value = 'ok'
+      lastRecallTrace.value = '关键词无命中 · LLM 语义补选'
     } else {
       lastRecallTraceKind.value = 'info'
       lastRecallTrace.value = '角色记忆暂无命中'
@@ -388,7 +454,7 @@ async function runPreTurnRecall(userText: string): Promise<string[] | null> {
     lastRecallTraceKind.value = 'fail'
     lastRecallTrace.value = '角色记忆选取失败'
   }
-  return null
+  return llmRecallText
 }
 
 async function boot() {
@@ -705,15 +771,17 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
   const session = chatSession.value
   if (!s || !session) throw new Error('天机未就绪')
 
-  // 推演前：角色图谱规则选取（零 API）→ 刷系统世界书
+  // 推演前：角色图谱规则选取（零 API）→ LLM 可选补选 → 刷系统世界书
+  let llmRecallText: string | null = null
   try {
-    await runPreTurnRecall(userText)
+    llmRecallText = await runPreTurnRecall(userText)
   } catch (e) {
     console.warn('[天机] 角色记忆选取失败', e)
   }
   await syncSystemLore(s, {
     recallQuery: userText,
     recallCodes: null,
+    llmRecallText,
   })
 
   const preset =
@@ -910,6 +978,8 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
 
   // 柏宝书化：自动记账（优先 LLM 摘要，失败回退正则提取）
   let digestResult: { beatCount: number } | null = null
+  // 热近事压缩产生的前情摘要（供 embedding 建库）
+  let compactSummaries: Array<{ id: string; text: string; nodeName: string }> = []
   if (fallbackOn && rosterNames.length) {
     try {
       if (useLlm && batchPending) {
@@ -1014,28 +1084,40 @@ async function callLlm(userText: string, onStream?: (text: string) => void): Pro
         }
       }
     }
-    // 热近事超阈值自动压缩
+    // 热近事超阈值自动压缩（前情摘要收集供 embedding 建库）
     try {
-      compactHotBeats()
+      compactSummaries = compactHotBeats().summaries
     } catch {
       /* ignore */
     }
   }
 
+  // L2：<sum> 入短/中/长；新晋升的长线大事也收集供 embedding 建库
+  loadMemoryBank()
+  const longBefore = new Set(getMemoryBank().long || [])
   if (parsed.sum?.trim()) {
     recordTurnSum(parsed.sum, { context: contextInjected.value })
   }
+  const bankAfter = getMemoryBank()
+  const newLongEntries: Array<{ id: string; text: string; nodeName: string }> = (
+    bankAfter.long || []
+  )
+    .filter((t) => !longBefore.has(t))
+    .map((t, i) => ({
+      id: `long-${Date.now().toString(36)}-${i}`,
+      text: t,
+      nodeName: '宗门纪要',
+    }))
 
-  // L3：embedding 模式后台建库（不阻塞）
+  // L3：embedding 模式后台建库（不阻塞）：新 beats + 前情摘要 + 新长线大事
   const recallMode = settings.value?.memoryRecallMode || 'keyword'
-  if (
-    newBeats.length &&
-    (recallMode === 'embedding' || recallMode === 'both') &&
-    settings.value?.api
-  ) {
+  const embedOn =
+    recallMode === 'embedding' || recallMode === 'both' || recallMode === 'all'
+  const embedList = [...newBeats, ...compactSummaries, ...newLongEntries]
+  if (embedList.length && embedOn && settings.value?.api) {
     void embedAndStoreBeats(
       settings.value.api,
-      newBeats,
+      embedList,
       settings.value.embeddingModel || undefined,
       settings.value.embeddingApi,
     ).then((result) => {
@@ -1153,6 +1235,27 @@ export function useTianji() {
           variablesAfter: vars,
           stateAfter: snap,
         })
+        // 档位 B 下限：纯本地（无 API）也写入记忆 —— 用户话/本地回复名册人名兜底
+        try {
+          const gs = useGameState()
+          const roster = [
+            ...gs.disciples.value.map((d) => d.name),
+            String(gs.masterName.value || ''),
+          ].filter(Boolean)
+          setMasterName(String(gs.masterName.value || ''))
+          const cal = {
+            year: Number(gs.calendar.year) || 0,
+            season: String(gs.calendar.season || ''),
+          }
+          seedRosterNodes(roster)
+          if (settings.value?.memoryNarrativeFallback !== false && roster.length) {
+            ingestNarrativeFallback(text, roster, cal, { maxBeats: 2, source: 'user' })
+            ingestNarrativeFallback(reply, roster, cal, { maxBeats: 2, source: 'story' })
+            compactHotBeats()
+          }
+        } catch {
+          /* 本地记忆写入失败不阻断推演 */
+        }
         return
       }
 

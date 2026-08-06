@@ -226,13 +226,15 @@ async function onPresetClose() {
             <Icon name="scroll" :size="16" />
           </button>
           <button
+            id="btn-tianji-presets"
             type="button"
-            class="btn btn-icon btn-ghost"
-            title="推演心法"
-            aria-label="推演心法"
+            class="btn btn-ghost tianji__preset"
+            title="推演心法 · SillyTavern 预设工坊"
+            aria-label="预设（推演心法）"
             @click="showPresets = true"
           >
-            <Icon name="spark" :size="16" />
+            <Icon name="sliders" :size="13" />
+            <span>预设</span>
           </button>
           <button
             type="button"
@@ -689,6 +691,20 @@ async function onPresetClose() {
   flex-shrink: 0;
 }
 
+.tianji__preset {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.28rem 0.5rem;
+  font-size: 0.75rem;
+  border-radius: var(--radius-full);
+  color: var(--moon-deep);
+}
+
+.tianji.is-compact .tianji__preset {
+  padding: 0.22rem 0.45rem;
+  font-size: 0.72rem;
+}
 .tianji__mark {
   width: 34px;
   height: 34px;

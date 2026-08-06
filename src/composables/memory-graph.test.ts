@@ -15,6 +15,8 @@ import {
   seedRosterNodes,
   ingestNarrativeFallback,
   appendNodeBeat,
+  compactHotBeats,
+  setNodeTriggerWords,
 } from './memory-graph'
 
 function findName(g: ReturnType<typeof createEmptyMemoryGraph>, name: string) {
@@ -298,5 +300,62 @@ describe('开局掌门改名（applyOpeningConfig 图谱同步路径）', () => 
     const after = loadMemoryGraph()
     expect(after.nodes.some((n) => n.name === master)).toBe(true)
     expect(after.nodes.some((n) => n.name === '沈青岚')).toBe(false)
+  })
+})
+
+describe('P1 触发词（triggerWords）', () => {
+  beforeEach(() => {
+    clearMemoryGraph()
+  })
+
+  it('applyMemoryGraphPatch 写入触发词，选取时命中即选入', () => {
+    let g = createEmptyMemoryGraph()
+    g = applyMemoryGraphPatch(g, {
+      nodes: [
+        { name: '陆承渊', beat: '请命外出' },
+        { name: '沈白', triggerWords: ['剑庐夜谈'] },
+      ],
+    })
+    const r = selectMemoryGraphForTurn({
+      graph: g,
+      query: '想起剑庐夜谈那次',
+      rosterNames: ['陆承渊', '沈白'],
+      maxNodes: 4,
+      maxChars: 1600,
+    })
+    expect(r.nodeCount).toBeGreaterThan(0)
+    expect(r.text).toContain('沈白')
+  })
+
+  it('setNodeTriggerWords 整体替换/删除', () => {
+    let g = createEmptyMemoryGraph()
+    g = applyMemoryGraphPatch(g, { nodes: [{ name: '沈白', triggerWords: ['a'] }] })
+    saveMemoryGraph(g)
+    expect(setNodeTriggerWords('沈白', ['a', 'b', 'b'])).toBe(true)
+    let n = findName(loadMemoryGraph(), '沈白')
+    expect(n?.triggerWords).toEqual(['a', 'b'])
+    expect(setNodeTriggerWords('沈白', [])).toBe(true)
+    n = findName(loadMemoryGraph(), '沈白')
+    expect(n?.triggerWords).toEqual([])
+    expect(setNodeTriggerWords('不存在', ['x'])).toBe(false)
+  })
+})
+
+describe('compactHotBeats 前情摘要', () => {
+  beforeEach(() => {
+    clearMemoryGraph()
+  })
+
+  it('压缩时返回前情摘要（供 embedding 建库）', () => {
+    let g = createEmptyMemoryGraph()
+    for (let i = 0; i < 20; i++) {
+      g = applyMemoryGraphPatch(g, { nodes: [{ name: '陆承渊', beat: `近事流水${i}` }] })
+    }
+    saveMemoryGraph(g)
+    const res = compactHotBeats()
+    expect(res.merged).toBeGreaterThan(0)
+    expect(res.summaries.length).toBeGreaterThan(0)
+    expect(res.summaries[0]?.text).toMatch(/【前情】/)
+    expect(res.summaries[0]?.nodeName).toBe('陆承渊')
   })
 })

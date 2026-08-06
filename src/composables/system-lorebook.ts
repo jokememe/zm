@@ -113,6 +113,7 @@ function buildSystemEntriesSync(
     currentYear?: number
     rosterNames?: string[]
     semanticHits?: SemanticHit[]
+    llmRecallText?: string
     bootText?: string
   },
 ): LorebookEntry[] {
@@ -165,6 +166,9 @@ function buildSystemEntriesSync(
     )
     graphParts.push(`【语义补充】\n${semLines.join('\n')}`)
   }
+  if (extra?.llmRecallText?.trim()) {
+    graphParts.push(extra.llmRecallText.trim())
+  }
   if (graphParts.length) {
     const combined = graphParts.join('\n').slice(0, 2400)
     entries.push(
@@ -190,8 +194,8 @@ export async function ensureAndRefreshSystemLorebook(extra?: {
   recallCodes?: string[] | null
   currentYear?: number
   rosterNames?: string[]
-  /** keyword | embedding | both；默认 keyword */
-  memoryRecallMode?: 'keyword' | 'embedding' | 'both'
+  /** keyword | embedding | llm | both | all；默认 keyword */
+  memoryRecallMode?: 'keyword' | 'embedding' | 'llm' | 'both' | 'all'
   api?: ApiSettings
   embeddingModel?: string
   /** embedding 独立端点（baseUrl/apiKey/model）；全空回退主 API */
@@ -201,6 +205,8 @@ export async function ensureAndRefreshSystemLorebook(extra?: {
   memoryServerToken?: string
   /** 召回诊断回写钩子（可观测性）：由调用方写回 AppSettings.embeddingStatus */
   onEmbeddingStatus?: (status: EmbeddingStatus) => void
+  /** LLM 召回预选结果（useTianji 已回源校验并格式化；可为空） */
+  llmRecallText?: string
 }): Promise<Lorebook> {
   let currentYear = extra?.currentYear
   let roster = extra?.rosterNames || []
@@ -223,7 +229,7 @@ export async function ensureAndRefreshSystemLorebook(extra?: {
   // L3 语义
   let semanticHits: SemanticHit[] = []
   const mode = extra?.memoryRecallMode || 'keyword'
-  if ((mode === 'embedding' || mode === 'both') && extra?.api) {
+  if ((mode === 'embedding' || mode === 'both' || mode === 'all') && extra?.api) {
     const query =
       [extra.recallQuery, extra.contextLabel, extra.contextDetail].filter(Boolean).join('\n') ||
       ''
